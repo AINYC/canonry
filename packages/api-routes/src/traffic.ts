@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 import { isIP } from 'node:net'
 import { isDeepStrictEqual } from 'node:util'
 import { Agent as UndiciAgent } from 'undici'
+import { countableReferralCondition, referralLandedCondition } from './ai-referral-status.js'
 import { and, desc, eq, gte, lte, sql } from 'drizzle-orm'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { CURRENT_CLOUDFLARE_WORKER_VERSION } from './cloudflare-worker-version.js'
@@ -654,7 +655,7 @@ function assertCloudflareIngestUrlOutsideWorkerRoute(
 }
 
 function emptyTrafficSeriesPoint(bucket: string): TrafficSeriesPoint {
-  return { bucket, crawlerHits: 0, aiUserFetchHits: 0, aiReferralHits: 0 }
+  return { bucket, crawlerHits: 0, aiUserFetchHits: 0, aiReferralHits: 0, aiReferralLandedHits: 0 }
 }
 
 function completeTrafficSeries(
@@ -3992,8 +3993,18 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
       )
       .get()
 
+    // `aiReferralHits` keeps its full-count contract. `landed` is what a
+    // surface may call sessions: the COUNTABLE rows (no redirect hops, no
+    // static subresource fetches) — the same predicate the report and
+    // organic-evidence use, so no two surfaces can disagree about a session.
+    // `redirected` stays status-based, derived from a status-only sum so a
+    // subresource 200 is neither a session nor mislabelled a hop.
     const aiTotals = app.db
-      .select({ total: sql<number>`COALESCE(SUM(${aiReferralEventsHourly.sessionsOrHits}), 0)` })
+      .select({
+        total: sql<number>`COALESCE(SUM(${aiReferralEventsHourly.sessionsOrHits}), 0)`,
+        nonhop: sql<number>`COALESCE(SUM(CASE WHEN ${referralLandedCondition()} THEN ${aiReferralEventsHourly.sessionsOrHits} ELSE 0 END), 0)`,
+        landed: sql<number>`COALESCE(SUM(CASE WHEN ${countableReferralCondition()} THEN ${aiReferralEventsHourly.sessionsOrHits} ELSE 0 END), 0)`,
+      })
       .from(aiReferralEventsHourly)
       .where(
         and(
@@ -4037,6 +4048,8 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
         crawlerSegments,
         aiUserFetchHits: Number(aiUserFetchTotals?.total ?? 0),
         aiReferralHits: Number(aiTotals?.total ?? 0),
+        aiReferralLandedHits: Number(aiTotals?.landed ?? 0),
+        aiReferralRedirectedHits: Number(aiTotals?.total ?? 0) - Number(aiTotals?.nonhop ?? 0),
         sampleCount: Number(sampleTotals?.total ?? 0),
       },
       latestRun: latestRun
@@ -4254,6 +4267,9 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
     let crawlerSegments = { content: 0, sitemap: 0, robots: 0, asset: 0, other: 0 }
     let aiUserFetchTotal = 0
     let aiReferralCounts = aiReferralClassCounts(0, 0, 0)
+    let aiReferralTotalHits = 0
+    let aiReferralNonHopHits = 0
+    let aiReferralLandedHits = 0
     let totalEventRows = 0
     const seriesByBucket = new Map<string, TrafficSeriesPoint>()
 
@@ -4400,18 +4416,27 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
       if (sourceIdParam) aiFilters.push(eq(aiReferralEventsHourly.sourceId, sourceIdParam))
       const aiWhere = and(...aiFilters)
 
+      // The paid/organic/unknown classes are computed over LANDED hits only: a
+      // redirect hop's paid tags are not a paid session, and every other
+      // surface's class split already excludes hops. `aiReferralHits` keeps its
+      // full-count contract; `landed`/`redirected` say how it divides.
       const total = app.db
         .select({
           total: sql<number>`COALESCE(SUM(${aiReferralEventsHourly.sessionsOrHits}), 0)`,
-          paid: sql<number>`COALESCE(SUM(${aiReferralEventsHourly.paidSessionsOrHits}), 0)`,
-          organic: sql<number>`COALESCE(SUM(${aiReferralEventsHourly.organicSessionsOrHits}), 0)`,
+          nonhop: sql<number>`COALESCE(SUM(CASE WHEN ${referralLandedCondition()} THEN ${aiReferralEventsHourly.sessionsOrHits} ELSE 0 END), 0)`,
+          landed: sql<number>`COALESCE(SUM(CASE WHEN ${countableReferralCondition()} THEN ${aiReferralEventsHourly.sessionsOrHits} ELSE 0 END), 0)`,
+          paid: sql<number>`COALESCE(SUM(CASE WHEN ${countableReferralCondition()} THEN ${aiReferralEventsHourly.paidSessionsOrHits} ELSE 0 END), 0)`,
+          organic: sql<number>`COALESCE(SUM(CASE WHEN ${countableReferralCondition()} THEN ${aiReferralEventsHourly.organicSessionsOrHits} ELSE 0 END), 0)`,
           rows: sql<number>`COUNT(*)`,
         })
         .from(aiReferralEventsHourly)
         .where(aiWhere)
         .get()
+      aiReferralTotalHits = Number(total?.total ?? 0)
+      aiReferralNonHopHits = Number(total?.nonhop ?? 0)
+      aiReferralLandedHits = Number(total?.landed ?? 0)
       aiReferralCounts = aiReferralClassCounts(
-        Number(total?.total ?? 0),
+        aiReferralLandedHits,
         Number(total?.paid ?? 0),
         Number(total?.organic ?? 0),
       )
@@ -4424,13 +4449,16 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
         .select({
           bucket: referralSeriesBucket,
           hits: sql<number>`COALESCE(SUM(${aiReferralEventsHourly.sessionsOrHits}), 0)`,
+          landed: sql<number>`COALESCE(SUM(CASE WHEN ${countableReferralCondition()} THEN ${aiReferralEventsHourly.sessionsOrHits} ELSE 0 END), 0)`,
         })
         .from(aiReferralEventsHourly)
         .where(aiWhere)
         .groupBy(referralSeriesBucket)
         .all()
       for (const row of referralSeries) {
-        trafficSeriesPoint(seriesByBucket, row.bucket).aiReferralHits = Number(row.hits)
+        const point = trafficSeriesPoint(seriesByBucket, row.bucket)
+        point.aiReferralHits = Number(row.hits)
+        point.aiReferralLandedHits = Number(row.landed)
       }
 
       const rows = app.db
@@ -4495,7 +4523,9 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
         crawlerInfraHits: sumInfraHits(crawlerSegments),
         crawlerSegments,
         aiUserFetchHits: aiUserFetchTotal,
-        aiReferralHits: aiReferralCounts.total,
+        aiReferralHits: aiReferralTotalHits,
+        aiReferralLandedHits,
+        aiReferralRedirectedHits: aiReferralTotalHits - aiReferralNonHopHits,
         aiReferralPaidHits: aiReferralCounts.paid,
         aiReferralOrganicHits: aiReferralCounts.organic,
         aiReferralUnknownHits: aiReferralCounts.unknown,

@@ -84,6 +84,47 @@ final class SettingsPage {
                 self::SECTION_ID_NETWORK
             );
         }
+
+        register_setting(self::OPTION_GROUP, Beacon::MODE_OPTION, [
+            'type'              => 'string',
+            'description'       => 'Page-view beacon mode: auto (on when a page cache is detected), on, or off.',
+            'sanitize_callback' => [self::class, 'sanitizeBeaconMode'],
+            'default'           => 'auto',
+        ]);
+        if (function_exists('add_settings_field')) {
+            add_settings_field(
+                Beacon::MODE_OPTION,
+                'Count cached page views',
+                [self::class, 'renderBeaconField'],
+                self::MENU_SLUG,
+                self::SECTION_ID_NETWORK
+            );
+        }
+    }
+
+    /** auto|on|off; anything else falls back to auto. */
+    public static function sanitizeBeaconMode($value): string {
+        $v = is_string($value) ? strtolower(trim($value)) : '';
+        return in_array($v, ['auto', 'on', 'off'], true) ? $v : 'auto';
+    }
+
+    public static function renderBeaconField(): void {
+        $mode = Beacon::mode();
+        $detected = Beacon::cacheDetected();
+        echo '<select name="' . esc_attr(Beacon::MODE_OPTION) . '">';
+        foreach (['auto' => 'Auto (on when a page cache is detected)', 'on' => 'On', 'off' => 'Off'] as $value => $label) {
+            $selected = $mode === $value ? ' selected' : '';
+            echo '<option value="' . esc_attr($value) . '"' . $selected . '>' . esc_html($label) . '</option>';
+        }
+        echo '</select>';
+        echo '<p class="description">';
+        echo esc_html(
+            'A page cache serves visitors without running WordPress, so those page views never reach this plugin. '
+            . 'With this on, every page includes a tiny first-party ping that records the view. '
+            . 'No cookies, nothing sent anywhere except this site\'s own address. '
+            . ($detected ? 'A page cache was detected on this site.' : 'No page cache was detected on this site.')
+        );
+        echo '</p>';
     }
 
     /**

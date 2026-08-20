@@ -4042,6 +4042,58 @@ describe('GET /traffic/sources/:id', () => {
     } finally { await h.close() }
   })
 
+  /**
+   * A Location-redirect referral row is a hop, not an arrival. `aiReferralHits`
+   * keeps its full-count contract, so the split is what tells a surface which
+   * part of it a visitor actually received.
+   */
+  it('splits referral hits into landed and redirected by status', async () => {
+    const h = await buildHarness([])
+    try {
+      const connectRes = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/projects/test-project/traffic/connect/cloud-run',
+        payload: { gcpProjectId: 'openclaw-nyc', keyJson: SA_KEY },
+      })
+      const sourceId = JSON.parse(connectRes.payload).id
+      const projectId = h.db.select().from(trafficSources)
+        .where(eq(trafficSources.id, sourceId)).get()!.projectId
+      const tsHour = new Date(Date.now() - 60 * 60 * 1000).toISOString().slice(0, 13) + ':00:00.000Z'
+      const now = new Date().toISOString()
+      const base = {
+        projectId, sourceId, tsHour, product: 'ChatGPT', operator: 'OpenAI',
+        sourceDomain: 'chatgpt.com', evidenceType: 'utm', paidSessionsOrHits: 0,
+        usersEstimated: null, createdAt: now, updatedAt: now,
+      }
+      h.db.insert(aiReferralEventsHourly).values([
+        { ...base, landingPathNormalized: '/landed', status: 200, sessionsOrHits: 4, organicSessionsOrHits: 4 },
+        { ...base, landingPathNormalized: '/hop', status: 301, sessionsOrHits: 90, organicSessionsOrHits: 90 },
+        // A 304 is a served page view from cache, NOT a hop — it must land.
+        { ...base, landingPathNormalized: '/cached', status: 304, sessionsOrHits: 3, organicSessionsOrHits: 3 },
+        { ...base, landingPathNormalized: '/gone', status: 404, sessionsOrHits: 6, organicSessionsOrHits: 6 },
+        // A static-subresource 200 is neither a session (not a visit) nor a
+        // redirect hop (nothing bounced). It lives only in the full count.
+        { ...base, landingPathNormalized: '/favicon.ico', status: 200, sessionsOrHits: 7, organicSessionsOrHits: 7 },
+      ]).run()
+
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/projects/test-project/traffic/sources/${sourceId}`,
+      })
+      const t = JSON.parse(res.payload).totals24h
+
+      // Full count is unchanged.
+      expect(t.aiReferralHits).toBe(110)
+      // 404 is an arrival at a broken page and 304 a served cache view, so
+      // both land. The 301 is a hop and the favicon fetch is noise.
+      expect(t.aiReferralLandedHits).toBe(13)
+      expect(t.aiReferralRedirectedHits).toBe(90)
+      // landed + redirected <= total; the gap is exactly the subresource noise,
+      // which must never inflate either figure.
+      expect(t.aiReferralHits - t.aiReferralLandedHits - t.aiReferralRedirectedHits).toBe(7)
+    } finally { await h.close() }
+  })
+
   it('returns null latestRun when the source has never synced', async () => {
     const h = await buildHarness([])
     try {
@@ -4066,6 +4118,8 @@ describe('GET /traffic/sources/:id', () => {
         crawlerSegments: { content: 0, sitemap: 0, robots: 0, asset: 0, other: 0 },
         aiUserFetchHits: 0,
         aiReferralHits: 0,
+        aiReferralLandedHits: 0,
+        aiReferralRedirectedHits: 0,
         sampleCount: 0,
       })
     } finally { await h.close() }
@@ -4737,6 +4791,57 @@ describe('GET /traffic/events', () => {
     } finally { await h.close() }
   })
 
+  /**
+   * The events window totals must divide the same way as everything else: a
+   * redirect hop's paid tags are not a paid session, or the same ad click is
+   * a paid session on this surface and zero on the report.
+   */
+  it('window totals class-count only landed hits, keeping the full count beside them', async () => {
+    const h = await buildHarness([])
+    try {
+      const connectRes = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/projects/test-project/traffic/connect/cloud-run',
+        payload: { gcpProjectId: 'openclaw-nyc', keyJson: SA_KEY },
+      })
+      const sourceId = JSON.parse(connectRes.payload).id
+      const projectId = h.db.select().from(trafficSources)
+        .where(eq(trafficSources.id, sourceId)).get()!.projectId
+      const tsHour = new Date(Date.now() - 60 * 60 * 1000).toISOString().slice(0, 13) + ':00:00.000Z'
+      const now = new Date().toISOString()
+      const base = {
+        projectId, sourceId, tsHour, product: 'ChatGPT', operator: 'OpenAI',
+        sourceDomain: 'chatgpt.com', evidenceType: 'utm',
+        usersEstimated: null, createdAt: now, updatedAt: now,
+      }
+      h.db.insert(aiReferralEventsHourly).values([
+        { ...base, landingPathNormalized: '/landed', status: 200, sessionsOrHits: 4, paidSessionsOrHits: 1, organicSessionsOrHits: 3 },
+        { ...base, landingPathNormalized: '/hop', status: 301, sessionsOrHits: 90, paidSessionsOrHits: 90, organicSessionsOrHits: 0 },
+        // Subresource 200 carrying paid tags: not a session, not paid traffic.
+        { ...base, landingPathNormalized: '/assets/app.js', status: 200, sessionsOrHits: 5, paidSessionsOrHits: 5, organicSessionsOrHits: 0 },
+      ]).run()
+
+      const res = await h.app.inject({
+        method: 'GET',
+        url: '/api/v1/projects/test-project/traffic/events?granularity=day',
+      })
+      const t = JSON.parse(res.payload).totals
+
+      expect(t.aiReferralHits).toBe(99)
+      expect(t.aiReferralLandedHits).toBe(4)
+      expect(t.aiReferralRedirectedHits).toBe(90)
+      // Neither the hop's 90 paid tags nor the asset fetch's 5 may appear as
+      // paid sessions.
+      expect(t.aiReferralPaidHits).toBe(1)
+      expect(t.aiReferralOrganicHits).toBe(3)
+      expect(t.aiReferralUnknownHits).toBe(0)
+      // And the series charts the landed (session) figure per bucket.
+      const today = JSON.parse(res.payload).series.points.at(-1)
+      expect(today.aiReferralHits).toBe(99)
+      expect(today.aiReferralLandedHits).toBe(4)
+    } finally { await h.close() }
+  })
+
   it('keeps the complete 90-day series when the detail-row limit truncates old rows', async () => {
     const { h, sourceId } = await syncedHarness()
     try {
@@ -4799,6 +4904,7 @@ describe('GET /traffic/events', () => {
         crawlerHits: 7,
         aiUserFetchHits: 0,
         aiReferralHits: 0,
+        aiReferralLandedHits: 0,
       })
       expect(body.series.points[45].crawlerHits).toBe(11)
       expect(body.series.points.reduce((sum: number, point: { crawlerHits: number }) => sum + point.crawlerHits, 0))

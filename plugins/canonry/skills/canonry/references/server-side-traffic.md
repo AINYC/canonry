@@ -1046,3 +1046,18 @@ domains, or PII are surfaced.
   adapter-agnostic — adding a new adapter is just a new entry in
   `traffic_sources.source_type` and a `TrafficSourceValidator`
   registration.
+
+### Page caches and the beacon lane
+
+A page cache (LiteSpeed, WP Rocket, Super Cache, any `advanced-cache.php`
+drop-in) serves visitors before WordPress PHP boots, so the plugin's request
+hook never sees those page views: on a cached site the PHP lane records only
+redirects, errors, and crawlers on uncached URLs, and landed AI referrals read
+as zero while GA4 shows sessions. Plugin 1.1.0 adds a beacon lane — a
+first-party inline ping to the plugin's own REST route (never page-cached) —
+that records real browser views, cached or not. It auto-enables when a page
+cache is detected (`Settings → Canonry Traffic Logger` can force on/off).
+Bots and non-200s stay in the PHP lane; browser 200s belong to the beacon, so
+uncached views are not double-counted. On sites running plugin ≤ 1.0.x behind
+a cache, treat GA4 as the landed-visit signal and the server source as the
+bot/crawler signal only.

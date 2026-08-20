@@ -1,3 +1,4 @@
+import { countableReferralCondition } from './ai-referral-status.js'
 import { and, desc, eq, gte, lte, or, sql } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import {
@@ -332,8 +333,13 @@ export function buildOrganicEvidence(
     .where(and(eq(crawlerEventsHourly.projectId, project.id), gte(crawlerEventsHourly.tsHour, serverStart), lte(crawlerEventsHourly.tsHour, serverEnd))).all()
   const allFetches = db.select().from(aiUserFetchEventsHourly)
     .where(and(eq(aiUserFetchEventsHourly.projectId, project.id), gte(aiUserFetchEventsHourly.tsHour, serverStart), lte(aiUserFetchEventsHourly.tsHour, serverEnd))).all()
+  // Countable rows only (no redirect hops, no subresource fetches), enforced
+  // once here so every consumer of this array inherits the rule. Filtering
+  // downstream in two JS sites let a future third consumer forget it, and this
+  // also stops materializing rows nothing reads. Same predicate as the report,
+  // so the two surfaces' session figures cannot diverge on status or path.
   const allReferrals = db.select().from(aiReferralEventsHourly)
-    .where(and(eq(aiReferralEventsHourly.projectId, project.id), gte(aiReferralEventsHourly.tsHour, serverStart), lte(aiReferralEventsHourly.tsHour, serverEnd))).all()
+    .where(and(eq(aiReferralEventsHourly.projectId, project.id), countableReferralCondition(), gte(aiReferralEventsHourly.tsHour, serverStart), lte(aiReferralEventsHourly.tsHour, serverEnd))).all()
   const [serverCoverageRow] = db.all(sql`
     select
       min(day) as startDate,
@@ -351,6 +357,7 @@ export function buildOrganicEvidence(
       select substr(${aiReferralEventsHourly.tsHour}, 1, 10) as day
       from ${aiReferralEventsHourly}
       where ${aiReferralEventsHourly.projectId} = ${project.id}
+        and ${countableReferralCondition()}
     )
   `) as Array<{
     startDate: string | null

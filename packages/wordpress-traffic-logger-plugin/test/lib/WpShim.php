@@ -330,10 +330,17 @@ if (!class_exists('WP_REST_Request')) {
         private array $headers;
         public string $method;
 
-        public function __construct(string $method = 'GET', array $params = [], array $headers = []) {
+        public string $body = '';
+
+        public function __construct(string $method = 'GET', array $params = [], array $headers = [], string $body = '') {
             $this->method = $method;
             $this->params = $params;
             $this->headers = $headers;
+            $this->body = $body;
+        }
+
+        public function get_body(): string {
+            return $this->body;
         }
 
         public function get_param(string $key) {

@@ -754,6 +754,41 @@ describe('organic evidence native measurement reconciliation', () => {
     }))
   })
 
+  /**
+   * A Location-redirect referral row is a hop, not a session. Counting it inflates
+   * the total AND attributes the arrival to the redirecting path rather than
+   * the page the visitor actually reached, so both the summary and the
+   * per-page rows have to skip it.
+   */
+  it('excludes redirect hops from referral sessions and from page attribution', async () => {
+    seedNativeMeasurement(ctx)
+    const sourceId = seedServerAiEvidence(ctx)
+    ctx.db.insert(aiReferralEventsHourly).values({
+      projectId: ctx.projectId,
+      sourceId,
+      tsHour: '2026-07-20T18:00:00.000Z',
+      product: 'ChatGPT',
+      operator: 'OpenAI',
+      sourceDomain: 'chatgpt.com',
+      evidenceType: 'utm',
+      landingPathNormalized: '/redirect-hop',
+      status: 301,
+      sessionsOrHits: 90,
+      paidSessionsOrHits: 0,
+      organicSessionsOrHits: 90,
+      usersEstimated: null,
+      createdAt: NOW,
+      updatedAt: NOW,
+    }).run()
+
+    const body = await getRawEvidence(ctx)
+
+    // The helper seeds one served row worth 3. The 90 hops must not appear.
+    expect(body.server.referralSessions.total).toBe(3)
+    expect(body.server.referralSessions.organic).toBe(3)
+    expect(body.pages.map(row => row.path)).not.toContain('/redirect-hop')
+  })
+
   it('signals page-detail truncation in the machine-readable limitations', async () => {
     seedNativeMeasurement(ctx)
     for (let index = 0; index < 55; index += 1) {

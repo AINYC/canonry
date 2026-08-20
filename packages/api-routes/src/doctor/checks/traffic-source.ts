@@ -246,11 +246,15 @@ const recentDataCheck: CheckDefinition = {
       return {
         status: CheckStatuses.ok,
         code: 'traffic.recent-data.fresh',
-        summary: `${recentCrawlers} crawler hit(s), ${recentUserFetches} AI user-fetch hit(s), and ${recentReferrals} AI-referral arrival(s) in the last ${RECENT_DATA_WARN_DAYS} days.`,
+        summary: `${recentCrawlers} crawler hit(s), ${recentUserFetches} AI user-fetch hit(s), and ${recentReferrals} AI-referral hit(s) in the last ${RECENT_DATA_WARN_DAYS} days.`,
         details: {
           crawlerHits: recentCrawlers,
           aiUserFetchHits: recentUserFetches,
-          referralArrivals: recentReferrals,
+          // Full hit count on purpose: for freshness, a redirect hop is still
+          // proof the pipeline works. Named hits, not arrivals — the report's
+          // referralArrivals is redirect-excluded and must not share a name
+          // with a figure that is not.
+          referralHits: recentReferrals,
           windowDays: RECENT_DATA_WARN_DAYS,
         },
       }

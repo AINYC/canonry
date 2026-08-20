@@ -883,7 +883,7 @@ export async function trafficStatus(project: string, opts: { format?: string }):
     console.log(`  24h infra:       ${d.totals24h.crawlerInfraHits} sitemap/robots/asset fetches`)
     console.log(`  24h other:       ${d.totals24h.crawlerSegments.other} fetches`)
     console.log(`  24h crawler:     ${d.totals24h.crawlerHits} hits total`)
-    console.log(`  24h AI referral: ${d.totals24h.aiReferralHits} sessions`)
+    console.log(`  24h AI referral: ${d.totals24h.aiReferralLandedHits} sessions  (+${d.totals24h.aiReferralRedirectedHits} redirect hops excluded)`)
     console.log(`  24h samples:     ${d.totals24h.sampleCount}`)
     if (d.latestRun) {
       console.log(`  Latest run:      ${d.latestRun.runId} (${d.latestRun.status})`)
@@ -1024,7 +1024,7 @@ export async function trafficEvents(project: string, opts: {
   console.log(`  Other fetches (window):        ${result.totals.crawlerSegments.other}`)
   console.log(`  Crawler hits total (window):   ${result.totals.crawlerHits}`)
   console.log(`  AI user-fetch hits (window):   ${result.totals.aiUserFetchHits}`)
-  console.log(`  AI referral sessions (window): ${result.totals.aiReferralHits}`)
+  console.log(`  AI referral sessions (window): ${result.totals.aiReferralLandedHits}  (+${result.totals.aiReferralRedirectedHits} redirect hops excluded)`)
   console.log(`    paid:                       ${result.totals.aiReferralPaidHits}`)
   console.log(`    organic:                    ${result.totals.aiReferralOrganicHits}`)
   console.log(`    unclassified:               ${result.totals.aiReferralUnknownHits}  (ingested before paid/organic classification)`)

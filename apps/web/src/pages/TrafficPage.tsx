@@ -195,7 +195,7 @@ function SourcesTable({ projectName, sources }: { projectName: string; sources: 
                 {isLoading ? '—' : formatCompact(detail?.totals24h.aiUserFetchHits ?? 0)}
               </td>
               <td className="px-4 py-3 text-right tabular-nums text-heading">
-                {isLoading ? '—' : formatCompact(detail?.totals24h.aiReferralHits ?? 0)}
+                {isLoading ? '—' : formatCompact(detail?.totals24h.aiReferralLandedHits ?? 0)}
               </td>
               <td className="px-4 py-3 text-right">
                 <Link

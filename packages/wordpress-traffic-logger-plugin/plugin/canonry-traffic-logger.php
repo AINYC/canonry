@@ -3,7 +3,7 @@
  * Plugin Name: Canonry Traffic Logger
  * Plugin URI:  https://canonry.ai
  * Description: Captures non-admin page-load events and exposes them via REST for the canonry traffic-ingestion pipeline. No classification; the server does that.
- * Version:     1.0.0
+ * Version:     1.1.0
  * Requires PHP: 7.4
  * Author:      Canonry
  * License:     MIT
@@ -13,6 +13,16 @@
  * one writer (request hook), one reader (REST GET endpoint), one activation
  * (table creation), one uninstall (drop it). Retention auto-prune and a minimal
  * settings page ship alongside.
+ *
+ * Two capture lanes:
+ * - Request hook (Recorder, PHP `shutdown`): sees everything that reaches PHP.
+ *   Structurally blind to responses a page cache serves before PHP boots.
+ * - Beacon (class-beacon.php): a first-party inline ping from the rendered
+ *   page to our own REST route, which is never page-cached. Sees every real
+ *   browser view, cached or not; structurally blind to bots and non-200s.
+ *   Auto-enabled when a page cache is detected; settings can force on/off.
+ *   The lanes' blind spots are complements, and the dedup for their one
+ *   overlap (uncached human 200s) lives in Recorder::shouldDeferToBeacon.
  *
  * Security model:
  * - REST endpoint requires manage_options (chosen because traffic-log access is
@@ -34,6 +44,7 @@ if (!defined('ABSPATH') && !defined('CANONRY_TRAFFIC_LOGGER_TEST_MODE')) {
 
 require_once __DIR__ . '/includes/class-client-ip.php';
 require_once __DIR__ . '/includes/class-recorder.php';
+require_once __DIR__ . '/includes/class-beacon.php';
 require_once __DIR__ . '/includes/class-rest.php';
 require_once __DIR__ . '/includes/class-plugin.php';
 require_once __DIR__ . '/includes/class-settings-page.php';
@@ -56,6 +67,10 @@ if (function_exists('register_uninstall_hook')) {
 function canonry_traffic_logger_register_hooks(): void {
     if (!function_exists('add_action')) return;
     add_action('rest_api_init', ['\\Canonry\\TrafficLogger\\Rest', 'register']);
+    add_action('rest_api_init', ['\\Canonry\\TrafficLogger\\Beacon', 'register']);
+    // The beacon script rides wp_footer so it is cached WITH the page — a
+    // cache-served copy still pings, which is the entire point.
+    add_action('wp_footer', ['\\Canonry\\TrafficLogger\\Beacon', 'printScript']);
     add_action('shutdown', ['\\Canonry\\TrafficLogger\\Recorder', 'recordCurrentRequest']);
 
     // Retention prune callback wired to the scheduled WP-Cron event.

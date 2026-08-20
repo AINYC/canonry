@@ -1,3 +1,4 @@
+import { countableReferralCondition, nonSubresourceReferralPathCondition } from './ai-referral-status.js'
 import { and, desc, eq, gte, inArray, lt, lte, ne, or, sql } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import {
@@ -765,30 +766,6 @@ function buildAiReferrals(
   }
 }
 
-function nonSubresourceReferralPathCondition() {
-  return sql`
-    LOWER(${aiReferralEventsHourly.landingPathNormalized}) NOT LIKE '/_next/static/%'
-    AND LOWER(${aiReferralEventsHourly.landingPathNormalized}) NOT LIKE '/assets/%'
-    AND LOWER(${aiReferralEventsHourly.landingPathNormalized}) NOT LIKE '/static/%'
-    AND LOWER(${aiReferralEventsHourly.landingPathNormalized}) NOT LIKE '/favicon.%'
-    AND LOWER(${aiReferralEventsHourly.landingPathNormalized}) NOT LIKE '%.avif'
-    AND LOWER(${aiReferralEventsHourly.landingPathNormalized}) NOT LIKE '%.css'
-    AND LOWER(${aiReferralEventsHourly.landingPathNormalized}) NOT LIKE '%.gif'
-    AND LOWER(${aiReferralEventsHourly.landingPathNormalized}) NOT LIKE '%.ico'
-    AND LOWER(${aiReferralEventsHourly.landingPathNormalized}) NOT LIKE '%.jpeg'
-    AND LOWER(${aiReferralEventsHourly.landingPathNormalized}) NOT LIKE '%.jpg'
-    AND LOWER(${aiReferralEventsHourly.landingPathNormalized}) NOT LIKE '%.js'
-    AND LOWER(${aiReferralEventsHourly.landingPathNormalized}) NOT LIKE '%.map'
-    AND LOWER(${aiReferralEventsHourly.landingPathNormalized}) NOT LIKE '%.mjs'
-    AND LOWER(${aiReferralEventsHourly.landingPathNormalized}) NOT LIKE '%.otf'
-    AND LOWER(${aiReferralEventsHourly.landingPathNormalized}) NOT LIKE '%.png'
-    AND LOWER(${aiReferralEventsHourly.landingPathNormalized}) NOT LIKE '%.svg'
-    AND LOWER(${aiReferralEventsHourly.landingPathNormalized}) NOT LIKE '%.webmanifest'
-    AND LOWER(${aiReferralEventsHourly.landingPathNormalized}) NOT LIKE '%.woff'
-    AND LOWER(${aiReferralEventsHourly.landingPathNormalized}) NOT LIKE '%.woff2'
-  `
-}
-
 /**
  * Server-side AI Visibility section.
  *
@@ -887,7 +864,7 @@ function buildServerActivity(db: DatabaseClient, projectId: string, windowDays: 
       .where(
         and(
           eq(aiReferralEventsHourly.projectId, projectId),
-          nonSubresourceReferralPathCondition(),
+          countableReferralCondition(),
           gte(aiReferralEventsHourly.tsHour, windowStartIso),
           exclusiveEnd
             ? lt(aiReferralEventsHourly.tsHour, windowEndIso)
@@ -926,6 +903,25 @@ function buildServerActivity(db: DatabaseClient, projectId: string, windowDays: 
   const userFetchCurrent = sumUserFetches(headlineStart, headlineEnd)
   const userFetchPrior = sumUserFetches(priorStart, headlineStart, true)
   const referralCurrent = sumReferrals(headlineStart, headlineEnd)
+  // Arrivals blocked by a redirect in the current window, derived as
+  // (all non-subresource hits) - (landed hits) so the redirect band lives in
+  // exactly one place. This is what lets an all-redirect project's report say
+  // WHY its arrivals are zero instead of rendering an empty section.
+  const referralAllCurrent = Number(
+    db
+      .select({ total: sql<number>`COALESCE(SUM(${aiReferralEventsHourly.sessionsOrHits}), 0)` })
+      .from(aiReferralEventsHourly)
+      .where(
+        and(
+          eq(aiReferralEventsHourly.projectId, projectId),
+          nonSubresourceReferralPathCondition(),
+          gte(aiReferralEventsHourly.tsHour, headlineStart),
+          lte(aiReferralEventsHourly.tsHour, headlineEnd),
+        ),
+      )
+      .get()?.total ?? 0,
+  )
+  const referralRedirects = Math.max(0, referralAllCurrent - referralCurrent.total)
   const referralPrior = sumReferrals(priorStart, headlineStart, true)
 
   // 3. Per-operator: verified hits, unverified hits, referral sessions over headline window.
@@ -972,7 +968,7 @@ function buildServerActivity(db: DatabaseClient, projectId: string, windowDays: 
     .where(
       and(
         eq(aiReferralEventsHourly.projectId, projectId),
-        nonSubresourceReferralPathCondition(),
+        countableReferralCondition(),
         gte(aiReferralEventsHourly.tsHour, headlineStart),
         lte(aiReferralEventsHourly.tsHour, headlineEnd),
       ),
@@ -1076,7 +1072,7 @@ function buildServerActivity(db: DatabaseClient, projectId: string, windowDays: 
     .where(
       and(
         eq(aiReferralEventsHourly.projectId, projectId),
-        nonSubresourceReferralPathCondition(),
+        countableReferralCondition(),
         gte(aiReferralEventsHourly.tsHour, headlineStart),
         lte(aiReferralEventsHourly.tsHour, headlineEnd),
       ),
@@ -1101,7 +1097,7 @@ function buildServerActivity(db: DatabaseClient, projectId: string, windowDays: 
     .where(
       and(
         eq(aiReferralEventsHourly.projectId, projectId),
-        nonSubresourceReferralPathCondition(),
+        countableReferralCondition(),
         gte(aiReferralEventsHourly.tsHour, headlineStart),
         lte(aiReferralEventsHourly.tsHour, headlineEnd),
       ),
@@ -1142,7 +1138,7 @@ function buildServerActivity(db: DatabaseClient, projectId: string, windowDays: 
     .where(
       and(
         eq(aiReferralEventsHourly.projectId, projectId),
-        nonSubresourceReferralPathCondition(),
+        countableReferralCondition(),
         gte(aiReferralEventsHourly.tsHour, trendStart),
         lte(aiReferralEventsHourly.tsHour, headlineEnd),
       ),
@@ -1191,7 +1187,8 @@ function buildServerActivity(db: DatabaseClient, projectId: string, windowDays: 
     windowStart: headlineStart,
     windowEnd: headlineEnd,
     hasData: verifiedCurrent + unverifiedCurrent + userFetchCurrent + referralCurrent.total
-      + verifiedPrior + unverifiedPrior + userFetchPrior + referralPrior.total > 0
+      + verifiedPrior + unverifiedPrior + userFetchPrior + referralPrior.total
+      + referralRedirects > 0
       || byOperator.length > 0
       || topCrawledPaths.length > 0
       || referralProducts.length > 0,
@@ -1215,6 +1212,7 @@ function buildServerActivity(db: DatabaseClient, projectId: string, windowDays: 
       prior: referralPrior.total,
       deltaPct: deltaPercent(referralCurrent.total, referralPrior.total),
     },
+    referralRedirects,
     referralArrivalsByClass: {
       paid: {
         current: referralCurrent.paid,
