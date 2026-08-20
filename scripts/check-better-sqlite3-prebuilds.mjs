@@ -91,12 +91,37 @@ export function majorsFromAssetNames(assetNames, abis) {
   return [...majors].sort((a, b) => a - b)
 }
 
-/** Node majors a given better-sqlite3 release ships a prebuilt binary for. */
-async function prebuiltMajorsFor(version, abis) {
-  const release = await getJson(`https://api.github.com/repos/WiseLibs/better-sqlite3/releases/tags/v${version}`)
-  const majors = majorsFromAssetNames((release.assets ?? []).map(asset => asset.name), abis)
-  if (majors.length === 0) throw new Error(`no node-v<abi> prebuild assets found on better-sqlite3 v${version}`)
-  return majors
+/**
+ * Prebuild coverage for one release: `{ majors }`, or `{ error }` when it could
+ * not be determined.
+ *
+ * Zero matching assets is NOT swallowed as "nothing changed". better-sqlite3
+ * 13.x publishes no per-ABI release assets at all — it bundles Node-API builds
+ * in the npm tarball as `prebuilds/<platform>.node`, which are ABI-stable, which
+ * is why its `engines.node` relaxed to an unbounded `>=22`. Upstream changing
+ * how it ships binaries is the single most useful thing this job can report, so
+ * it must never reach the caller as an absence.
+ */
+async function describePrebuilds(version, abis) {
+  let release
+  try {
+    release = await getJson(`https://api.github.com/repos/WiseLibs/better-sqlite3/releases/tags/v${version}`)
+  } catch (error) {
+    return { error: `could not read the v${version} release: ${error.message}` }
+  }
+  const assetNames = (release.assets ?? []).map(asset => asset.name)
+  const majors = majorsFromAssetNames(assetNames, abis)
+  if (majors.length === 0) {
+    return {
+      error:
+        `v${version} publishes no node-v<abi> prebuild assets (${assetNames.length} assets on the release).\n` +
+        '    That is how 13.x ships: Node-API builds bundled in the npm tarball under\n' +
+        '    prebuilds/<platform>.node, ABI-stable, no per-major binary. If the pin has moved\n' +
+        '    to that model, this check no longer describes reality — retire it rather than\n' +
+        '    letting it report a coverage set that no longer exists.',
+    }
+  }
+  return { majors }
 }
 
 async function main() {
@@ -104,34 +129,47 @@ async function main() {
   const latest = (await getJson('https://registry.npmjs.org/better-sqlite3/latest')).version
   const abis = await abiToMajor()
 
-  const lockedPrebuilds = await prebuiltMajorsFor(locked, abis)
-  const expected = lockedPrebuilds.filter(major => major >= CANONRY_MIN_MAJOR)
+  const lockedCoverage = await describePrebuilds(locked, abis)
   const guard = guardMajors()
-
   const drift = []
 
-  if (String(guard) !== String(expected)) {
-    drift.push(
-      `SUPPORTED_MAJORS is [${guard}] but better-sqlite3 ${locked} ships prebuilds for ` +
-        `[${lockedPrebuilds}] (>= Node ${CANONRY_MIN_MAJOR}: [${expected}]).\n` +
-        '    Fix scripts/check-node.mjs and the PREBUILT_MAJORS entry in ' +
-        'packages/db/test/node-support-range.test.ts.',
-    )
-  }
+  if (lockedCoverage.error) {
+    // The pinned version's own coverage is the baseline for everything else, so
+    // there is nothing to compare and no honest way to pass.
+    drift.push(`pinned better-sqlite3 ${locked}: ${lockedCoverage.error}`)
+  } else {
+    const lockedPrebuilds = lockedCoverage.majors
+    const expected = lockedPrebuilds.filter(major => major >= CANONRY_MIN_MAJOR)
 
-  if (locked !== latest) {
-    const latestPrebuilds = await prebuiltMajorsFor(latest, abis).catch(() => null)
-    const changed = latestPrebuilds && String(latestPrebuilds) !== String(lockedPrebuilds)
-    if (changed) {
+    if (String(guard) !== String(expected)) {
       drift.push(
-        `better-sqlite3 ${latest} is out and its prebuild coverage CHANGED: ` +
-          `[${lockedPrebuilds}] -> [${latestPrebuilds}].\n` +
-          '    Bump the dependency, then update SUPPORTED_MAJORS and PREBUILT_MAJORS to match.',
+        `SUPPORTED_MAJORS is [${guard}] but better-sqlite3 ${locked} ships prebuilds for ` +
+          `[${lockedPrebuilds}] (>= Node ${CANONRY_MIN_MAJOR}: [${expected}]).\n` +
+          '    Fix scripts/check-node.mjs and the PREBUILT_MAJORS entry in ' +
+          'packages/db/test/node-support-range.test.ts.',
       )
-    } else {
-      // A newer release with identical prebuild coverage is not this job's
-      // problem — nothing it guards has moved.
-      console.log(`note: better-sqlite3 ${latest} is available (pinned ${locked}); prebuild coverage unchanged.`)
+    }
+
+    if (locked !== latest) {
+      // A newer upstream release is INFORMATION, never a failure: the pin is a
+      // deliberate choice and this job going red weekly for an upgrade nobody
+      // has decided to take is how a useful alarm gets ignored. Only the pinned
+      // version being misdescribed (above) makes this job fail. Every branch
+      // here still says what it actually found — reporting "unchanged" for a
+      // comparison that never happened is the bug this replaced.
+      const latestCoverage = await describePrebuilds(latest, abis)
+      if (latestCoverage.error) {
+        console.log(`note: better-sqlite3 ${latest} is available (pinned ${locked}), coverage NOT comparable:`)
+        console.log(`  ${latestCoverage.error}`)
+      } else if (String(latestCoverage.majors) !== String(lockedPrebuilds)) {
+        console.log(
+          `note: better-sqlite3 ${latest} is available (pinned ${locked}) and its prebuild ` +
+            `coverage differs: [${lockedPrebuilds}] -> [${latestCoverage.majors}]. ` +
+            'Bumping means updating SUPPORTED_MAJORS and PREBUILT_MAJORS to match.',
+        )
+      } else {
+        console.log(`note: better-sqlite3 ${latest} is available (pinned ${locked}); prebuild coverage unchanged.`)
+      }
     }
   }
 
@@ -141,7 +179,7 @@ async function main() {
     process.exit(1)
   }
 
-  console.log(`in sync: better-sqlite3 ${locked}, prebuilds [${lockedPrebuilds}], SUPPORTED_MAJORS [${guard}].`)
+  console.log(`in sync: better-sqlite3 ${locked}, prebuilds [${lockedCoverage.majors}], SUPPORTED_MAJORS [${guard}].`)
 }
 
 // Importable for testing; only runs the check when invoked directly.
