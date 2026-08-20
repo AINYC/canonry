@@ -2,33 +2,35 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { test, expect, describe } from 'vitest'
+import { parse as parseYaml } from 'yaml'
 
 /**
  * `scripts/check-node.mjs` blocks an install on a Node major that `better-sqlite3`
  * has no prebuilt binary for, converting a couple hundred lines of node-gyp C++
  * output into one legible line.
  *
- * Its `SUPPORTED_MAJORS` list applies Canonry's Node 22+ policy to
- * better-sqlite3's own `engines.node`. A dependency bump that narrows that range
- * would otherwise leave the guard silently wrong and hand the reader back the
- * node-gyp wall of text the guard exists to prevent.
- *
  * So the compatible subset is asserted rather than trusted.
  *
- * WHY THE CEILING IS DERIVED AND NOT WRITTEN DOWN
- * This file used to hardcode `< 26` in three places. That made the guard and the
- * test agree with each other while both disagreed with reality: better-sqlite3
- * had shipped Node 26 prebuilds since 12.10.0, but the repo stayed pinned at
- * 12.6.2 and refused to install on Node 26 — telling the reader to change their
- * Node and explicitly NOT to touch dependencies, when updating the dependency
- * was the actual fix. A guard that hardcodes the value it is supposed to be
- * checking cannot catch that. Everything below derives from
- * better-sqlite3's `engines.node`, so the next major lands as a failing test.
+ * WHY `engines.node` IS NOT THE SOURCE OF TRUTH
+ * This file used to hardcode `< 26` in three places, which made the guard and
+ * the test agree with each other while both disagreed with reality. The obvious
+ * correction — derive everything from better-sqlite3's `engines.node` — is
+ * wrong in the other direction, because that field is a SUPERSET of what
+ * actually ships a binary. 12.11.1 declares
+ * `20.x || 22.x || 23.x || 24.x || 25.x || 26.x` while shipping prebuilds for
+ * ABI 127/137/141/147 only, i.e. Node 22/24/25/26: 12.10.0 added Node 26 and
+ * dropped the EOL Node 20 and 23 builds in the same release without touching
+ * `engines`. Deriving from it would promise Node 23 an install it cannot
+ * deliver.
+ *
+ * Prebuild coverage therefore lives in `PREBUILT_MAJORS`, keyed by the exact
+ * dependency version it was verified against. A bump to an unlisted version
+ * fails with an explicit message instead of silently inheriting a stale answer.
  *
  * WIDENING IS NOT ENOUGH ON ITS OWN
  * Claiming a major nothing runs is the same mistake pointed the other way, so
- * the last test asserts the CI matrix actually exercises the highest supported
- * major.
+ * the last tests assert the CI matrix actually exercises the highest supported
+ * major, and that the job in question really runs the suite.
  */
 
 const require = createRequire(import.meta.url)
@@ -36,8 +38,23 @@ const require = createRequire(import.meta.url)
 /** Canonry's own floor, independent of what the native dep supports. */
 const CANONRY_MIN_MAJOR = 22
 
-/** The major Docker images, .nvmrc, and the published build all pin. */
+/** The major the Docker images pin. */
 const DEPLOY_MAJOR = 22
+
+/**
+ * Node majors each better-sqlite3 release ships a PREBUILT binary for.
+ *
+ * Verified against the release assets, which are named
+ * `better-sqlite3-v<version>-node-v<abi>-<platform>-<arch>.tar.gz`; the ABI
+ * maps to a Node major (127→22, 131→23, 137→24, 141→25, 147→26).
+ *
+ * Do NOT populate this from `engines.node` — see the note above. Re-verify on
+ * every better-sqlite3 upgrade; that is exactly what this table is for.
+ */
+const PREBUILT_MAJORS: Record<string, number[]> = {
+  // v12.11.1 assets: ABI 127, 137, 141, 147 (no 131 — Node 23 was dropped in 12.10.0).
+  '12.11.1': [22, 24, 25, 26],
+}
 
 function repoRoot(): string {
   // packages/db/test -> repo root
@@ -59,31 +76,77 @@ function guardMajors(): number[] {
     .sort((a, b) => a - b)
 }
 
-function betterSqlite3Majors(): number[] {
+function installedBetterSqlite3(): { version: string; enginesMajors: number[] } {
   const pkgPath = require.resolve('better-sqlite3/package.json')
-  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as { engines?: { node?: string } }
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as {
+    version?: string
+    engines?: { node?: string }
+  }
   const range = pkg.engines?.node
   if (!range) throw new Error('better-sqlite3 declares no engines.node')
-  // e.g. "20.x || 22.x || 23.x || 24.x || 25.x || 26.x"
-  return range
-    .split('||')
-    .map((part) => Number.parseInt(part.trim(), 10))
-    .filter((n) => Number.isFinite(n))
-    .sort((a, b) => a - b)
+  if (!pkg.version) throw new Error('better-sqlite3 declares no version')
+  return {
+    version: pkg.version,
+    // e.g. "20.x || 22.x || 23.x || 24.x || 25.x || 26.x"
+    enginesMajors: range
+      .split('||')
+      .map((part) => Number.parseInt(part.trim(), 10))
+      .filter((n) => Number.isFinite(n))
+      .sort((a, b) => a - b),
+  }
+}
+
+/** Majors the INSTALLED better-sqlite3 ships a prebuilt binary for. */
+function prebuiltMajors(): number[] {
+  const { version } = installedBetterSqlite3()
+  const majors = PREBUILT_MAJORS[version]
+  if (!majors) {
+    throw new Error(
+      `better-sqlite3 ${version} has no PREBUILT_MAJORS entry. Check that release's ` +
+        'assets for which node-v<abi> builds it ships and add them here. Do not copy ' +
+        'engines.node — it lists majors with no binary.',
+    )
+  }
+  return [...majors].sort((a, b) => a - b)
+}
+
+interface CiJob {
+  strategy?: { matrix?: { include?: Array<Record<string, unknown>> } }
+  steps?: Array<{ run?: string }>
 }
 
 /**
- * Majors the CI test matrix actually installs and runs the suite on.
+ * The CI job that installs a Node major and runs the suite on it.
  *
- * Reads the `include:` entries, which are deliberately asymmetric (Node 22
- * sharded 4x, the highest major unsharded) to hold CI cost down — so this
- * counts DISTINCT majors and says nothing about how each one is split.
- * `\bnode:` cannot match the `node-version:` key the setup step passes.
+ * Parsed as YAML, not scanned as text: a regex over the raw file cannot tell a
+ * live matrix entry from a commented-out one, cannot tell this job's `node:`
+ * key from any other job's, and cannot see whether the job runs the tests at
+ * all — so it would keep passing in exactly the cases this guard exists to
+ * catch.
+ */
+function testShardsJob(): CiJob {
+  const workflow = parseYaml(readRepoFile('.github', 'workflows', 'ci.yml')) as {
+    jobs?: Record<string, CiJob>
+  }
+  const job = workflow.jobs?.test_shards
+  if (!job) throw new Error('.github/workflows/ci.yml declares no `test_shards` job')
+  return job
+}
+
+/**
+ * Distinct Node majors the CI test matrix actually installs and runs on.
+ *
+ * The entries are deliberately asymmetric (Node 22 sharded 4x, the highest
+ * major unsharded) to hold CI cost down, so this counts DISTINCT majors and
+ * says nothing about how each one is split.
  */
 function ciMatrixMajors(): number[] {
-  const source = readRepoFile('.github', 'workflows', 'ci.yml')
-  const majors = [...source.matchAll(/\bnode:\s*'(\d+)'/g)].map((m) => Number.parseInt(m[1]!, 10))
-  if (majors.length === 0) throw new Error('node matrix not found in .github/workflows/ci.yml')
+  const include = testShardsJob().strategy?.matrix?.include
+  if (!include?.length) throw new Error('`test_shards` declares no matrix include entries')
+  const majors = include
+    .map((entry) => Number.parseInt(String(entry.node), 10))
+    .filter((n) => Number.isFinite(n))
+  if (majors.length === 0) throw new Error('no `node:` keys in the test_shards matrix')
   return [...new Set(majors)].sort((a, b) => a - b)
 }
 
@@ -94,12 +157,19 @@ function declaredEnginesCeiling(pkgRelPath: string[]): { declared: string; ceili
 }
 
 describe('Node support range', () => {
-  test('the install guard matches Canonry-supported better-sqlite3 majors', () => {
-    // Derived, not hardcoded: whatever better-sqlite3 supports at or above
-    // Canonry's floor is exactly what the guard must allow. A dependency bump
-    // that adds OR drops a major fails here.
-    const expected = betterSqlite3Majors().filter((major) => major >= CANONRY_MIN_MAJOR)
+  test('the install guard matches the prebuilt majors at or above Canonry floor', () => {
+    // Derived from prebuild coverage, not from engines.node. A dependency bump
+    // that adds OR drops a prebuilt major fails here.
+    const expected = prebuiltMajors().filter((major) => major >= CANONRY_MIN_MAJOR)
     expect(guardMajors()).toEqual(expected)
+  })
+
+  test('the prebuilt table never claims a major better-sqlite3 does not support', () => {
+    // The table is hand-maintained, so bound it by the dep's own declared
+    // range: engines.node is a superset of the prebuilds, never a subset. A
+    // typo'd or invented major fails here rather than widening the guard.
+    const { enginesMajors } = installedBetterSqlite3()
+    for (const major of prebuiltMajors()) expect(enginesMajors).toContain(major)
   })
 
   test('the guard and declared engine range enforce Node 22+', () => {
@@ -130,16 +200,6 @@ describe('Node support range', () => {
     }
   })
 
-  test('the guard rejects a major with no prebuilt binary', () => {
-    // The case that motivated this: an agent on a brand-new Node fell through
-    // to compiling better-sqlite3 from source and read the node-gyp failure as
-    // a repo bug. The guard must never promise a major the native dep has no
-    // prebuild for — expressed against the dep's own range, so this keeps
-    // meaning the same thing after the next Node release.
-    const beyondPrebuilds = Math.max(...betterSqlite3Majors()) + 1
-    expect(guardMajors()).not.toContain(beyondPrebuilds)
-  })
-
   test('the declared engines range does not promise more than the guard allows', () => {
     // An unbounded `>=X` range asserts that every FUTURE major is supported,
     // which is exactly the claim that misled the install. Require a ceiling.
@@ -159,5 +219,13 @@ describe('Node support range', () => {
     expect(ci).toContain(highest)
     // And CI must not claim to test a major the guard refuses to install on.
     for (const major of ci) expect(guardMajors()).toContain(major)
+  })
+
+  test('the matrix job actually runs the test suite', () => {
+    // A matrix that lists a major but never runs the tests on it is the same
+    // empty claim. Assert the job's steps invoke the suite.
+    const steps = testShardsJob().steps ?? []
+    const commands = steps.map((step) => step.run ?? '').join('\n')
+    expect(commands).toMatch(/pnpm\s+run\s+test/)
   })
 })

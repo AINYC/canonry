@@ -25,10 +25,11 @@
  * Dockerfile, rather than an arbitrary local runtime, controls that version.
  *
  * KEEPING THIS HONEST
- * `SUPPORTED_MAJORS` is the intersection of Canonry's Node 22+ policy and
- * better-sqlite3's supported majors. It is asserted against the installed
- * package by `packages/db/test/node-support-range.test.ts`, so a dependency
- * bump that narrows OR widens support fails a test rather than silently
+ * `SUPPORTED_MAJORS` is the intersection of Canonry's Node 22+ policy and the
+ * majors better-sqlite3 ships PREBUILT BINARIES for — which is NOT the same as
+ * its `engines.node`, see the note on the list itself. It is asserted against
+ * the installed package by `packages/db/test/node-support-range.test.ts`, so a
+ * dependency bump that narrows OR widens support fails a test rather than silently
  * drifting — which is exactly how this list went stale once already: it was
  * pinned at 25 while better-sqlite3 had shipped Node 26 prebuilds since
  * 12.10.0, and the test hardcoded the same ceiling so the two agreed on a
@@ -38,9 +39,19 @@
  * "supported" stays a claim with evidence behind it.
  */
 
-// Canonry supports Node 22+; better-sqlite3 ships prebuilds for 22.x-26.x.
-// Derived, not guessed — see the test above before editing.
-const SUPPORTED_MAJORS = [22, 23, 24, 25, 26]
+// Canonry's Node 22+ floor intersected with the majors better-sqlite3 ships a
+// PREBUILT binary for.
+//
+// 23 is absent on purpose. better-sqlite3 12.10.0 added the Node 26 prebuild and
+// in the same release dropped the EOL Node 20 and 23 ones — but left both in
+// `engines.node`, which still reads "20.x || 22.x || 23.x || 24.x || 25.x || 26.x".
+// That field is therefore a SUPERSET of what actually has a binary, and deriving
+// this list from it alone would promise Node 23 an install it cannot deliver:
+// prebuild-install misses, node-gyp starts compiling, and the reader gets the
+// C++ wall this guard exists to replace.
+//
+// Asserted by packages/db/test/node-support-range.test.ts — read it before editing.
+const SUPPORTED_MAJORS = [22, 24, 25, 26]
 
 const major = Number.parseInt(process.versions.node.split('.')[0], 10)
 const bypassed = process.env.CANONRY_SKIP_NODE_CHECK === '1'

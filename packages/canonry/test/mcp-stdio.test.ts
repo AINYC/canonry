@@ -13,34 +13,26 @@ const tsxCli = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs')
 const mcpCli = path.join(packageRoot, 'src', 'mcp', 'cli.ts')
 
 /**
- * Node's own runtime diagnostics, which the RUNTIME writes to the child's
- * stderr — not canonry.
+ * The MCP adapter must write NOTHING to stderr (AGENTS.md → MCP adapter
+ * boundary), so the assertion below is an exact empty-string match.
  *
- * The subprocess is `node <tsx>/cli.mjs src/mcp/cli.ts`, and tsx's ESM loader
- * calls `module.register()`. Node 26 deprecated that API (DEP0205), so on Node
- * 26 the child emits a two-line warning before canonry runs a single statement.
- * Asserting the raw stream would make this test fail on a supported Node major
- * because of a dev-only transpiler, which says nothing about the MCP contract.
+ * One Node-generated line would otherwise break it: the subprocess is
+ * `node <tsx>/cli.mjs src/mcp/cli.ts`, and tsx's ESM loader calls
+ * `module.register()`, deprecated in Node 26 (DEP0205). That is a dev-only
+ * transpiler emitting it, not canonry, and it says nothing about the MCP
+ * contract.
  *
- * Both patterns are anchored to Node's `(node:<pid>)` diagnostic prefix and its
- * paired `(Use \`node --trace-…\`)` hint. Canonry's own logger emits JSON
- * objects, so nothing canonry writes can match — the assertion below still
- * fails on any real stderr output, which is the rule it exists to enforce
- * (see AGENTS.md → MCP adapter boundary).
+ * It is silenced at the SOURCE — `--disable-warning=DEP0205` on the child, see
+ * `startClient` below — rather than by filtering the stream afterwards. A
+ * filter is the wrong instrument here: any pattern broad enough to catch
+ * Node's `(node:<pid>) ...` prefix also catches `MaxListenersExceededWarning`
+ * and `UnhandledPromiseRejectionWarning`, which are exactly the signals this
+ * assertion exists to surface. Disabling one warning code by name keeps every
+ * other diagnostic — and every byte canonry writes — a test failure.
+ *
+ * `--disable-warning` landed in Node 21.3, so it is available on every major
+ * in this repo's supported range.
  */
-const NODE_RUNTIME_DIAGNOSTICS = [
-  /^\(node:\d+\)\s.*$/,
-  /^\(Use `node --trace-[a-z-]+ \.\.\.` to show where the warning was created\)$/,
-]
-
-/** The child's stderr with Node's own diagnostics removed. */
-function canonryStderr(raw: string): string {
-  return raw
-    .split('\n')
-    .filter(line => !NODE_RUNTIME_DIAGNOSTICS.some(pattern => pattern.test(line.trim())))
-    .join('\n')
-    .trim()
-}
 
 /**
  * Budget for spawn through the `initialize` response, which is where the two
@@ -175,7 +167,7 @@ describe('canonry-mcp stdio', () => {
     expect(trafficSync.isError).not.toBe(true)
     expect(jsonText(trafficSync)).toMatchObject({ runId: 'run-traffic-1', sourceId: 'src-1' })
 
-    expect(canonryStderr(stderr())).toBe('')
+    expect(stderr()).toBe('')
   }, SUBPROCESS_CASE_TIMEOUT_MS)
 
   it('docs/mcp.md documents the same pipelining error wording the SDK emits', () => {
@@ -351,7 +343,7 @@ async function startMcpClient(options: {
   const stderrChunks: string[] = []
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: [tsxCli, mcpCli, ...(options.args ?? [])],
+    args: ['--disable-warning=DEP0205', tsxCli, mcpCli, ...(options.args ?? [])],
     cwd: packageRoot,
     env: {
       ...stringEnv(),

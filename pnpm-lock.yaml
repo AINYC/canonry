@@ -493,6 +493,9 @@ importers:
       drizzle-kit:
         specifier: ^0.31.9
         version: 0.31.9
+      yaml:
+        specifier: ^2.8.2
+        version: 2.8.2
 
   packages/integration-bing:
     dependencies:
