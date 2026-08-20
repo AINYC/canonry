@@ -138,6 +138,22 @@ jobs:
         name: Check documentation coverage (AGENTS.md per package)
       - run: pnpm run lint
 
+  # The WP plugin's PHP suite. It runs here and ONLY here: the root test
+  # script is vitest-only, and wp-plugin-release.yml auto-publishes the plugin
+  # zip on any merge that touches the plugin — so without this job a broken
+  # plugin change would ship to client sites untested. ubuntu-latest bundles
+  # PHP, and the suite is a dependency-free custom runner (no composer).
+  wp-plugin-tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - run: php --version
+      - run: php test/run-tests.php
+        working-directory: packages/wordpress-traffic-logger-plugin
+        name: WordPress traffic-logger plugin suite
+
   ts-prune:
     # Lightweight dead-export check via npx (no heavy dep in repo). Reports unused exports not used outside their module; filtered to exclude "used in module" noise. Non-blocking — surfaces in logs without failing CI.
     runs-on: ubuntu-latest
