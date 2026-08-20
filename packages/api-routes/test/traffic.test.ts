@@ -146,6 +146,8 @@ async function buildHarness(
       since: string | undefined
       until: string | undefined
     }) => WordpressTrafficEventsPage
+    /** Override the WordPress page cap to exercise a partial drain across syncs. */
+    defaultWordpressMaxPages?: number
     /** Force the Vercel traffic pull (used for the connect probe) to throw a `VercelLogsApiError`. */
     failVercelProbeWith?: { status: number; message: string; body?: string }
     /** Force the Vercel traffic pull (used by sync / backfill) to throw an Error with this message. */
@@ -261,6 +263,7 @@ async function buildHarness(
       return 'mock-access-token'
     },
     wordpressTrafficCredentialStore,
+    defaultWordpressMaxPages: options.defaultWordpressMaxPages,
     pullWordpressTrafficEvents: async (pullOptions): Promise<WordpressTrafficEventsPage> => {
       wpProbeInvocations.push(pullOptions)
       // Probe path: connect-route calls with pageSize=1, maxPages=1 — surface
@@ -2761,14 +2764,14 @@ describe('POST /traffic/sources/:id/sync — WordPress', () => {
     }
   })
 
-  it('pulls multi-page events via opaque cursor, persists the final nextCursor, lands rollups, advances lastSyncedAt to windowEnd, and finalizes the run as completed', async () => {
+  it('bounds every page of a WordPress drain, clears its terminal cursor, lands rollups, advances lastSyncedAt to windowEnd, and finalizes the run as completed', async () => {
     const baseTime = new Date(Date.now() - 60 * 60_000)
     baseTime.setMinutes(0, 0, 0)
     const fromBase = (mins: number) => new Date(baseTime.getTime() + mins * 60_000).toISOString()
 
     // Two pages of events, joined by cursor pagination. Page 1 returns
-    // next_cursor=PAGE2, page 2 returns next_cursor=PAGE_DONE with has_more=false.
-    // Sync must follow the cursor to exhaustion and persist PAGE_DONE on the row.
+    // next_cursor=PAGE2; the terminal page returns next_cursor=null. Every
+    // page must retain one fixed [since, until) window.
     const page1Events: NormalizedTrafficRequest[] = [
       buildWpEvent({ eventId: 'wordpress:p1:1', userAgent: 'GPTBot/1.0', path: '/blog/foo', status: 200, observedAt: fromBase(1) }),
       buildWpEvent({ eventId: 'wordpress:p1:2', userAgent: 'GPTBot/1.0', path: '/blog/foo', status: 200, observedAt: fromBase(20) }),
@@ -2784,21 +2787,31 @@ describe('POST /traffic/sources/:id/sync — WordPress', () => {
       }),
     ]
 
-    const cursorObservations: Array<string | undefined> = []
+    const pullObservations: Array<{
+      cursor: string | undefined
+      pageSize: number
+      since: string | undefined
+      until: string | undefined
+    }> = []
     const h = await buildHarness([], {
-      wpPullPages: ({ cursor }) => {
-        cursorObservations.push(cursor)
+      wpPullPages: ({ cursor, pageSize, since, until }) => {
+        pullObservations.push({ cursor, pageSize, since, until })
         if (cursor === undefined || cursor === '') {
           return { events: page1Events, rawEntryCount: 2, skippedEntryCount: 0, nextCursor: 'PAGE2', hasMore: true, endpoint: '' }
         }
         if (cursor === 'PAGE2') {
-          return { events: page2Events, rawEntryCount: 1, skippedEntryCount: 0, nextCursor: 'PAGE_DONE', hasMore: false, endpoint: '' }
+          return { events: page2Events, rawEntryCount: 1, skippedEntryCount: 0, nextCursor: undefined, hasMore: false, endpoint: '' }
         }
         throw new Error(`Unexpected cursor: ${cursor}`)
       },
     })
     try {
       const sourceId = await connectWp(h)
+      const lowerBound = fromBase(0)
+      h.db.update(trafficSources)
+        .set({ lastSyncedAt: lowerBound })
+        .where(eq(trafficSources.id, sourceId))
+        .run()
 
       const syncRes = await h.app.inject({
         method: 'POST',
@@ -2815,15 +2828,21 @@ describe('POST /traffic/sources/:id/sync — WordPress', () => {
       expect(body.sampleRows).toBe(3)
       expect(body.runId).toBeDefined()
 
-      // Pull was called once for connect probe (cursor=undefined, pageSize=1)
-      // and then for both sync pages: page 1 (undefined cursor) + page 2 ('PAGE2').
-      // The probe and page-1 are both `cursor=undefined` but happen in different
-      // invocations — assert at minimum that PAGE2 was followed by the sync.
-      expect(cursorObservations).toContain('PAGE2')
+      // The connect probe has pageSize=1 and no window. Both sync pages carry
+      // the same half-open interval, including the cursor continuation.
+      const syncPulls = pullObservations.filter((call) => call.pageSize !== 1)
+      expect(syncPulls).toHaveLength(2)
+      expect(syncPulls.map((call) => call.cursor)).toEqual([undefined, 'PAGE2'])
+      for (const call of syncPulls) {
+        expect(call.since).toBe(lowerBound)
+        expect(call.until).toBe(syncPulls[0]!.until)
+      }
+      expect(new Date(syncPulls[0]!.until!).getTime()).toBeGreaterThan(new Date(lowerBound).getTime())
 
-      // Final cursor is persisted on the row so the next sync resumes from there.
+      // A terminal plugin page emits no cursor, so the source is now ready to
+      // start its next bounded window at lastSyncedAt instead of replaying.
       const sourceRow = h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()!
-      expect(sourceRow.lastCursor).toBe('PAGE_DONE')
+      expect(sourceRow.lastCursor).toBeNull()
 
       // lastSyncedAt advances to windowEnd (which the WP path defines as the
       // sync start moment) — not finishedAt. Asserting it is set + valid ISO is
@@ -2857,37 +2876,41 @@ describe('POST /traffic/sources/:id/sync — WordPress', () => {
     }
   })
 
-  it('resumes from the persisted cursor on the next sync (does not restart from undefined)', async () => {
+  it('preserves the lower watermark while a capped WordPress drain resumes from its cursor', async () => {
     const baseTime = new Date(Date.now() - 60 * 60_000)
     baseTime.setMinutes(0, 0, 0)
 
-    const cursorCalls: Array<string | undefined> = []
-    let invocation = 0
+    const syncCalls: Array<{
+      cursor: string | undefined
+      since: string | undefined
+      until: string | undefined
+    }> = []
     const h = await buildHarness([], {
-      wpPullPages: ({ cursor }) => {
-        cursorCalls.push(cursor)
-        invocation += 1
-        if (invocation === 1) {
-          // Probe (pageSize=1, no cursor). Empty.
+      defaultWordpressMaxPages: 1,
+      wpPullPages: ({ cursor, pageSize, since, until }) => {
+        if (pageSize === 1) {
+          // Connect probe. It must not affect the incremental drain state.
           return { events: [], rawEntryCount: 0, skippedEntryCount: 0, nextCursor: undefined, hasMore: false, endpoint: '' }
         }
-        if (invocation === 2) {
-          // First sync: returns one event and a cursor for next time.
+        syncCalls.push({ cursor, since, until })
+        if (cursor === undefined || cursor === '') {
+          // First sync hits its one-page cap, retaining a continuation cursor.
           return {
             events: [buildWpEvent({ eventId: 'wordpress:r:1', path: '/r1', observedAt: new Date(baseTime.getTime() + 5 * 60_000).toISOString() })],
             rawEntryCount: 1,
             skippedEntryCount: 0,
             nextCursor: 'RESUME_HERE',
-            hasMore: false,
+            hasMore: true,
             endpoint: '',
           }
         }
-        // Second sync: cursor must equal what we returned, and we yield one new event.
+        if (cursor !== 'RESUME_HERE') throw new Error(`Unexpected cursor: ${cursor}`)
+        // Second sync must use the same lower watermark and finishes the drain.
         return {
           events: [buildWpEvent({ eventId: 'wordpress:r:2', path: '/r2', observedAt: new Date(baseTime.getTime() + 10 * 60_000).toISOString() })],
           rawEntryCount: 1,
           skippedEntryCount: 0,
-          nextCursor: 'AFTER_RESUME',
+          nextCursor: undefined,
           hasMore: false,
           endpoint: '',
         }
@@ -2895,27 +2918,164 @@ describe('POST /traffic/sources/:id/sync — WordPress', () => {
     })
     try {
       const sourceId = await connectWp(h)
+      const lowerBound = new Date(baseTime.getTime() - 5 * 60_000).toISOString()
+      h.db.update(trafficSources)
+        .set({ lastSyncedAt: lowerBound })
+        .where(eq(trafficSources.id, sourceId))
+        .run()
 
-      await h.app.inject({
+      const firstSync = await h.app.inject({
         method: 'POST',
         url: `/api/v1/projects/test-project/traffic/sources/${sourceId}/sync`,
         payload: {},
       })
+      expect(firstSync.statusCode).toBe(200)
       const firstRow = h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()!
       expect(firstRow.lastCursor).toBe('RESUME_HERE')
+      expect(firstRow.lastSyncedAt).toBe(lowerBound)
+      expect(firstRow.wordpressPendingUntil).toBe(syncCalls[0]!.until)
 
-      await h.app.inject({
+      const secondSync = await h.app.inject({
         method: 'POST',
         url: `/api/v1/projects/test-project/traffic/sources/${sourceId}/sync`,
         payload: {},
       })
+      expect(secondSync.statusCode).toBe(200)
 
-      // The third pull invocation (first call of the second sync) MUST pass
-      // cursor='RESUME_HERE' — proves the sync resumed from the persisted cursor.
-      expect(cursorCalls[2]).toBe('RESUME_HERE')
+      // The second sync resumes from the saved cursor using the exact reserved
+      // window, rather than moving either boundary while the drain is open.
+      expect(syncCalls.map((call) => call.cursor)).toEqual([undefined, 'RESUME_HERE'])
+      expect(syncCalls.map((call) => call.since)).toEqual([lowerBound, lowerBound])
+      expect(syncCalls.map((call) => call.until)).toEqual([syncCalls[0]!.until, syncCalls[0]!.until])
+      expect(new Date(syncCalls[0]!.until!).getTime()).toBeGreaterThan(new Date(lowerBound).getTime())
 
       const secondRow = h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()!
-      expect(secondRow.lastCursor).toBe('AFTER_RESUME')
+      expect(secondRow.lastCursor).toBeNull()
+      expect(secondRow.wordpressPendingUntil).toBeNull()
+      expect(secondRow.lastSyncedAt).toBe(syncCalls[0]!.until)
+    } finally {
+      await h.close()
+    }
+  })
+
+  it('reserves a first WordPress window before I/O and retries its exact 90-day bounds', async () => {
+    const syncCalls: Array<{ since: string | undefined; until: string | undefined }> = []
+    let failFirstSync = true
+    const h = await buildHarness([], {
+      wpPullPages: ({ pageSize, since, until }) => {
+        if (pageSize === 1) {
+          return { events: [], rawEntryCount: 0, skippedEntryCount: 0, nextCursor: undefined, hasMore: false, endpoint: '' }
+        }
+        syncCalls.push({ since, until })
+        if (failFirstSync) throw new Error('temporary WordPress failure')
+        return { events: [], rawEntryCount: 0, skippedEntryCount: 0, nextCursor: undefined, hasMore: false, endpoint: '' }
+      },
+    })
+    try {
+      const sourceId = await connectWp(h)
+
+      const first = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/projects/test-project/traffic/sources/${sourceId}/sync`,
+        payload: {},
+      })
+      expect(first.statusCode).toBe(502)
+
+      const reserved = h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()!
+      expect(reserved.lastCursor).toBeNull()
+      expect(reserved.wordpressPendingUntil).toBe(syncCalls[0]!.until)
+      expect(reserved.lastSyncedAt).toBe(syncCalls[0]!.since)
+      expect(
+        new Date(syncCalls[0]!.until!).getTime() - new Date(syncCalls[0]!.since!).getTime(),
+      ).toBe(90 * 24 * 60 * 60_000)
+
+      failFirstSync = false
+      const second = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/projects/test-project/traffic/sources/${sourceId}/sync`,
+        payload: {},
+      })
+      expect(second.statusCode).toBe(200)
+      expect(syncCalls).toEqual([
+        { since: syncCalls[0]!.since, until: syncCalls[0]!.until },
+        { since: syncCalls[0]!.since, until: syncCalls[0]!.until },
+      ])
+
+      const completed = h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()!
+      expect(completed.lastCursor).toBeNull()
+      expect(completed.wordpressPendingUntil).toBeNull()
+      expect(completed.lastSyncedAt).toBe(syncCalls[0]!.until)
+    } finally {
+      await h.close()
+    }
+  })
+
+  it('fails closed for a legacy WordPress cursor that has no bounded pending window', async () => {
+    const syncCalls: Array<{ pageSize: number }> = []
+    const h = await buildHarness([], {
+      wpPullPages: ({ pageSize }) => {
+        syncCalls.push({ pageSize })
+        return { events: [], rawEntryCount: 0, skippedEntryCount: 0, nextCursor: undefined, hasMore: false, endpoint: '' }
+      },
+    })
+    try {
+      const sourceId = await connectWp(h)
+      const staleWatermark = new Date(Date.now() - 15 * 60_000).toISOString()
+      h.db.update(trafficSources)
+        .set({ lastSyncedAt: staleWatermark, lastCursor: 'legacy-cursor' })
+        .where(eq(trafficSources.id, sourceId))
+        .run()
+
+      const res = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/projects/test-project/traffic/sources/${sourceId}/sync`,
+        payload: {},
+      })
+      expect(res.statusCode).toBe(400)
+      expect(JSON.parse(res.payload).error.message).toMatch(/legacy continuation cursor/)
+      expect(syncCalls.filter((call) => call.pageSize !== 1)).toHaveLength(0)
+
+      const sourceRow = h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()!
+      expect(sourceRow.status).toBe(TrafficSourceStatuses.error)
+      expect(sourceRow.lastCursor).toBe('legacy-cursor')
+      expect(sourceRow.lastSyncedAt).toBe(staleWatermark)
+      expect(sourceRow.wordpressPendingUntil).toBeNull()
+    } finally {
+      await h.close()
+    }
+  })
+
+  it('fails without advancing the watermark when WordPress claims more data without a continuation cursor', async () => {
+    const h = await buildHarness([], {
+      wpPullPages: ({ pageSize }) => {
+        if (pageSize === 1) {
+          // Connect probe.
+          return { events: [], rawEntryCount: 0, skippedEntryCount: 0, nextCursor: undefined, hasMore: false, endpoint: '' }
+        }
+        return { events: [], rawEntryCount: 0, skippedEntryCount: 0, nextCursor: undefined, hasMore: true, endpoint: '' }
+      },
+    })
+    try {
+      const sourceId = await connectWp(h)
+      const lowerBound = new Date(Date.now() - 15 * 60_000).toISOString()
+      h.db.update(trafficSources)
+        .set({ lastSyncedAt: lowerBound })
+        .where(eq(trafficSources.id, sourceId))
+        .run()
+
+      const res = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/projects/test-project/traffic/sources/${sourceId}/sync`,
+        payload: {},
+      })
+      expect(res.statusCode).toBe(502)
+      expect(JSON.parse(res.payload).error.message).toMatch(/has_more without a new continuation cursor/)
+
+      const sourceRow = h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()!
+      expect(sourceRow.status).toBe(TrafficSourceStatuses.error)
+      expect(sourceRow.lastCursor).toBeNull()
+      expect(sourceRow.lastSyncedAt).toBe(lowerBound)
+      expect(h.db.select().from(crawlerEventsHourly).all()).toHaveLength(0)
     } finally {
       await h.close()
     }
@@ -3632,7 +3792,7 @@ describe('POST /traffic/sources/:id/backfill — WordPress', () => {
 
     // Two pages of historical WP events, cursor-paginated by the plugin's
     // window endpoint. Page 1 returns next_cursor=BPAGE2 (has_more=true),
-    // page 2 returns the final cursor with has_more=false. Backfill must
+    // and page 2 is terminal (has_more=false, no cursor). Backfill must
     // follow the cursor to exhaustion inside the requested [since, until)
     // window — the per-call `since`/`until` should be identical across
     // both invocations.
@@ -3721,10 +3881,108 @@ describe('POST /traffic/sources/:id/backfill — WordPress', () => {
     }
   })
 
-  it('does not roll lastSyncedAt backwards when the existing cursor is ahead of windowEnd', async () => {
+  it('refuses WordPress backfill while a continuation window is pending', async () => {
+    const pullCalls: Array<{ pageSize: number }> = []
+    const h = await buildHarness([], {
+      wpPullPages: ({ pageSize }) => {
+        pullCalls.push({ pageSize })
+        return { events: [], rawEntryCount: 0, skippedEntryCount: 0, nextCursor: undefined, hasMore: false, endpoint: '' }
+      },
+    })
+    try {
+      const sourceId = await connectWp(h)
+      const lowerBound = new Date(Date.now() - 60 * 60_000).toISOString()
+      const pendingUntil = new Date(Date.now() - 30 * 60_000).toISOString()
+      h.db.update(trafficSources)
+        .set({
+          lastSyncedAt: lowerBound,
+          lastCursor: 'PENDING_BACKFILL_CURSOR',
+          wordpressPendingUntil: pendingUntil,
+        })
+        .where(eq(trafficSources.id, sourceId))
+        .run()
+
+      const res = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/projects/test-project/traffic/sources/${sourceId}/backfill`,
+        payload: { days: 7 },
+      })
+      expect(res.statusCode).toBe(400)
+      expect(JSON.parse(res.payload).error.message).toMatch(/continuation window is pending/)
+      expect(pullCalls.filter((call) => call.pageSize !== 1)).toHaveLength(0)
+
+      const sourceRow = h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()!
+      expect(sourceRow.lastCursor).toBe('PENDING_BACKFILL_CURSOR')
+      expect(sourceRow.wordpressPendingUntil).toBe(pendingUntil)
+      expect(sourceRow.lastSyncedAt).toBe(lowerBound)
+    } finally {
+      await h.close()
+    }
+  })
+
+  it('fails a capped WordPress backfill before its replace transaction', async () => {
+    let cursorNumber = 0
+    const h = await buildHarness([], {
+      wpPullPages: ({ pageSize }) => {
+        if (pageSize === 1) {
+          return { events: [], rawEntryCount: 0, skippedEntryCount: 0, nextCursor: undefined, hasMore: false, endpoint: '' }
+        }
+        cursorNumber += 1
+        return {
+          events: [],
+          rawEntryCount: 0,
+          skippedEntryCount: 0,
+          nextCursor: `BACKFILL_${cursorNumber}`,
+          hasMore: true,
+          endpoint: '',
+        }
+      },
+    })
+    try {
+      const sourceId = await connectWp(h)
+      const source = h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()!
+      const now = new Date().toISOString()
+      const tsHour = new Date(now)
+      tsHour.setUTCMinutes(0, 0, 0)
+      h.db.insert(crawlerEventsHourly).values({
+        projectId: source.projectId,
+        sourceId,
+        tsHour: tsHour.toISOString(),
+        botId: 'openai-gptbot',
+        operator: 'OpenAI',
+        verificationStatus: 'claimed_unverified',
+        pathNormalized: '/preserve',
+        status: 200,
+        hits: 7,
+        sampledUserAgent: 'GPTBot/1.0',
+        createdAt: now,
+        updatedAt: now,
+      }).run()
+
+      const submitRes = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/projects/test-project/traffic/sources/${sourceId}/backfill`,
+        payload: { days: 1 },
+      })
+      expect(submitRes.statusCode).toBe(200)
+      const submitted = JSON.parse(submitRes.payload)
+      const finalRun = await waitForRunComplete(h.db, submitted.runId)
+      expect(finalRun.status).toBe(RunStatuses.failed)
+      expect(finalRun.error).toMatch(/safety budget/)
+      expect(cursorNumber).toBeGreaterThan(1)
+
+      const buckets = h.db.select().from(crawlerEventsHourly).where(eq(crawlerEventsHourly.sourceId, sourceId)).all()
+      expect(buckets).toHaveLength(1)
+      expect(buckets[0]!.hits).toBe(7)
+    } finally {
+      await h.close()
+    }
+  })
+
+  it('does not roll lastSyncedAt backwards when the existing watermark is ahead of windowEnd', async () => {
     // Seed lastSyncedAt to a future timestamp (incremental sync already
     // ran ahead of the backfill window). Backfill replaces the rollup in
-    // [windowStart, windowEnd) but must NOT clobber the forward cursor —
+    // [windowStart, windowEnd) but must NOT clobber the forward watermark —
     // otherwise the next incremental sync would re-pull a gap.
     const h = await buildHarness([], {
       wpPullPages: ({ cursor }) => {
@@ -5196,6 +5454,49 @@ describe('POST /traffic/sources/:id/reset', () => {
       expect(row.status).toBe(TrafficSourceStatuses.connected)
       expect(row.lastError).toBeNull()
       expect(new Date(row.lastSyncedAt!).getTime()).toBeGreaterThanOrEqual(before)
+    } finally {
+      await h.close()
+    }
+  })
+
+  it('clears a WordPress continuation cursor with the explicit reset watermark', async () => {
+    const h = await buildHarness([])
+    try {
+      const connectRes = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/projects/test-project/traffic/connect/wordpress',
+        payload: {
+          baseUrl: 'https://8.8.8.8',
+          username: 'canonry-bot',
+          applicationPassword: 'xxxx xxxx xxxx xxxx xxxx xxxx',
+        },
+      })
+      expect(connectRes.statusCode).toBe(200)
+      const sourceId = JSON.parse(connectRes.payload).id
+      h.db.update(trafficSources)
+        .set({
+          lastSyncedAt: new Date(Date.now() - 24 * 60 * 60_000).toISOString(),
+          lastCursor: 'stale-continuation',
+          wordpressPendingUntil: new Date(Date.now() - 23 * 60 * 60_000).toISOString(),
+          status: TrafficSourceStatuses.error,
+          lastError: 'previous pull failed',
+        })
+        .where(eq(trafficSources.id, sourceId))
+        .run()
+
+      const res = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/projects/test-project/traffic/sources/${sourceId}/reset`,
+        payload: { advanceToNow: true },
+      })
+      expect(res.statusCode).toBe(200)
+      expect(JSON.parse(res.payload).lastCursor).toBeNull()
+
+      const row = h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()!
+      expect(row.lastCursor).toBeNull()
+      expect(row.wordpressPendingUntil).toBeNull()
+      expect(row.status).toBe(TrafficSourceStatuses.connected)
+      expect(row.lastError).toBeNull()
     } finally {
       await h.close()
     }

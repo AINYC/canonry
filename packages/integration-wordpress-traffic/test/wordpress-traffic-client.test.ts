@@ -308,6 +308,27 @@ describe('listWordpressTrafficEvents', () => {
     expect(result.nextCursor).toBe('999')
   })
 
+  it('rejects a contradictory has_more response without a continuation cursor', async () => {
+    fetchSpy.mockImplementation(async () => (
+      new Response(JSON.stringify({
+        events: [],
+        next_cursor: null,
+        has_more: true,
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    ))
+
+    await expect(listWordpressTrafficEvents({
+      baseUrl: 'https://example.com',
+      username: 'u',
+      applicationPassword: 'p',
+      maxPages: 1,
+    })).rejects.toMatchObject({
+      name: 'WordpressTrafficApiError',
+      status: 502,
+      message: expect.stringMatching(/has_more=true without next_cursor/),
+    })
+  })
+
   it('counts events that fail normalization as skipped without throwing', async () => {
     fetchSpy.mockImplementation(async () => (
       new Response(JSON.stringify({

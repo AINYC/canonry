@@ -816,7 +816,7 @@ const trafficResetInputSchema = z.object({
   sourceId: z.string().min(1).describe('Traffic source ID returned by canonry_traffic_sources_list.'),
   advanceToNow: z
     .literal(true)
-    .describe('Must be `true`. Explicit gate against accidental resets. Advances lastSyncedAt to NOW and clears the source\'s error state.'),
+    .describe('Must be `true`. Explicit gate against accidental resets. Advances lastSyncedAt to NOW and clears the source\'s error state; WordPress also clears its continuation cursor and pending-window marker.'),
 })
 
 const trafficEventsInputSchema = z.object({
@@ -2079,7 +2079,7 @@ export const canonryMcpTools = [
   defineTool({
     name: 'canonry_traffic_reset',
     title: 'Advance traffic source lastSyncedAt to NOW',
-    description: 'Operator recovery for a stuck traffic source. Advances `lastSyncedAt` to NOW, sets `status` back to `connected`, and clears `last_error`. Accepts any non-archived source: the `lastSyncedAt` advance determines the next sync window for time-windowed sources (Vercel, Cloud Run); cursor-based sources (WordPress) keep their `last_cursor` so the advance is informational. Common trigger: an idle Vercel/Cloud Run source whose `lastSyncedAt` aged past the upstream retention boundary and every sync now throws a retention error. Historical events in the gap are unrecoverable from the sync path; run canonry_traffic_backfill separately if any of them are needed. Archived sources are rejected — re-connect via the appropriate canonry_traffic_connect_* tool instead.',
+    description: 'Operator recovery for a stuck traffic source. Advances `lastSyncedAt` to NOW, sets `status` back to `connected`, and clears `last_error`. A WordPress reset also clears `last_cursor` and its pending-window marker, so its next bounded drain begins at the new watermark instead of combining it with an old cursor. That prevents future replay but is not a historical repair. Common trigger: an idle Vercel/Cloud Run source whose `lastSyncedAt` aged past the upstream retention boundary and every sync now throws a retention error. Historical events in the gap are unrecoverable from the sync path; run canonry_traffic_backfill separately if any of them are needed. Archived sources are rejected — re-connect via the appropriate canonry_traffic_connect_* tool instead.',
     access: 'write',
     tier: 'traffic',
     inputSchema: trafficResetInputSchema,

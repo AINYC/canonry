@@ -466,7 +466,10 @@ export type TrafficBackfillRequest = z.infer<typeof trafficBackfillRequestSchema
  * idle source's `lastSyncedAt` has aged past the upstream's retention window
  * (Vercel `request-logs`, Cloud Logging) and every sync now throws a
  * retention error. Skipped history is the explicit trade-off; the operator
- * runs `traffic backfill` separately if they want to recover any of it.
+ * runs `traffic backfill` separately if they want to recover any of it. A
+ * WordPress reset also clears its continuation cursor and pending-window
+ * marker, so it starts at the new watermark rather than resuming an old
+ * partial drain. That prevents replay; it is not a historical repair.
  *
  * `advanceToNow` must be `true` — there is no implicit reset. The schema
  * rejects `false` / missing to keep the call sites self-documenting.

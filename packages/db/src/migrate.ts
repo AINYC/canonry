@@ -3926,6 +3926,18 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
       `CREATE INDEX IF NOT EXISTS idx_raw_event_samples_ts ON raw_event_samples(ts)`,
     ],
   },
+  {
+    version: 145,
+    name: 'wordpress-traffic-pending-window',
+    // A persisted upper bound makes a capped WordPress cursor drain a finite,
+    // repeatable [last_synced_at, wordpress_pending_until) window. Existing
+    // non-null cursors deliberately receive NULL here: they were created by
+    // the old unbounded route, so treating their already-advanced watermark
+    // as a lower bound would silently skip undrained history.
+    statements: [
+      `ALTER TABLE traffic_sources ADD COLUMN wordpress_pending_until TEXT`,
+    ],
+  },
 ]
 
 function addRunsMeasurementPlanVersionForeignKey(tx: MigrationDb): void {

@@ -765,10 +765,11 @@ export async function trafficSync(project: string, opts: {
  * Operator recovery: advance `lastSyncedAt` to NOW and clear `lastError` so
  * the next scheduled sync resumes from a recent timestamp. Primary use case
  * is an idle Vercel/Cloud Run source whose `lastSyncedAt` aged past the
- * upstream retention window and now throws on every sync. Accepts any
- * non-archived source type; cursor-based sources (WordPress) keep their
- * `lastCursor` so the advance is informational for them. Archived sources
- * are rejected — re-connect via `canonry traffic connect ...` instead.
+ * upstream retention window and now throws on every sync. A WordPress reset
+ * also clears its `lastCursor` and pending-window marker, so it intentionally
+ * starts a fresh bounded drain at NOW. That prevents replay; it does not
+ * repair prior rollups. Archived sources are rejected — re-connect via
+ * `canonry traffic connect ...` instead.
  *
  * Skipped history is the explicit trade-off; run
  * `canonry traffic backfill` separately if any of it needs to be recovered.

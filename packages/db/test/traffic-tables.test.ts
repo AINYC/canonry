@@ -256,16 +256,14 @@ test('raw sample retention migration adds a global expiry index without rewritin
   migrate(db, MIGRATION_VERSIONS.filter(migration => migration.version < 144))
   seedProject(db)
   const now = '2026-08-17T12:00:00.000Z'
-  db.insert(trafficSources).values({
-    id: 'src_raw_migration',
-    projectId: 'proj_1',
-    sourceType: 'cloud-run',
-    displayName: 'Cloud Run',
-    status: 'connected',
-    configJson: {},
-    createdAt: now,
-    updatedAt: now,
-  }).run()
+  db.run(sql`
+    INSERT INTO traffic_sources (
+      id, project_id, source_type, display_name, status, config_json, created_at, updated_at
+    ) VALUES (
+      ${'src_raw_migration'}, ${'proj_1'}, ${'cloud-run'}, ${'Cloud Run'},
+      ${'connected'}, ${JSON.stringify({})}, ${now}, ${now}
+    )
+  `)
   db.insert(rawEventSamples).values([
     {
       id: 'offset_timestamp',
@@ -464,16 +462,14 @@ test('migration 139 leaves legacy rollups unattributed and preserves old-writer 
   migrate(db, MIGRATION_VERSIONS.filter(migration => migration.version < 139))
   seedProject(db)
   const now = '2026-08-13T12:00:00.000Z'
-  db.insert(trafficSources).values({
-    id: 'src_pre_manifest',
-    projectId: 'proj_1',
-    sourceType: 'cloud-run',
-    displayName: 'Pre-manifest source',
-    status: 'connected',
-    configJson: {},
-    createdAt: now,
-    updatedAt: now,
-  }).run()
+  db.run(sql`
+    INSERT INTO traffic_sources (
+      id, project_id, source_type, display_name, status, config_json, created_at, updated_at
+    ) VALUES (
+      ${'src_pre_manifest'}, ${'proj_1'}, ${'cloud-run'}, ${'Pre-manifest source'},
+      ${'connected'}, ${JSON.stringify({})}, ${now}, ${now}
+    )
+  `)
 
   // Raw SQL models the exact table shape an older binary wrote before v139.
   db.run(sql`
@@ -897,6 +893,44 @@ test('traffic queue backlog migration adds nullable observations without changin
   const [observed] = db.select().from(trafficSources).where(eq(trafficSources.id, 'src_pre_backlog')).all()
   expect(observed.queueBacklogCount).toBe(125)
   expect(observed.queueBacklogObservedAt).toBe(now)
+})
+
+test('WordPress pending-window migration leaves old cursors explicitly unmarked', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'canonry-wp-pending-window-migration-'))
+  onTestFinished(() => cleanup(tmpDir))
+  const db = createClient(path.join(tmpDir, 'test.db'))
+
+  migrate(db, MIGRATION_VERSIONS.filter(migration => migration.version < 145))
+  seedProject(db)
+  const now = '2026-08-20T17:00:00.000Z'
+  // Pre-v145 WordPress cursors have no recorded upper bound. The new code
+  // must distinguish that ambiguous legacy state from a bounded continuation.
+  db.run(sql`
+    INSERT INTO traffic_sources (
+      id, project_id, source_type, display_name, status, last_synced_at,
+      last_cursor, config_json, created_at, updated_at
+    ) VALUES (
+      ${'src_pre_wp_pending'}, ${'proj_1'}, ${'wordpress'}, ${'Legacy WordPress source'},
+      ${'connected'}, ${now}, ${'opaque-legacy-cursor'}, ${JSON.stringify({ baseUrl: 'https://example.com', username: 'bot' })}, ${now}, ${now}
+    )
+  `)
+
+  expect(MIGRATION_VERSIONS.find(migration => migration.version === 145)?.name)
+    .toBe('wordpress-traffic-pending-window')
+  migrate(db)
+
+  const [legacy] = db.select().from(trafficSources)
+    .where(eq(trafficSources.id, 'src_pre_wp_pending')).all()
+  expect(legacy.lastCursor).toBe('opaque-legacy-cursor')
+  expect(legacy.wordpressPendingUntil).toBeNull()
+
+  db.update(trafficSources)
+    .set({ wordpressPendingUntil: '2026-08-20T17:30:00.000Z' })
+    .where(eq(trafficSources.id, 'src_pre_wp_pending'))
+    .run()
+  const [bounded] = db.select().from(trafficSources)
+    .where(eq(trafficSources.id, 'src_pre_wp_pending')).all()
+  expect(bounded.wordpressPendingUntil).toBe('2026-08-20T17:30:00.000Z')
 })
 
 test('traffic ingest migration adds source auth columns and durable receipts without losing source data', () => {

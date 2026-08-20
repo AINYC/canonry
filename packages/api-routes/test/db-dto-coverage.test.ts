@@ -746,6 +746,7 @@ const COVERAGE: Record<string, CoverageEntry> = {
     dto: trafficSourceDtoSchema,
     internal: {
       lastEventIds: 'Bounded ring buffer of recent event IDs; internal dedup state, not part of the source DTO.',
+      wordpressPendingUntil: 'Fixed upper bound paired with a WordPress continuation cursor; internal sync state, not part of the source DTO.',
       configJson: 'Exposed on the DTO as `config`; the DB column keeps the `Json` suffix for grep-ability.',
       ingestTokenHash: 'sha256 of the per-source bearer token issued to push-receive adapters (Cloudflare Worker). Auth-only — never returned via the DTO.',
       lastWorkerVersion: 'Semver reported by the most recently ingested Cloudflare Worker batch, whether direct or Queue. Surfaced through the doctor check, not the source DTO.',

@@ -374,12 +374,17 @@ const DEFAULT_SYNC_WINDOW_MINUTES = 43_200
 const DEFAULT_PAGE_SIZE = 1000
 const DEFAULT_MAX_PAGES = 5
 const DEFAULT_SAMPLE_LIMIT = 100
-// WordPress traffic pulls page through the plugin via opaque cursors rather
-// than a time window. Caps below match Cloud Run's per-sync budget shape:
-// a moderate page size with a bounded fan-out so a misconfigured cursor or
-// runaway plugin can't exhaust the route. Adjust via TrafficRoutesOptions.
+// WordPress traffic pulls use opaque cursors to page through a bounded time
+// window. Caps below match Cloud Run's per-sync budget shape: a moderate page
+// size with a bounded fan-out so a misconfigured cursor or runaway plugin
+// can't exhaust the route. Adjust via TrafficRoutesOptions.
 const DEFAULT_WP_PAGE_SIZE = 500
 const DEFAULT_WP_MAX_PAGES = 20
+// WordPress's plugin retains 90 days by default. Use that best-effort horizon
+// for any non-explicit idle window, including a first sync, instead of
+// silently inheriting the shared 30-day pull default. A site configured with
+// less retention returns its available tail; an explicit `sinceMinutes` wins.
+const DEFAULT_WP_SYNC_WINDOW_MINUTES = 90 * 24 * 60
 // Vercel's `request-logs` endpoint paginates by page number within a fixed
 // `[startDate, endDate]` window and exposes no resumable page cursor. A
 // window holding more than this many pages cannot be pulled in one pass, so
@@ -946,6 +951,8 @@ function isSameTrafficSourceGeneration(
   return isDeepStrictEqual(current.configJson, started.configJson)
     && current.updatedAt === started.updatedAt
     && current.lastSyncedAt === started.lastSyncedAt
+    && current.lastCursor === started.lastCursor
+    && current.wordpressPendingUntil === started.wordpressPendingUntil
 }
 
 function bindTrafficSyncSchedule(
@@ -1011,6 +1018,11 @@ interface RunBackfillTaskOptions {
   pullErrorPrefix: string
 }
 
+function hasPendingWordpressWindow(source: typeof trafficSources.$inferSelect): boolean {
+  return source.sourceType === TrafficSourceTypes.wordpress
+    && (source.lastCursor !== null || source.wordpressPendingUntil !== null)
+}
+
 async function runBackfillTask(options: RunBackfillTaskOptions): Promise<void> {
   const {
     app,
@@ -1049,6 +1061,14 @@ async function runBackfillTask(options: RunBackfillTaskOptions): Promise<void> {
       // can't surface it anywhere without crashing the process. The run row
       // will stay 'running' until the next sync overwrites it.
     }
+  }
+
+  // Replace-mode backfill and additive cursor continuation cannot safely
+  // overlap. This is normally rejected synchronously by the route; retain a
+  // task-side guard for a source that changed after the response was issued.
+  if (hasPendingWordpressWindow(sourceRow)) {
+    markFailed('WordPress backfill cannot run while a bounded continuation window is pending; reset or drain it first.')
+    return
   }
 
   let allEvents: NormalizedTrafficRequest[]
@@ -1127,6 +1147,14 @@ async function runBackfillTask(options: RunBackfillTaskOptions): Promise<void> {
     const commitOutcome = app.db.transaction((tx) => {
       const latestSource = tx.select().from(trafficSources)
         .where(eq(trafficSources.id, sourceRow.id)).get()
+      if (latestSource && hasPendingWordpressWindow(latestSource)) {
+        tx.update(runs).set({
+          status: RunStatuses.failed,
+          error: 'WordPress backfill cannot commit while a bounded continuation window is pending.',
+          finishedAt,
+        }).where(eq(runs.id, runId)).run()
+        return 'pending-wordpress-window' as const
+      }
       if (!latestSource
         || !isAuthoritativeTrafficSource(tx, latestSource)
         || !isSameTrafficSourceGeneration(latestSource, sourceRow)) {
@@ -1433,7 +1461,7 @@ async function runBackfillTask(options: RunBackfillTaskOptions): Promise<void> {
         .run()
       return 'committed' as const
     })
-    if (commitOutcome === 'source-inactive') return
+    if (commitOutcome === 'source-inactive' || commitOutcome === 'pending-wordpress-window') return
   } catch (e) {
     markFailed(`Backfill rollup write failed: ${describeError(e)}`)
   }
@@ -2599,14 +2627,15 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
     Body: { sinceMinutes?: number }
   }>('/projects/:name/traffic/sources/:id/sync', async (request) => {
     const project = resolveProject(app.db, request.params.name)
-    const sourceRow = app.db
+    const initialSourceRow = app.db
       .select()
       .from(trafficSources)
       .where(eq(trafficSources.id, request.params.id))
       .get()
-    if (!sourceRow || sourceRow.projectId !== project.id) {
+    if (!initialSourceRow || initialSourceRow.projectId !== project.id) {
       throw notFound('Traffic source', request.params.id)
     }
+    let sourceRow: typeof trafficSources.$inferSelect = initialSourceRow
     const queueConfig = sourceRow.sourceType === TrafficSourceTypes.cloudflare
       ? parseQueuePullCloudflareSourceConfig(sourceRow.configJson)
       : null
@@ -2846,13 +2875,13 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
       throw validationError('Traffic source must be active before it can sync')
     }
 
-    // windowEnd is "sync started at" — used as the upper bound of the Cloud
-    // Run time window and as the value we advance `lastSyncedAt` to on
-    // success. WP doesn't use it for the actual pull (cursor pagination
-    // ignores time), but persisting it keeps both adapters uniform.
-    const windowEnd = new Date()
-    const startedAt = windowEnd.toISOString()
-    const syncStartedAtMs = windowEnd.getTime()
+    // A new pull uses the sync-start instant as its exclusive upper bound. A
+    // resumed WordPress continuation replaces `windowEnd` with its persisted
+    // boundary so every retry pages through one finite interval exactly.
+    const syncWindowEnd = new Date()
+    let windowEnd = syncWindowEnd
+    const startedAt = syncWindowEnd.toISOString()
+    const syncStartedAtMs = syncWindowEnd.getTime()
     const runId = crypto.randomUUID()
     app.db
       .insert(runs)
@@ -2881,9 +2910,7 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
         // A cutover may have paused or reconfigured this source while the
         // provider call was in flight. Preserve that newer lifecycle state.
         if (latestSource?.status === TrafficSourceStatuses.connected
-          && isDeepStrictEqual(latestSource.configJson, sourceRow.configJson)
-          && latestSource.updatedAt === sourceRow.updatedAt
-          && latestSource.lastSyncedAt === sourceRow.lastSyncedAt) {
+          && isSameTrafficSourceGeneration(latestSource, sourceRow)) {
           tx
             .update(trafficSources)
             .set({ status: TrafficSourceStatuses.error, lastError: msg, updatedAt: failedAt })
@@ -2911,9 +2938,9 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
     }
 
     // Per-source dispatch: each branch validates its own credential store and
-    // pulls events. windowStart is meaningful for Cloud Run (time-window
-    // pull) and informational for WP (cursor pull — set to lastSyncedAt or
-    // sync start). nextCursor is only set by WP.
+    // pulls events. windowStart and windowEnd bound both Cloud Run and
+    // WordPress pulls; WordPress additionally uses an opaque cursor to resume
+    // a partial drain inside that interval. nextCursor is only set by WP.
     let windowStart: Date
     let allEvents: NormalizedTrafficRequest[]
     let nextCursor: string | undefined
@@ -2989,10 +3016,10 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
         throw providerError(`Cloud Run pull failed: ${msg}`)
       }
     } else if (sourceRow.sourceType === TrafficSourceTypes.wordpress) {
-      // WordPress traffic-logger adapter. Pages through `next_cursor` until
-      // exhausted, then persists the final cursor + advances `lastSyncedAt`
-      // to windowEnd. The `lastCursor` column drives resume semantics; the
-      // time-window clamp does not apply.
+      // WordPress traffic-logger adapter. Every pull is a reserved half-open
+      // window, with an opaque cursor only for pagination inside it. Keep its
+      // lower and upper bounds fixed while a page cap leaves a cursor behind;
+      // otherwise the next cursor+window query could skip or chase events.
       auditAction = 'traffic.wordpress.synced'
       const credentialStore = opts.wordpressTrafficCredentialStore
       if (!credentialStore) {
@@ -3012,12 +3039,90 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
         )
       }
 
-      // For WP, windowStart is purely informational on the response — there
-      // is no time-window pull. Use lastSyncedAt if present so the response
-      // matches "events since previous sync"; otherwise use windowEnd (which
-      // yields `windowStart == windowEnd` for the first sync, signalling a
-      // cursor-driven adapter to consumers).
-      windowStart = sourceRow.lastSyncedAt ? new Date(sourceRow.lastSyncedAt) : windowEnd
+      // A cursor written by the old unbounded sync has no recorded upper
+      // boundary, so its already-advanced `lastSyncedAt` is not a valid
+      // lower bound. Refuse that ambiguous legacy state rather than silently
+      // skipping its undrained middle or replaying it without a window.
+      if (sourceRow.lastCursor && !sourceRow.wordpressPendingUntil) {
+        const message = 'WordPress source has a legacy continuation cursor without a bounded pending window. Reset it explicitly before resuming sync.'
+        markFailed(message, 'INTERNAL')
+        throw validationError(message)
+      }
+
+      if (sourceRow.wordpressPendingUntil) {
+        // Resume a previously reserved finite window exactly. This also
+        // covers a transient failure before its first page committed: there
+        // is no cursor yet, but reusing the same bounds prevents a retry from
+        // sliding the intended coverage forward.
+        const pendingStartMs = sourceRow.lastSyncedAt
+          ? Date.parse(sourceRow.lastSyncedAt)
+          : Number.NaN
+        const pendingEndMs = Date.parse(sourceRow.wordpressPendingUntil)
+        if (!Number.isFinite(pendingStartMs)
+          || !Number.isFinite(pendingEndMs)
+          || pendingStartMs >= pendingEndMs
+          || pendingEndMs > syncWindowEnd.getTime()) {
+          const message = 'WordPress source has an invalid pending sync window. Reset it explicitly before resuming sync.'
+          markFailed(message, 'INTERNAL')
+          throw validationError(message)
+        }
+        windowStart = new Date(pendingStartMs)
+        windowEnd = new Date(pendingEndMs)
+        effectiveWindowEnd = windowEnd
+      } else {
+        const requestedMinutes = request.body.sinceMinutes
+        const hasExplicitWindow = Number.isFinite(requestedMinutes)
+          && requestedMinutes !== undefined
+          && requestedMinutes > 0
+        const windowMinutes = hasExplicitWindow
+          ? Math.floor(requestedMinutes)
+          : DEFAULT_WP_SYNC_WINDOW_MINUTES
+        const requestedStartMs = syncWindowEnd.getTime() - windowMinutes * 60_000
+        const lastSyncedMs = sourceRow.lastSyncedAt
+          ? new Date(sourceRow.lastSyncedAt).getTime()
+          : Number.NEGATIVE_INFINITY
+        windowStart = new Date(
+          Math.min(syncWindowEnd.getTime(), Math.max(requestedStartMs, lastSyncedMs)),
+        )
+        const windowStartIso = windowStart.toISOString()
+        const windowEndIso = windowEnd.toISOString()
+
+        // Reserve the complete window before the provider call. A retry after
+        // an upstream failure therefore uses identical bounds, and a capped
+        // drain persists a cursor whose lower and upper limits are both known.
+        const reservedAt = new Date().toISOString()
+        // Take SQLite's write reservation before the generation read. A
+        // deferred transaction lets two API processes both read the old row,
+        // then makes the loser fail with SQLITE_BUSY_SNAPSHOT instead of
+        // returning the ordinary stale-generation retry response.
+        const reservedSource = app.db.transaction((tx) => {
+          const latestSource = tx.select().from(trafficSources)
+            .where(eq(trafficSources.id, sourceRow.id)).get()
+          if (!latestSource
+            || !isAuthoritativeTrafficSource(tx, latestSource)
+            || !isSameTrafficSourceGeneration(latestSource, sourceRow)
+            || latestSource.lastCursor
+            || latestSource.wordpressPendingUntil) return undefined
+          tx.update(trafficSources)
+            .set({
+              lastSyncedAt: windowStartIso,
+              wordpressPendingUntil: windowEndIso,
+              updatedAt: reservedAt,
+            })
+            .where(eq(trafficSources.id, sourceRow.id))
+            .run()
+          return tx.select().from(trafficSources)
+            .where(eq(trafficSources.id, sourceRow.id)).get()
+        }, { behavior: 'immediate' })
+        if (!reservedSource) {
+          const message = 'Traffic source changed while reserving the WordPress sync window; retry the sync.'
+          markFailed(message, 'INTERNAL')
+          throw validationError(message)
+        }
+        sourceRow = reservedSource
+      }
+      const windowStartIso = windowStart.toISOString()
+      const windowEndIso = windowEnd.toISOString()
 
       const wpPageSize = opts.defaultWordpressPageSize ?? DEFAULT_WP_PAGE_SIZE
       const wpMaxPages = opts.defaultWordpressMaxPages ?? DEFAULT_WP_MAX_PAGES
@@ -3050,18 +3155,26 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
             cursor,
             pageSize: wpPageSize,
             maxPages: 1,
+            since: windowStartIso,
+            until: windowEndIso,
             dispatcher: pinnedDispatcher,
           })
           collected.push(...pageResult.events)
           const previousCursor = cursor
           cursor = pageResult.nextCursor
-          // The plugin emits a fresh `next_cursor` on every response (even
-          // the last page) so it doubles as the resume token for the next
-          // sync. `has_more` is the only authoritative "fetch another page
-          // in this sync" signal. Also guard against cursor stagnation in
-          // case a plugin bug echoes the same token forever.
-          if (!pageResult.hasMore) break
-          if (!cursor || cursor === previousCursor) break
+          // A terminal plugin page has `has_more=false` and no cursor. Clear
+          // any stale value defensively so the next sync starts at the bounded
+          // watermark instead of replaying a historical cursor.
+          if (!pageResult.hasMore) {
+            cursor = undefined
+            break
+          }
+          // A continuation is useful only with a new cursor. Fail before the
+          // rollup transaction if the endpoint claims more events but cannot
+          // provide one, because advancing the watermark would lose them.
+          if (!cursor || cursor === previousCursor) {
+            throw new Error('WordPress traffic endpoint returned has_more without a new continuation cursor')
+          }
         }
         allEvents = collected
         nextCursor = cursor
@@ -3244,6 +3357,9 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
     let aiReferralHitsCount = 0
     let unknownHitsCount = 0
 
+    // Serialize the generation check with its writes across API processes.
+    // This matches the reservation above: the loser re-reads the first
+    // committer's cursor/window state and cleanly aborts its own run.
     const commitOutcome = app.db.transaction((tx) => {
       // Re-read sourceRow inside the txn so a concurrent sync that committed
       // first is visible — otherwise both syncs would dedupe against the same
@@ -3260,9 +3376,7 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
       if (!latestRow
         || (latestRow.status !== TrafficSourceStatuses.connected && latestRow.status !== TrafficSourceStatuses.error)
         || latestHasConnectedSibling
-        || !isDeepStrictEqual(latestRow.configJson, sourceRow.configJson)
-        || latestRow.updatedAt !== sourceRow.updatedAt
-        || latestRow.lastSyncedAt !== sourceRow.lastSyncedAt) {
+        || !isSameTrafficSourceGeneration(latestRow, sourceRow)) {
         const abortedAt = new Date().toISOString()
         tx.update(runs).set({
           status: RunStatuses.failed,
@@ -3563,17 +3677,21 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
         sampleRows += 1
       }
 
-      // For WP we persist the final cursor inside the same transaction so a
-      // mid-sync crash either rolls back the rollup and the cursor together,
-      // or commits both. Cloud Run does not use `lastCursor`; leave it
-      // untouched (drizzle omits undefined fields from the SET clause).
+      // For WP we persist a continuation cursor and its fixed upper boundary
+      // inside the same transaction as rollups. A terminal page clears both;
+      // a capped drain retains the lower watermark below until its cursor is
+      // exhausted. Cloud Run does not use either field (drizzle omits
+      // undefined fields from the SET clause).
+      const nextWatermark = sourceRow.sourceType === TrafficSourceTypes.wordpress && nextCursor
+        ? windowStart
+        : effectiveWindowEnd
       const sourceUpdate: Partial<typeof trafficSources.$inferInsert> = {
         status: TrafficSourceStatuses.connected,
-        // Advance to effectiveWindowEnd, not finishedAt — events arriving at the
+        // Advance to nextWatermark, not finishedAt — events arriving at the
         // source between the window end and finishedAt aren't in this pull's
         // range. If we stored finishedAt, the next sync's clamp would skip past
-        // them and they'd be lost. effectiveWindowEnd equals windowEnd on a full
-        // sync; for a Vercel drain that stopped at its deadline it is the partial
+        // them and they'd be lost. A capped WordPress drain retains its lower
+        // bound; full pulls use effectiveWindowEnd, including a partial Vercel
         // boundary, so the next sync resumes exactly where this one left off.
         //
         // Never move the watermark BACKWARD. A sync already in flight when the
@@ -3586,7 +3704,7 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
         lastSyncedAt: new Date(
           Math.max(
             latestRow.lastSyncedAt ? new Date(latestRow.lastSyncedAt).getTime() : Number.NEGATIVE_INFINITY,
-            effectiveWindowEnd.getTime(),
+            nextWatermark.getTime(),
           ),
         ).toISOString(),
         lastError: null,
@@ -3595,6 +3713,7 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
       }
       if (sourceRow.sourceType === TrafficSourceTypes.wordpress) {
         sourceUpdate.lastCursor = nextCursor ?? null
+        sourceUpdate.wordpressPendingUntil = nextCursor ? windowEnd.toISOString() : null
       }
       tx
         .update(trafficSources)
@@ -3608,7 +3727,7 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
         .where(eq(runs.id, runId))
         .run()
       return 'committed' as const
-    })
+    }, { behavior: 'immediate' })
 
     if (commitOutcome === 'source-inactive') {
       throw validationError('Traffic source is no longer active; discarded the in-flight sync')
@@ -3705,6 +3824,11 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
     if (!isAuthoritativeTrafficSource(app.db, sourceRow)) {
       throw validationError('Traffic source must be active before it can backfill')
     }
+    if (hasPendingWordpressWindow(sourceRow)) {
+      throw validationError(
+        'WordPress backfill cannot run while a bounded continuation window is pending. Reset or drain it first.',
+      )
+    }
 
     const requestedDays = request.body?.days ?? DEFAULT_BACKFILL_DAYS
     if (!Number.isInteger(requestedDays) || requestedDays <= 0) {
@@ -3796,13 +3920,14 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
         try {
           // Page through the plugin's `[since, until)` window via opaque
           // cursors. The window is fixed for the entire backfill — only the
-          // cursor advances — so each page sees the same bounds. Stops on
-          // `hasMore=false` OR an exhausted cursor (defensive guard against a
-          // misbehaving plugin emitting the same cursor forever).
+          // cursor advances — so each page sees the same bounds. Replace mode
+          // must never accept a capped or malformed partial pull: it throws
+          // before the destructive transaction instead.
           const collected: NormalizedTrafficRequest[] = []
           const windowStartIso = windowStart.toISOString()
           const windowEndIso = windowEnd.toISOString()
           let cursor: string | undefined = undefined
+          let fullyDrained = false
           for (let page = 0; page < BACKFILL_MAX_PAGES; page += 1) {
             const pageResult = await pullWordpressEvents({
               baseUrl: credential.baseUrl,
@@ -3820,8 +3945,16 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
             collected.push(...pageResult.events)
             const previousCursor: string | undefined = cursor
             cursor = pageResult.nextCursor
-            if (!pageResult.hasMore) break
-            if (!cursor || cursor === previousCursor) break
+            if (!pageResult.hasMore) {
+              fullyDrained = true
+              break
+            }
+            if (!cursor || cursor === previousCursor) {
+              throw new Error('WordPress traffic endpoint returned has_more without a new continuation cursor')
+            }
+          }
+          if (!fullyDrained) {
+            throw new Error(`WordPress backfill exceeded its ${BACKFILL_MAX_PAGES}-page safety budget`)
           }
           return collected
         } finally {
@@ -4067,12 +4200,12 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
   // POST /projects/:name/traffic/sources/:id/reset
   //
   // Operator recovery: advance `lastSyncedAt` to NOW, set `status` back to
-  // `connected`, and clear the prior `last_error`. The next scheduled sync
-  // resumes from a recent timestamp instead of one stuck behind the
-  // upstream's retention boundary. Any pre-existing rollup history stays in
-  // place — only the cursor moves. Skipped history is the explicit
-  // trade-off; the operator runs `traffic backfill` separately if they
-  // want to recover any of it.
+  // `connected`, and clear the prior `last_error`. WordPress also clears its
+  // continuation cursor and pending-window marker in the same transaction, so
+  // the next sync starts at the reset watermark rather than combining it with
+  // an old drain. Any pre-existing rollup history stays in place. Skipped
+  // history is the explicit trade-off; the operator runs `traffic backfill`
+  // separately if they want to recover any of it.
   app.post<{
     Params: { name: string; id: string }
     Body: { advanceToNow?: unknown }
@@ -4121,6 +4254,9 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
       tx.update(trafficSources)
         .set({
           lastSyncedAt: now,
+          ...(sourceRow.sourceType === TrafficSourceTypes.wordpress
+            ? { lastCursor: null, wordpressPendingUntil: null }
+            : {}),
           status: TrafficSourceStatuses.connected,
           lastError: null,
           updatedAt: now,

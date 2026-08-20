@@ -150,12 +150,22 @@ export async function listWordpressTrafficEvents(
       }
     }
 
-    cursor = body.next_cursor ?? undefined
+    const nextCursor = body.next_cursor ?? undefined
+    // `has_more=true` without a continuation cursor is contradictory wire
+    // data. Do not turn it into a terminal page: callers would advance their
+    // watermark and silently lose the remaining events.
+    if (body.has_more && !nextCursor) {
+      throw new WordpressTrafficApiError(
+        'WordPress traffic endpoint returned has_more=true without next_cursor',
+        502,
+      )
+    }
+    cursor = nextCursor
     // Track the latest `has_more` so a single-page call (maxPages=1)
     // surfaces the plugin's continuation signal to the caller. Internal
     // pagination still uses the same break rule as before.
-    hasMore = Boolean(body.has_more) && Boolean(cursor)
-    if (!body.has_more || !cursor) break
+    hasMore = Boolean(body.has_more)
+    if (!hasMore) break
   }
 
   return {
