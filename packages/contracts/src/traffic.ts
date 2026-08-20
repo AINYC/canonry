@@ -515,11 +515,14 @@ export const trafficSourceTotalsSchema = z.object({
    */
   aiReferralHits: z.number().int().nonnegative(),
   /**
-   * Referral hits not answered with a proven Location redirect
-   * (301/302/303/307/308). This is the figure to present as visits, visitors,
-   * sessions or arrivals. "Not proven", not "proven served": a source that
-   * never observed a status stores 0, and an unobserved status is not a hop,
-   * so those rows count here — the benefit-of-the-doubt default.
+   * Countable referral SESSIONS: excludes requests answered with a proven
+   * Location redirect (301/302/303/307/308) AND static subresource fetches,
+   * matching the report's predicate exactly. This is the figure to present as
+   * visits, visitors, sessions or arrivals. "Not proven" on the redirect half:
+   * a source that never observed a status stores 0, and an unobserved status
+   * is not a hop, so those rows count — the benefit-of-the-doubt default.
+   * `landed + redirected <= total`; the gap is subresource noise, which is
+   * neither a session nor a hop.
    */
   aiReferralLandedHits: z.number().int().nonnegative(),
   /**
@@ -679,7 +682,11 @@ export const trafficEventsResponseSchema = z.object({
      * because a redirect hop's paid tags are not a paid session.
      */
     aiReferralHits: z.number().int().nonnegative(),
-    /** Referral hits not answered with a proven Location redirect. */
+    /**
+     * Countable referral SESSIONS: no redirect hops, no static subresource
+     * fetches — the same predicate the report uses, so windowed totals here
+     * and report arrivals cannot disagree.
+     */
     aiReferralLandedHits: z.number().int().nonnegative(),
     /** Referral hits answered with a Location redirect — hops, not arrivals. */
     aiReferralRedirectedHits: z.number().int().nonnegative(),

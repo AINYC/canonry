@@ -4071,6 +4071,9 @@ describe('GET /traffic/sources/:id', () => {
         // A 304 is a served page view from cache, NOT a hop — it must land.
         { ...base, landingPathNormalized: '/cached', status: 304, sessionsOrHits: 3, organicSessionsOrHits: 3 },
         { ...base, landingPathNormalized: '/gone', status: 404, sessionsOrHits: 6, organicSessionsOrHits: 6 },
+        // A static-subresource 200 is neither a session (not a visit) nor a
+        // redirect hop (nothing bounced). It lives only in the full count.
+        { ...base, landingPathNormalized: '/favicon.ico', status: 200, sessionsOrHits: 7, organicSessionsOrHits: 7 },
       ]).run()
 
       const res = await h.app.inject({
@@ -4079,13 +4082,15 @@ describe('GET /traffic/sources/:id', () => {
       })
       const t = JSON.parse(res.payload).totals24h
 
-      // Full count is unchanged, and the two parts of it add back up.
-      expect(t.aiReferralHits).toBe(103)
+      // Full count is unchanged.
+      expect(t.aiReferralHits).toBe(110)
       // 404 is an arrival at a broken page and 304 a served cache view, so
-      // both land. Only the 301 does not.
+      // both land. The 301 is a hop and the favicon fetch is noise.
       expect(t.aiReferralLandedHits).toBe(13)
       expect(t.aiReferralRedirectedHits).toBe(90)
-      expect(t.aiReferralLandedHits + t.aiReferralRedirectedHits).toBe(t.aiReferralHits)
+      // landed + redirected <= total; the gap is exactly the subresource noise,
+      // which must never inflate either figure.
+      expect(t.aiReferralHits - t.aiReferralLandedHits - t.aiReferralRedirectedHits).toBe(7)
     } finally { await h.close() }
   })
 
@@ -4812,6 +4817,8 @@ describe('GET /traffic/events', () => {
       h.db.insert(aiReferralEventsHourly).values([
         { ...base, landingPathNormalized: '/landed', status: 200, sessionsOrHits: 4, paidSessionsOrHits: 1, organicSessionsOrHits: 3 },
         { ...base, landingPathNormalized: '/hop', status: 301, sessionsOrHits: 90, paidSessionsOrHits: 90, organicSessionsOrHits: 0 },
+        // Subresource 200 carrying paid tags: not a session, not paid traffic.
+        { ...base, landingPathNormalized: '/assets/app.js', status: 200, sessionsOrHits: 5, paidSessionsOrHits: 5, organicSessionsOrHits: 0 },
       ]).run()
 
       const res = await h.app.inject({
@@ -4820,16 +4827,17 @@ describe('GET /traffic/events', () => {
       })
       const t = JSON.parse(res.payload).totals
 
-      expect(t.aiReferralHits).toBe(94)
+      expect(t.aiReferralHits).toBe(99)
       expect(t.aiReferralLandedHits).toBe(4)
       expect(t.aiReferralRedirectedHits).toBe(90)
-      // The hop's 90 paid tags must not appear as paid sessions.
+      // Neither the hop's 90 paid tags nor the asset fetch's 5 may appear as
+      // paid sessions.
       expect(t.aiReferralPaidHits).toBe(1)
       expect(t.aiReferralOrganicHits).toBe(3)
       expect(t.aiReferralUnknownHits).toBe(0)
-      // And the series charts the landed figure per bucket.
+      // And the series charts the landed (session) figure per bucket.
       const today = JSON.parse(res.payload).series.points.at(-1)
-      expect(today.aiReferralHits).toBe(94)
+      expect(today.aiReferralHits).toBe(99)
       expect(today.aiReferralLandedHits).toBe(4)
     } finally { await h.close() }
   })

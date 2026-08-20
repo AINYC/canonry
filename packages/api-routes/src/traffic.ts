@@ -2,7 +2,7 @@ import crypto from 'node:crypto'
 import { isIP } from 'node:net'
 import { isDeepStrictEqual } from 'node:util'
 import { Agent as UndiciAgent } from 'undici'
-import { referralLandedCondition } from './ai-referral-status.js'
+import { countableReferralCondition, referralLandedCondition } from './ai-referral-status.js'
 import { and, desc, eq, gte, lte, sql } from 'drizzle-orm'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { CURRENT_CLOUDFLARE_WORKER_VERSION } from './cloudflare-worker-version.js'
@@ -3993,14 +3993,17 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
       )
       .get()
 
-    // Split by status: a Location redirect is a hop, not an arrival.
-    // `aiReferralHits` keeps its full-count contract; `landed` is the part the
-    // visitor was not redirected away from, and redirected is DERIVED as
-    // total - landed so the partition cannot drift from a second condition.
+    // `aiReferralHits` keeps its full-count contract. `landed` is what a
+    // surface may call sessions: the COUNTABLE rows (no redirect hops, no
+    // static subresource fetches) — the same predicate the report and
+    // organic-evidence use, so no two surfaces can disagree about a session.
+    // `redirected` stays status-based, derived from a status-only sum so a
+    // subresource 200 is neither a session nor mislabelled a hop.
     const aiTotals = app.db
       .select({
         total: sql<number>`COALESCE(SUM(${aiReferralEventsHourly.sessionsOrHits}), 0)`,
-        landed: sql<number>`COALESCE(SUM(CASE WHEN ${referralLandedCondition()} THEN ${aiReferralEventsHourly.sessionsOrHits} ELSE 0 END), 0)`,
+        nonhop: sql<number>`COALESCE(SUM(CASE WHEN ${referralLandedCondition()} THEN ${aiReferralEventsHourly.sessionsOrHits} ELSE 0 END), 0)`,
+        landed: sql<number>`COALESCE(SUM(CASE WHEN ${countableReferralCondition()} THEN ${aiReferralEventsHourly.sessionsOrHits} ELSE 0 END), 0)`,
       })
       .from(aiReferralEventsHourly)
       .where(
@@ -4046,7 +4049,7 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
         aiUserFetchHits: Number(aiUserFetchTotals?.total ?? 0),
         aiReferralHits: Number(aiTotals?.total ?? 0),
         aiReferralLandedHits: Number(aiTotals?.landed ?? 0),
-        aiReferralRedirectedHits: Number(aiTotals?.total ?? 0) - Number(aiTotals?.landed ?? 0),
+        aiReferralRedirectedHits: Number(aiTotals?.total ?? 0) - Number(aiTotals?.nonhop ?? 0),
         sampleCount: Number(sampleTotals?.total ?? 0),
       },
       latestRun: latestRun
@@ -4265,6 +4268,7 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
     let aiUserFetchTotal = 0
     let aiReferralCounts = aiReferralClassCounts(0, 0, 0)
     let aiReferralTotalHits = 0
+    let aiReferralNonHopHits = 0
     let aiReferralLandedHits = 0
     let totalEventRows = 0
     const seriesByBucket = new Map<string, TrafficSeriesPoint>()
@@ -4419,15 +4423,17 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
       const total = app.db
         .select({
           total: sql<number>`COALESCE(SUM(${aiReferralEventsHourly.sessionsOrHits}), 0)`,
-          landed: sql<number>`COALESCE(SUM(CASE WHEN ${referralLandedCondition()} THEN ${aiReferralEventsHourly.sessionsOrHits} ELSE 0 END), 0)`,
-          paid: sql<number>`COALESCE(SUM(CASE WHEN ${referralLandedCondition()} THEN ${aiReferralEventsHourly.paidSessionsOrHits} ELSE 0 END), 0)`,
-          organic: sql<number>`COALESCE(SUM(CASE WHEN ${referralLandedCondition()} THEN ${aiReferralEventsHourly.organicSessionsOrHits} ELSE 0 END), 0)`,
+          nonhop: sql<number>`COALESCE(SUM(CASE WHEN ${referralLandedCondition()} THEN ${aiReferralEventsHourly.sessionsOrHits} ELSE 0 END), 0)`,
+          landed: sql<number>`COALESCE(SUM(CASE WHEN ${countableReferralCondition()} THEN ${aiReferralEventsHourly.sessionsOrHits} ELSE 0 END), 0)`,
+          paid: sql<number>`COALESCE(SUM(CASE WHEN ${countableReferralCondition()} THEN ${aiReferralEventsHourly.paidSessionsOrHits} ELSE 0 END), 0)`,
+          organic: sql<number>`COALESCE(SUM(CASE WHEN ${countableReferralCondition()} THEN ${aiReferralEventsHourly.organicSessionsOrHits} ELSE 0 END), 0)`,
           rows: sql<number>`COUNT(*)`,
         })
         .from(aiReferralEventsHourly)
         .where(aiWhere)
         .get()
       aiReferralTotalHits = Number(total?.total ?? 0)
+      aiReferralNonHopHits = Number(total?.nonhop ?? 0)
       aiReferralLandedHits = Number(total?.landed ?? 0)
       aiReferralCounts = aiReferralClassCounts(
         aiReferralLandedHits,
@@ -4443,7 +4449,7 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
         .select({
           bucket: referralSeriesBucket,
           hits: sql<number>`COALESCE(SUM(${aiReferralEventsHourly.sessionsOrHits}), 0)`,
-          landed: sql<number>`COALESCE(SUM(CASE WHEN ${referralLandedCondition()} THEN ${aiReferralEventsHourly.sessionsOrHits} ELSE 0 END), 0)`,
+          landed: sql<number>`COALESCE(SUM(CASE WHEN ${countableReferralCondition()} THEN ${aiReferralEventsHourly.sessionsOrHits} ELSE 0 END), 0)`,
         })
         .from(aiReferralEventsHourly)
         .where(aiWhere)
@@ -4519,7 +4525,7 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
         aiUserFetchHits: aiUserFetchTotal,
         aiReferralHits: aiReferralTotalHits,
         aiReferralLandedHits,
-        aiReferralRedirectedHits: aiReferralTotalHits - aiReferralLandedHits,
+        aiReferralRedirectedHits: aiReferralTotalHits - aiReferralNonHopHits,
         aiReferralPaidHits: aiReferralCounts.paid,
         aiReferralOrganicHits: aiReferralCounts.organic,
         aiReferralUnknownHits: aiReferralCounts.unknown,

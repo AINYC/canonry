@@ -118,6 +118,27 @@ final class Beacon {
         return false;
     }
 
+    /**
+     * True when printScript actually emitted the script during THIS request.
+     * The recorder defers a browser 200 to the beacon only when this is set:
+     * a response that never carried the script (a theme without wp_footer, a
+     * feed, an embed, any non-page render) can never ping, and deferring it
+     * would drop the visit outright. Residual losses where the script IS
+     * present but never delivers — JS disabled, a CSP that blocks inline
+     * script, sendBeacon refusing — are the same population GA4 cannot see,
+     * and are documented on the settings page rather than silently absorbed.
+     */
+    private static bool $printedThisRequest = false;
+
+    public static function printedScriptThisRequest(): bool {
+        return self::$printedThisRequest;
+    }
+
+    /** Test seam: requests are one process in the harness. */
+    public static function resetPrintedFlagForTests(): void {
+        self::$printedThisRequest = false;
+    }
+
     /** Print the inline ping script. Hooked to wp_footer when enabled. */
     public static function printScript(): void {
         if (!self::isEnabled()) return;
@@ -134,6 +155,7 @@ final class Beacon {
             . "if(navigator.sendBeacon){navigator.sendBeacon(u,new Blob([b],{type:'application/json'}))}"
             . "else if(window.fetch){fetch(u,{method:'POST',body:b,keepalive:true,headers:{'Content-Type':'application/json'}})}"
             . "}catch(e){}})();</script>\n";
+        self::$printedThisRequest = true;
     }
 
     /**
@@ -158,9 +180,23 @@ final class Beacon {
         $originHost = self::hostOf((string) ($server['HTTP_ORIGIN'] ?? ''));
         $refererHost = self::hostOf((string) ($server['HTTP_REFERER'] ?? ''));
         $claimedHost = $originHost !== null ? $originHost : $refererHost;
-        if ($siteHost !== null && $claimedHost !== null && $claimedHost !== $siteHost) {
-            return self::noContent(); // Silent: never hand a probe an oracle.
+        // Browsers modern enough to run the script (sendBeacon or fetch)
+        // always send Origin on a POST, so a ping with NEITHER header is not a
+        // browser page view — it is a raw request forging referral rows, and
+        // the reproduced attack is exactly that. Header-forging clients remain
+        // possible (same-origin is not authentication), but they are in the
+        // same trust class as any request the PHP lane already logs verbatim.
+        if ($siteHost !== null && $claimedHost !== $siteHost) {
+            return self::noContent(); // Silent either way: never hand a probe an oracle.
         }
+
+        // The lane table's bot row, enforced on this side too: a JS-capable
+        // crawler (Googlebot renders pages) fires the beacon like a browser,
+        // but the PHP lane already owns bot traffic — recording the ping as
+        // well would double-count every rendering crawler.
+        $pingUa = isset($server['HTTP_USER_AGENT']) && is_string($server['HTTP_USER_AGENT'])
+            ? $server['HTTP_USER_AGENT'] : null;
+        if (self::looksBot($pingUa)) return self::noContent();
 
         $body = method_exists($request, 'get_body') ? (string) $request->get_body() : '';
         $data = json_decode($body, true);

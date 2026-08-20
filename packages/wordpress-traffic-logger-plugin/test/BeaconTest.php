@@ -19,6 +19,7 @@ final class BeaconTest extends TestCase {
 
     public function setUp(): void {
         wpshim_reset();
+        Beacon::resetPrintedFlagForTests();
         \Canonry\TrafficLogger\Plugin::activate();
         $this->savedServer = $_SERVER;
         // A same-origin browser ping, as sendBeacon would send it.
@@ -85,6 +86,29 @@ final class BeaconTest extends TestCase {
         $this->assertSame('https://chatgpt.com/', $row['referer']);
         $this->assertSame('203.0.113.9', $row['remote_ip']);
         $this->assertMatchesRegex('/Safari/', (string) $row['user_agent']);
+    }
+
+    /**
+     * The reproduced forgery: a raw POST with neither Origin nor Referer,
+     * carrying attacker-chosen referrer and UTMs. Browsers modern enough to
+     * run the script always send Origin on POST, so headerless is not a
+     * browser — it is curl.
+     */
+    public function test_drops_headerless_pings_as_forgeries(): void {
+        unset($_SERVER['HTTP_ORIGIN'], $_SERVER['HTTP_REFERER']);
+        $this->ping(['p' => '/', 'q' => 'utm_source=chatgpt.com', 'r' => 'https://chatgpt.com/']);
+        $this->assertCount(0, $this->rows());
+    }
+
+    /**
+     * Googlebot renders JavaScript, so it fires the beacon like a browser.
+     * The PHP lane owns bots; recording the ping too would double-count every
+     * JS-capable crawler.
+     */
+    public function test_drops_bot_pings_because_the_php_lane_owns_bots(): void {
+        $_SERVER['HTTP_USER_AGENT'] = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)';
+        $this->ping(['p' => '/', 'q' => '', 'r' => '']);
+        $this->assertCount(0, $this->rows());
     }
 
     public function test_drops_cross_origin_pings_silently(): void {
@@ -155,12 +179,30 @@ final class BeaconTest extends TestCase {
 
     // ── the dedup: who owns which cell of the lane table ───────────────
 
-    public function test_php_lane_defers_browser_200s_to_the_beacon(): void {
+    private function armBeaconScript(): void {
+        ob_start();
+        Beacon::printScript();
+        ob_end_clean();
+    }
+
+    public function test_php_lane_defers_browser_200s_once_the_script_was_printed(): void {
+        $this->armBeaconScript();
         Recorder::record($this->browserRequest(), 200);
         $this->assertCount(0, $this->rows());
     }
 
+    /**
+     * A response that never carried the script can never ping: footer-less
+     * themes, feeds, embeds, API responses. Deferring those would not hand the
+     * visit to the other lane — it would drop it. The PHP lane keeps them.
+     */
+    public function test_php_lane_keeps_browser_200s_when_no_script_was_printed(): void {
+        Recorder::record($this->browserRequest(), 200);
+        $this->assertCount(1, $this->rows());
+    }
+
     public function test_php_lane_keeps_bot_200s(): void {
+        $this->armBeaconScript();
         $request = $this->browserRequest();
         $request['HTTP_USER_AGENT'] = 'Mozilla/5.0 AppleWebKit/537.36; compatible; GPTBot/1.2';
         Recorder::record($request, 200);
@@ -168,12 +210,14 @@ final class BeaconTest extends TestCase {
     }
 
     public function test_php_lane_keeps_redirects_and_errors_from_browsers(): void {
+        $this->armBeaconScript();
         Recorder::record($this->browserRequest(), 301);
         Recorder::record($this->browserRequest(), 404);
         $this->assertCount(2, $this->rows());
     }
 
     public function test_php_lane_keeps_unknown_status_rows(): void {
+        $this->armBeaconScript();
         // Never guess a row away: a status the shutdown hook could not read
         // is not proof the beacon will see the view.
         Recorder::record($this->browserRequest(), null);
@@ -181,12 +225,14 @@ final class BeaconTest extends TestCase {
     }
 
     public function test_php_lane_records_browser_200s_when_beacon_is_off(): void {
+        $this->armBeaconScript();
         update_option(Beacon::MODE_OPTION, 'off');
         Recorder::record($this->browserRequest(), 200);
         $this->assertCount(1, $this->rows());
     }
 
     public function test_empty_user_agent_counts_as_bot_and_stays_in_php_lane(): void {
+        $this->armBeaconScript();
         $request = $this->browserRequest();
         unset($request['HTTP_USER_AGENT']);
         Recorder::record($request, 200);

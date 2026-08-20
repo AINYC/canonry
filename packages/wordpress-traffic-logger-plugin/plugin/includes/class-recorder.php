@@ -101,6 +101,11 @@ final class Recorder {
      */
     private static function shouldDeferToBeacon(?int $status, ?string $userAgent): bool {
         if (!Beacon::isEnabled()) return false;
+        // Only a response that actually carried the script may be deferred to
+        // it. Footer-less themes, feeds, embeds, and API responses never print
+        // the beacon, so deferring them would drop the visit outright rather
+        // than hand it to the other lane.
+        if (!Beacon::printedScriptThisRequest()) return false;
         if ($status !== 200) return false;
         return !Beacon::looksBot($userAgent);
     }
