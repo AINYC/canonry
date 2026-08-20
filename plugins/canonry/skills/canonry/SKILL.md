@@ -160,6 +160,13 @@ schedule interval. Use `cnry traffic events`, `cnry traffic sources`, and
 `cnry traffic status` for every adapter. See
 `references/server-side-traffic.md` for setup and smoke tests.
 
+**WordPress safety:** incremental pulls are fixed `[since, until)` windows; a
+new or idle source begins at the plugin's 365-day maximum retention horizon.
+Canonry rejects an endpoint that returns events outside that window. Keep
+existing WordPress rollups intact: generic replace-mode backfill is unavailable
+until a retention-aware repair can prove coverage and declare any unrecoverable
+span.
+
 **Vercel gotcha:** a freshly connected Vercel source captures only going-forward traffic — `lastSyncedAt` is seeded to NOW to avoid the 30-day default window exceeding Vercel's ~14-day request-logs retention (which would otherwise throw on every first sync). Use `cnry traffic backfill <project> --source <id> --days N` for historical recovery. If an idle Vercel/Cloud Run source has been failing long enough that `lastSyncedAt` aged past retention, unstick it with `cnry traffic reset <project> --source <id> --advance-to-now`.
 
 ## Local AEO (Google Business Profile)

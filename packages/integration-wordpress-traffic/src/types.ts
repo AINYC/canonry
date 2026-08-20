@@ -37,6 +37,7 @@ export interface WordpressTrafficEventPayload {
 /**
  * Top-level response shape of `GET /wp-json/canonry/v1/events`.
  * `next_cursor` is opaque to canonry — pass it back verbatim as `?cursor=`.
+ * It is a nonempty string exactly when `has_more=true`, and otherwise null.
  */
 export interface WordpressTrafficEventsResponseBody {
   events: WordpressTrafficEventPayload[]
@@ -92,21 +93,20 @@ export interface WordpressTrafficEventsPage {
   rawEntryCount: number
   skippedEntryCount: number
   /**
-   * Opaque cursor returned by the plugin's `next_cursor` field. Persist
-   * verbatim on the source row as `last_cursor` and replay it on the next
-   * sync as `?cursor=`. The plugin emits a fresh resume token on every
-   * response (even when `has_more=false`); the route consumer should rely
-   * on `hasMore` to decide whether to fetch another page in *this* sync.
+   * Opaque cursor returned by the plugin's `next_cursor` field when another
+   * page remains. Persist it verbatim on the source row as `last_cursor` and
+   * replay it with the same fixed lower and upper time bounds. The plugin
+   * returns no cursor once `has_more=false`, which tells the caller to clear
+   * any persisted cursor.
    */
   nextCursor?: string
   /**
    * Mirrors the plugin's `has_more` boolean. `true` means another page is
    * waiting at `nextCursor` and the caller should keep fetching within
-   * this sync. `false` means the plugin is caught up — persist
-   * `nextCursor` for the *next* sync and stop iterating. The integration
-   * sets this to `false` when it could not determine `has_more` (e.g.
-   * older plugin versions); callers should treat `false` as the
-   * stop-iterating signal.
+   * this sync. `false` means the plugin is caught up — clear `nextCursor`
+   * and stop iterating. The integration rejects a response that omits or
+   * contradicts `has_more` / `next_cursor`; it never guesses that a page is
+   * terminal.
    */
   hasMore: boolean
   /** Resolved REST endpoint path, useful for diagnostics. */

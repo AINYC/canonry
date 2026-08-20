@@ -629,6 +629,16 @@ const syncLagCheck: CheckDefinition = {
     // permanent gap.
     const unrecovered = measured.filter((m) => m.skippedThroughAt !== null)
     if (unrecovered.length > 0) {
+      const unrecoveredWordpress = unrecovered.filter((m) => m.sourceType === 'wordpress')
+      const unrecoveredOtherSources = unrecovered.filter((m) => m.sourceType !== 'wordpress')
+      const remediation = [
+        unrecoveredWordpress.length > 0
+          ? 'For WordPress, do not run generic replace-mode backfill: the plugin feed cannot prove it still retains every bucket in the gap. Keep existing rollups intact and use a retention-aware repair that explicitly declares the unrecoverable span.'
+          : null,
+        unrecoveredOtherSources.length > 0
+          ? 'Recover each non-WordPress gap with `canonry traffic backfill <project> --source <id> --days N --wait`, choosing N so the window reaches back past the skipped instant and stays inside the provider\'s log retention. This clears only when a backfill actually covers the span.'
+          : null,
+      ].filter((part): part is string => part !== null).join(' ')
       return {
         status: CheckStatuses.fail,
         code: 'traffic.sync-lag.unrecovered-skip',
@@ -636,9 +646,7 @@ const syncLagCheck: CheckDefinition = {
           `${unrecovered.length} traffic source(s) previously skipped traffic that has not been backfilled: `
           + `${unrecovered.map((m) => `${m.displayName} (skipped through ${m.skippedThroughAt})`).join(', ')}. `
           + 'Current lag may look healthy; the gap does not close on its own.',
-        remediation:
-          'Recover the gap with `canonry traffic backfill <project> --source <id> --days N --wait`, choosing N so the window reaches back past the skipped instant and stays inside the provider\'s log retention. '
-          + 'This clears only when a backfill actually covers the span.',
+        remediation,
         details,
       }
     }

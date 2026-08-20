@@ -35,7 +35,6 @@ export function tryClaimTrafficSyncLease(input: TrafficSyncLeaseClaimInput): boo
     const changed = tx.update(trafficSources).set({
       syncLeaseOwner: input.owner,
       syncLeaseExpiresAt: expiresAt,
-      updatedAt: input.now,
     }).where(and(
       eq(trafficSources.id, input.sourceId),
       or(
@@ -54,7 +53,6 @@ export function releaseTrafficSyncLease(input: TrafficSyncLeaseReleaseInput): bo
     const changed = tx.update(trafficSources).set({
       syncLeaseOwner: null,
       syncLeaseExpiresAt: null,
-      updatedAt: input.now,
     }).where(and(
       eq(trafficSources.id, input.sourceId),
       eq(trafficSources.syncLeaseOwner, input.owner),

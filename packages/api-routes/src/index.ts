@@ -263,6 +263,10 @@ export interface ApiRoutesOptions {
   wordpressTrafficCredentialStore?: TrafficRoutesOptions['wordpressTrafficCredentialStore']
   /** Override WordPress traffic pull (tests) — see `TrafficRoutesOptions` */
   pullWordpressTrafficEvents?: TrafficRoutesOptions['pullWordpressTrafficEvents']
+  /** WordPress pull page size override (tests/hosts) — see `TrafficRoutesOptions`. */
+  defaultWordpressPageSize?: TrafficRoutesOptions['defaultWordpressPageSize']
+  /** WordPress pages allowed in one sync invocation (tests/hosts) — see `TrafficRoutesOptions`. */
+  defaultWordpressMaxPages?: TrafficRoutesOptions['defaultWordpressMaxPages']
   /** Vercel traffic credential store — stores Vercel API tokens in config, not DB */
   vercelTrafficCredentialStore?: TrafficRoutesOptions['vercelTrafficCredentialStore']
   /** Override Vercel traffic pull (tests) — see `TrafficRoutesOptions` */
@@ -605,6 +609,8 @@ export async function apiRoutes(app: FastifyInstance, opts: ApiRoutesOptions) {
       resolveCloudRunAccessToken: opts.resolveCloudRunAccessToken,
       wordpressTrafficCredentialStore: opts.wordpressTrafficCredentialStore,
       pullWordpressTrafficEvents: opts.pullWordpressTrafficEvents,
+      defaultWordpressPageSize: opts.defaultWordpressPageSize,
+      defaultWordpressMaxPages: opts.defaultWordpressMaxPages,
       vercelTrafficCredentialStore: opts.vercelTrafficCredentialStore,
       pullVercelTrafficEvents: opts.pullVercelTrafficEvents,
       vercelSyncDeadlineMs: opts.vercelSyncDeadlineMs,

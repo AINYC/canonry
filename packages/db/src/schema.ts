@@ -1783,6 +1783,11 @@ export const trafficSources = sqliteTable('traffic_sources', {
   status: text('status').notNull(),
   lastSyncedAt: text('last_synced_at'),
   lastCursor: text('last_cursor'),
+  // A WordPress cursor is valid only inside the fixed [lastSyncedAt,
+  // wordpressPendingUntil) window that created it. NULL means no such window
+  // is pending; a non-NULL cursor with a NULL end is legacy state that cannot
+  // safely compose with a bounded incremental pull.
+  wordpressPendingUntil: text('wordpress_pending_until'),
   lastError: text('last_error'),
   // JSON-encoded array of normalized event IDs (e.g. `cloud-run:<ts>:<insertId>`)
   // observed in the most recent successful sync. Bounded ring buffer used to

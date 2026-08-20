@@ -765,13 +765,16 @@ export async function trafficSync(project: string, opts: {
  * Operator recovery: advance `lastSyncedAt` to NOW and clear `lastError` so
  * the next scheduled sync resumes from a recent timestamp. Primary use case
  * is an idle Vercel/Cloud Run source whose `lastSyncedAt` aged past the
- * upstream retention window and now throws on every sync. Accepts any
- * non-archived source type; cursor-based sources (WordPress) keep their
- * `lastCursor` so the advance is informational for them. Archived sources
- * are rejected — re-connect via `canonry traffic connect ...` instead.
+ * upstream retention window and now throws on every sync. A WordPress reset
+ * also clears its `lastCursor` and pending-window marker, so it intentionally
+ * starts a fresh bounded drain at NOW. That prevents replay; it does not
+ * repair prior rollups. Archived sources are rejected — re-connect via
+ * `canonry traffic connect ...` instead.
  *
- * Skipped history is the explicit trade-off; run
- * `canonry traffic backfill` separately if any of it needs to be recovered.
+ * For Cloud Run and Vercel, skipped history may be recoverable with a bounded
+ * backfill. WordPress generic replace-mode backfill is unavailable: use a
+ * retention-aware repair that declares any
+ * unrecoverable history instead.
  *
  * `--advance-to-now` must be passed — no implicit reset.
  */
@@ -793,7 +796,7 @@ export async function trafficReset(project: string, opts: {
       code: 'TRAFFIC_RESET_REQUIRES_FLAG',
       message: '--advance-to-now is required',
       displayMessage:
-        'Error: --advance-to-now is required. This skips any history between the source\'s current lastSyncedAt and now; run `canonry traffic backfill` separately if you need to recover it.',
+        'Error: --advance-to-now is required. This skips history between the source\'s current lastSyncedAt and now. For WordPress, generic replace-mode backfill is unavailable; use a retention-aware repair that declares any unrecoverable span.',
       details: { project, source: opts.source },
     })
   }
@@ -810,6 +813,9 @@ export async function trafficReset(project: string, opts: {
   console.log(`  Status:        ${updated.status}`)
   console.log(`  Last synced:   ${updated.lastSyncedAt ?? 'never'}  (advanced to NOW)`)
   console.log(`  Last error:    ${updated.lastError ?? 'none'}`)
+  if (updated.skippedThroughAt) {
+    console.log('  Historical repair: generic WordPress replace-mode backfill is unavailable until a retention-aware repair proves coverage.')
+  }
   console.log('')
   console.log('Next scheduled sync will resume from this timestamp.')
 }

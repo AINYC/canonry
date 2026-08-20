@@ -308,6 +308,30 @@ describe('listWordpressTrafficEvents', () => {
     expect(result.nextCursor).toBe('999')
   })
 
+  it.each([
+    ['a missing events array', { next_cursor: null, has_more: false }, /events must be an array/],
+    ['a missing has_more flag', { events: [], next_cursor: null }, /has_more must be a boolean/],
+    ['a non-boolean has_more flag', { events: [], next_cursor: null, has_more: 'false' }, /has_more must be a boolean/],
+    ['has_more=true without a continuation cursor', { events: [], next_cursor: null, has_more: true }, /has_more=true requires a nonempty next_cursor/],
+    ['has_more=true with a blank continuation cursor', { events: [], next_cursor: '  ', has_more: true }, /has_more=true requires a nonempty next_cursor/],
+    ['has_more=false with a continuation cursor', { events: [], next_cursor: 'NEXT', has_more: false }, /has_more=false requires next_cursor=null/],
+  ])('rejects %s', async (_description, responseBody, message) => {
+    fetchSpy.mockImplementation(async () => (
+      new Response(JSON.stringify(responseBody), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    ))
+
+    await expect(listWordpressTrafficEvents({
+      baseUrl: 'https://example.com',
+      username: 'u',
+      applicationPassword: 'p',
+      maxPages: 1,
+    })).rejects.toMatchObject({
+      name: 'WordpressTrafficApiError',
+      status: 502,
+      message: expect.stringMatching(message),
+    })
+  })
+
   it('counts events that fail normalization as skipped without throwing', async () => {
     fetchSpy.mockImplementation(async () => (
       new Response(JSON.stringify({
@@ -413,6 +437,34 @@ describe('listWordpressTrafficEvents', () => {
     expect(u2.searchParams.get('since')).toBe('2026-05-11T11:00:00.000Z')
     expect(u2.searchParams.get('until')).toBe('2026-05-11T13:00:00.000Z')
     expect(u2.searchParams.get('cursor')).toBe('NEXT')
+  })
+
+  it.each([
+    ['an event before since', '2026-05-11T10:59:59.999Z'],
+    ['an event at until', '2026-05-11T13:00:00.000Z'],
+    ['an event with an invalid timestamp', 'not-a-timestamp'],
+  ])('rejects %s when bounded sync data violates the requested window', async (_description, observedAt) => {
+    fetchSpy.mockImplementation(async () => (
+      new Response(JSON.stringify({
+        events: [
+          { id: 1, observed_at: observedAt, method: 'GET', host: 'x', path: '/a', query_string: null, status: 200, user_agent: 'a', remote_ip: null, referer: null },
+        ],
+        next_cursor: null,
+        has_more: false,
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    ))
+
+    await expect(listWordpressTrafficEvents({
+      baseUrl: 'https://example.com',
+      username: 'u',
+      applicationPassword: 'p',
+      since: '2026-05-11T11:00:00.000Z',
+      until: '2026-05-11T13:00:00.000Z',
+    })).rejects.toMatchObject({
+      name: 'WordpressTrafficApiError',
+      status: 502,
+      message: expect.stringMatching(/bounded-window-capable Canonry traffic-logger extension/),
+    })
   })
 
   it('omits since/until when the caller does not supply them (backwards compatible default)', async () => {

@@ -151,6 +151,38 @@ The plugin auto-prunes events older than the retention window (default
 90 days) once per day via WP-Cron. Operators who want a different
 window change it in `Settings → Canonry Traffic Logger`.
 
+### WordPress incremental-window safety
+
+Each incremental WordPress sync uses one fixed half-open `[since, until)`
+window. A fresh source, or an idle source without an explicit
+`--since-minutes`, starts with a 365-day horizon, matching the plugin's
+maximum configurable retention. A site configured for less retention simply
+returns its available tail. If the window needs more than one capped drain,
+Canonry persists both its lower and upper bounds with the continuation cursor
+and retries that exact interval until the plugin reports it is terminal. It
+then advances the normal watermark. Every returned event is validated against
+the requested interval; an older or custom extension that ignores `since` or
+`until` fails closed before any rollup is written. Update that extension to a
+bounded-window-capable Canonry traffic logger before syncing again.
+
+Do not run generic replace-mode backfill for a WordPress source. The plugin
+prunes retained events and cannot prove that it covers every bucket a replace
+transaction would delete, even when no continuation is pending. Canonry
+rejects that generic path universally. Keep existing rollups intact, use a
+retention-aware repair, and explicitly declare any unrecoverable portion before
+reporting a historical trend.
+
+After upgrading from the former unbounded WordPress sync, a source with an old
+continuation cursor is intentionally rejected rather than guessed at. Keep its
+schedule paused, record the ambiguous historical span, then use the explicit
+reset below to start fresh. Reset stops future replay; it does not repair past
+rollups. Generic WordPress replace-mode backfill remains unavailable until a
+retention-aware repair can establish coverage.
+
+Reconnecting with a different WordPress `baseUrl` archives the old source and
+creates a fresh one. Its existing rollups and any unrecovered marker remain
+with the old lineage rather than mixing with the new endpoint's traffic.
+
 ## Connecting a Vercel source
 
 The Vercel adapter pulls per-request logs from the Vercel API for a
@@ -869,15 +901,14 @@ cnry traffic reset <project> --source <id> --advance-to-now
 
 `--advance-to-now` is required — there is no implicit reset.
 
-`reset` accepts any **non-archived** source type. The `lastSyncedAt`
-advance is meaningful for time-windowed sources (Vercel, Cloud Run)
-where it determines the next sync window. Cursor-based sources
-(WordPress) keep their `last_cursor` intact, so the `lastSyncedAt`
-advance is informational — the next WordPress drain still resumes
-from the cursor. The primary use case is the retention-trap recovery
-above; clearing `lastError` for a transient WordPress failure also
-works. Archived sources are rejected — re-connect them with
-`cnry traffic connect ...` instead.
+`reset` accepts any **non-archived** source type. A WordPress reset clears
+its `last_cursor` and pending-window marker as well as advancing
+`lastSyncedAt`, so the next bounded drain begins at the reset watermark
+instead of combining it with an old cursor. The primary use case is the
+retention-trap recovery above; clearing `lastError` for a transient WordPress
+failure also works. Reset deliberately abandons any ambiguous pending history;
+it is not a historical repair. Archived sources are rejected — re-connect them
+with `cnry traffic connect ...` instead.
 
 Time-window and cursor adapters use the `last_event_ids` overlap ring. Queue
 pull uses durable event receipts sized to Queue retention. Both paths make a

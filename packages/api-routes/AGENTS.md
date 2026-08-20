@@ -64,6 +64,20 @@ every deployment or queued message runs one version. When `lastWorkerVersion` is
 `traffic.worker-version.stale` and requires regeneration and redeployment using
 the source's existing delivery mode.
 
+### WordPress incremental traffic invariant
+
+WordPress incremental pulls always send the plugin a half-open `[since, until)`
+window. `lastCursor` is only a keyset-pagination continuation inside that
+bounded query; never send it without the time bounds. Reserve a fresh window
+before provider I/O by persisting its lower bound in `lastSyncedAt` and its
+fixed upper bound in `wordpressPendingUntil`; failures and capped drains retry
+the exact same interval. A terminal page clears both continuation fields and
+advances the watermark to that upper boundary. A legacy non-null `lastCursor`
+without `wordpressPendingUntil` is ambiguous old-route state and must fail
+closed until an explicit reset clears it. If the plugin claims more data but
+supplies no new cursor, fail before the rollup transaction. Replace-mode
+WordPress backfill is forbidden while either continuation field is set.
+
 ## Discovery replay suite (quality regression)
 
 `test/discovery-replay.test.ts` replays the deterministic seed pipeline (brand filter → exact dedup → cosine clustering → representative pick → collapse warning) against REAL captured sessions in `test/fixtures/discovery-replay/` — five ICP shapes, each with raw candidates + embedding vectors + golden expectations. CI makes zero provider calls. Two assertion tiers: GOLDEN exact equality (a deliberate pipeline change regenerates fixtures via `scripts/capture-discovery-replay-fixtures.ts` in the same PR — never loosen an assertion to pass) and INVARIANTS (canonicals >= the platform gate floor of 8, no collapse warning, branded raw candidates <= 20%). Refresh cost ~$0.50 total; see the capture script header for the procedure.
