@@ -143,6 +143,26 @@ declare module 'fastify' {
      * as it was before.
      */
     readSemantic?: boolean
+
+    /**
+     * This route's POST is a PROTOCOL ENVELOPE, not an operation.
+     *
+     * A JSON-RPC transport (MCP over Streamable HTTP) carries every message —
+     * including pure reads like `initialize` and `tools/list` — inside a POST.
+     * The method-based read-only gate below would therefore refuse a
+     * `['read']` key at the door, which defeats the entire point of handing a
+     * client a read-only credential.
+     *
+     * WHY THIS IS SAFE, and the reason it is scoped to one route: the flag
+     * lets the ENVELOPE through, never the operations inside it. The transport
+     * re-dispatches each tool call as a fresh authenticated HTTP request
+     * carrying the caller's own bearer, so the read-only gate, the ads gate and
+     * the project-scope gate all re-apply per operation, at their normal
+     * strength. Nothing reaches a handler without passing this hook again.
+     *
+     * Set this ONLY on a transport endpoint that does no work of its own.
+     */
+    transportEnvelope?: boolean
   }
 }
 
@@ -153,6 +173,14 @@ function principalScopes(request: FastifyRequest): string[] | undefined {
 /** True when the route this request landed on declared itself a pure read. */
 function isReadSemanticRoute(request: FastifyRequest): boolean {
   return request.routeOptions.config.readSemantic === true
+}
+
+/**
+ * True when this route is a JSON-RPC transport envelope rather than an
+ * operation. See `transportEnvelope` above for why this exemption is sound.
+ */
+function isTransportEnvelopeRoute(request: FastifyRequest): boolean {
+  return request.routeOptions.config.transportEnvelope === true
 }
 
 /**
@@ -678,7 +706,11 @@ export async function authPlugin(app: FastifyInstance, opts: AuthPluginOptions =
     // automatically. Safe methods (GET/HEAD/OPTIONS) always pass. This runs
     // after `shouldSkipAuth` (so public routes stay open) and does not gate
     // the `last_used_at` write above (infrastructural usage tracking).
-    if (isReadOnlyKey(scopes) && WRITE_METHODS.has(request.method)) {
+    if (
+      isReadOnlyKey(scopes) &&
+      WRITE_METHODS.has(request.method) &&
+      !isTransportEnvelopeRoute(request)
+    ) {
       throw forbidden('This API key is read-only and cannot perform write operations.')
     }
 
