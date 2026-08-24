@@ -31,7 +31,6 @@ final class Recorder {
         [$path, $queryString] = self::splitUri($uri);
 
         $userAgent = self::stringOrNull($server['HTTP_USER_AGENT'] ?? null);
-        if (self::shouldDeferToBeacon($status, $userAgent)) return;
         $referer = self::stringOrNull($server['HTTP_REFERER'] ?? null);
         // Resolve the real client IP. Forwarded headers are consulted only
         // when the operator has marked the site as behind a trusted proxy
@@ -89,25 +88,6 @@ final class Recorder {
         if ($method !== '' && $method !== 'GET') return false;
 
         return true;
-    }
-
-    /**
-     * When the beacon lane is active, browser-looking 200s belong to it: the
-     * beacon sees them whether or not the page cache let them reach PHP, so
-     * recording them here too would double-count exactly the uncached human
-     * page views. Everything the beacon structurally cannot see stays in this
-     * lane — bot-looking agents (no JS), redirects and errors (no page ran),
-     * and responses whose status is unknown (never guess a row away).
-     */
-    private static function shouldDeferToBeacon(?int $status, ?string $userAgent): bool {
-        if (!Beacon::isEnabled()) return false;
-        // Only a response that actually carried the script may be deferred to
-        // it. Footer-less themes, feeds, embeds, and API responses never print
-        // the beacon, so deferring them would drop the visit outright rather
-        // than hand it to the other lane.
-        if (!Beacon::printedScriptThisRequest()) return false;
-        if ($status !== 200) return false;
-        return !Beacon::looksBot($userAgent);
     }
 
     /** @return array{0:string, 1:?string} */

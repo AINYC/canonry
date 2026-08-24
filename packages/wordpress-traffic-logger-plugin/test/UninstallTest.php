@@ -24,6 +24,7 @@ final class UninstallTest extends TestCase {
         update_option('canonry_traffic_logger_trust_proxy', '1');
         update_option('canonry_traffic_logger_anonymous_id', '11111111-2222-5333-8444-555555555555');
         update_option('canonry_traffic_logger_ip_salt', 'legacy-salt-value');
+        update_option('canonry_traffic_logger_beacon', 'on');
 
         // Seed a row so we can witness the table drop.
         \Canonry\TrafficLogger\Recorder::record([
@@ -47,5 +48,6 @@ final class UninstallTest extends TestCase {
         $this->assertSame(false, get_option('canonry_traffic_logger_trust_proxy', false));
         $this->assertSame(false, get_option('canonry_traffic_logger_anonymous_id', false));
         $this->assertSame(false, get_option('canonry_traffic_logger_ip_salt', false));
+        $this->assertSame(false, get_option('canonry_traffic_logger_beacon', false));
     }
 }
