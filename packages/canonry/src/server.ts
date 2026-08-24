@@ -3340,6 +3340,35 @@ export async function createServer(opts: {
         return reply.status(error.statusCode).send(error.toJSON());
       }
 
+      // Machine-facing shapes the SPA does not own. Both currently answer 200
+      // with the app shell, which is worse than a 404 in different ways:
+      //
+      // - `/.well-known/*` carries protocol discovery (OAuth protected-resource
+      //   and authorization-server metadata). A client handed index.html with a
+      //   200 cannot distinguish "no metadata here" from "metadata is
+      //   malformed", so discovery fails in the most confusing way available.
+      //   This is a hard prerequisite for serving MCP over OAuth, not polish.
+      // - Dotfile probes (/.env, /.env.local, /.git/config) are scanners, and a
+      //   200 tells them the path exists.
+      //
+      // ONE rule covers both: any dot-prefixed SEGMENT. Three things depend on
+      // matching any segment rather than just the last — /.git/config ends in
+      // "config"; /.well-known/... is caught only via its first segment; and
+      // that is also what makes discovery work under a base path
+      // (/t/demo/.well-known/...) with no second check. Narrowing this to the
+      // last segment silently breaks OAuth discovery.
+      //
+      // Deliberately NOT a general "does the SPA own this?" heuristic: the
+      // dashboard owns arbitrary deep links like /projects/<name>, and those
+      // must keep returning the document.
+      const isDotSegmentPath = url
+        .split("/")
+        .some((segment) => segment.startsWith("."));
+      if (isDotSegmentPath) {
+        const error = notFound("Route", url);
+        return reply.status(error.statusCode).send(error.toJSON());
+      }
+
       // When a base path is configured, only serve the SPA for paths under it.
       if (basePath && !url.startsWith(basePath)) {
         return reply
