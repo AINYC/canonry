@@ -11,6 +11,13 @@ vi.mock('recharts', () => {
     ResponsiveContainer: passthrough,
     ComposedChart: passthrough,
     Area: () => null,
+    Line: () => null,
+    CartesianGrid: () => null,
+    Bar: () => null,
+    BarChart: passthrough,
+    Cell: () => null,
+    ReferenceArea: () => null,
+    ReferenceLine: () => null,
     XAxis: () => null,
     YAxis: () => null,
     Tooltip: () => null,
@@ -19,6 +26,7 @@ vi.mock('recharts', () => {
 })
 
 import { ActivitySection, ClickThroughActivity } from '../src/components/project/ActivitySection.js'
+import { AiTrafficHistoryPanel } from '../src/components/project/AiTrafficHistoryPanel.js'
 
 function renderActivitySection() {
   const queryClient = new QueryClient({
@@ -538,4 +546,52 @@ test('top time picker reloads every GA surface and replaces all Social data', as
   await assertWindow('90d')
   fireEvent.click(within(picker).getByRole('button', { name: 'All' }))
   await assertWindow('all')
+})
+
+/**
+ * The panel is a SIBLING of the GA4 click-through panel, never a child. That
+ * panel early-returns a connect prompt when no property is bound, so a
+ * server-fed chart nested inside it would vanish for exactly the projects it
+ * serves: server-side traffic needs no GA4 at all.
+ *
+ * Mounted standalone here, with no GA4 fetch stubbed at all, which is the
+ * strongest form of that claim: the panel cannot be reading GA4 state.
+ */
+test('AI traffic history renders from server data with no GA4 involved', async () => {
+  const restoreFetch = mockFetch((url) => {
+    if (url.split('?')[0]!.endsWith('/projects/test-project/traffic/events')) {
+      return jsonResponse({
+        events: [],
+        eventRows: { total: 0, returned: 0, truncated: false },
+        totals: { crawlerHits: 30, crawlerContentHits: 12, aiUserFetchHits: 7, aiReferralHits: 5, aiReferralLandedHits: 4 },
+        series: {
+          granularity: 'day',
+          points: [
+            { bucket: '2026-08-01', crawlerHits: 20, crawlerContentHits: 8, aiUserFetchHits: 3, aiReferralHits: 3, aiReferralLandedHits: 2 },
+            { bucket: '2026-08-02', crawlerHits: 10, crawlerContentHits: 4, aiUserFetchHits: 4, aiReferralHits: 2, aiReferralLandedHits: 2 },
+          ],
+        },
+      })
+    }
+    throw new Error(`unexpected fetch in this test: ${url}`)
+  })
+  onTestFinished(restoreFetch)
+
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(
+    <QueryClientProvider client={queryClient}>
+      <AiTrafficHistoryPanel projectName="test-project" sinceMinutes={43200} />
+    </QueryClientProvider>,
+  )
+
+  expect(await screen.findByText('AI crawlers')).toBeTruthy()
+
+  // The tiles must read the HONEST fields: content crawls (12), not the 30 that
+  // counts robots and sitemaps; landed visits (4), not the 5 that counts
+  // redirect hops. Asserting the inflated numbers are ABSENT is the point.
+  expect(screen.getByText('12')).toBeTruthy()
+  expect(screen.getByText('7')).toBeTruthy()
+  expect(screen.getByText('4')).toBeTruthy()
+  expect(screen.queryByText('30')).toBeNull()
+  expect(screen.queryByText('5')).toBeNull()
 })

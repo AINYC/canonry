@@ -28,6 +28,7 @@ import {
   urlSearchText,
   useClientTable,
 } from '../shared/DataTableControls.js'
+import { AiTrafficHistoryPanel } from './AiTrafficHistoryPanel.js'
 import { InfoTooltip } from '../shared/InfoTooltip.js'
 import { ToneBadge } from '../shared/ToneBadge.js'
 import type { MetricsWindow } from '@ainyc/canonry-contracts'
@@ -64,6 +65,17 @@ import {
 import { buildAiChartData } from '../../lib/ai-chart-helpers.js'
 
 const TRAFFIC_WINDOWS: MetricsWindow[] = ['7d', '30d', '90d', 'all']
+
+// The server-side lane is queried in minutes, the GA lane by window name. One
+// control drives both, so the mapping lives here rather than in either consumer.
+// 'all' is capped at 90 days: `sinceMinutes` has no unbounded representation,
+// and an uncapped scan is not what the operator is asking for from a chart.
+const TRAFFIC_WINDOW_MINUTES: Record<MetricsWindow, number> = {
+  '7d': 7 * 24 * 60,
+  '30d': 30 * 24 * 60,
+  '90d': 90 * 24 * 60,
+  all: 90 * 24 * 60,
+}
 
 const SOURCE_COLORS = CHART_SERIES_COLORS
 
@@ -215,18 +227,40 @@ function ServerActivityPanel({ projectName }: { projectName: string }) {
 }
 
 export function ActivitySection({ projectName }: { projectName: string }) {
+  // Owned here so the GA panel's selector and the server-fed chart cannot drift
+  // onto different ranges. The chart is a SIBLING of ClickThroughActivity, never
+  // a child: that component early-returns a connect prompt with no GA4 property,
+  // and the chart's data exists without GA4 at all.
+  const [trafficWindow, setTrafficWindow] = useState<MetricsWindow>('30d')
   return (
     <div className="space-y-10">
       <ServerActivityPanel projectName={projectName} />
-      <ClickThroughActivity projectName={projectName} />
+      <AiTrafficHistoryPanel
+        projectName={projectName}
+        sinceMinutes={TRAFFIC_WINDOW_MINUTES[trafficWindow]}
+      />
+      <ClickThroughActivity
+        projectName={projectName}
+        window={trafficWindow}
+        onWindowChange={setTrafficWindow}
+      />
     </div>
   )
 }
 
 // Exported for focused testing of the GA4 click-through panel (e.g. landing-page
 // pagination) without standing up a router for the sibling ServerActivityPanel's links.
-export function ClickThroughActivity({ projectName }: { projectName: string }) {
+export function ClickThroughActivity({ projectName, window: windowProp, onWindowChange }: {
+  projectName: string
+  window?: MetricsWindow
+  onWindowChange?: (w: MetricsWindow) => void
+}) {
   const queryClient = useQueryClient()
+  // Controlled by the wrapper in the app; falls back to own state so this
+  // component stays independently mountable in tests.
+  const [ownWindow, setOwnWindow] = useState<MetricsWindow>('30d')
+  const trafficWindow = windowProp ?? ownWindow
+  const setTrafficWindow = onWindowChange ?? setOwnWindow
   const [status, setStatus] = useState<ApiGaStatus | null>(null)
   const [traffic, setTraffic] = useState<ApiGaTraffic | null>(null)
   const [loading, setLoading] = useState(true)
@@ -246,7 +280,6 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
   const [sessionHistory, setSessionHistory] = useState<GA4SessionHistoryEntry[]>([])
   const [socialHistory, setSocialHistory] = useState<GA4SocialReferralHistoryEntry[]>([])
   const [socialTableExpanded, setSocialTableExpanded] = useState(false)
-  const [trafficWindow, setTrafficWindow] = useState<MetricsWindow>('30d')
 
   async function loadData(cancelled: { current: boolean }) {
     setLoading(true)
