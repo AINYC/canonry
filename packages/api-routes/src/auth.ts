@@ -616,18 +616,21 @@ function applyRoleGates(request: FastifyRequest): void {
   const principal = request.principal
   if (!principal || principal.kind !== 'user') return
 
-  // A transport envelope is a read for a viewer exactly as it is for a
-  // read-only key: the POST carries the JSON-RPC message, and every operation
-  // inside it re-enters the API as its own request where this gate runs again.
-  // Without this a viewer who approves an OAuth connector is refused at the
-  // door, which is the whole population the connector exists for.
-  request.readSemanticGrant = principal.role === UserRoles.viewer
-    && (isReadSemanticRoute(request) || isTransportEnvelopeRoute(request))
+  request.readSemanticGrant = principal.role === UserRoles.viewer && isReadSemanticRoute(request)
 
+  // A transport envelope is a read no matter WHO is asking, so the exemption is
+  // separate from `readSemanticGrant` rather than folded into it. Those two
+  // pivot on different things and conflating them was a live bug: this gate
+  // keys off SCOPES, while readSemanticGrant keys off the viewer ROLE. An
+  // admin who grants an OAuth connector `scope=read` correctly ends up with
+  // read-only scopes and a non-viewer role, so the gate fired and the grant did
+  // not exempt it — the connector was refused at the door for exactly the
+  // person who set it up.
   if (
     isReadOnlyKey(principal.scopes)
     && WRITE_METHODS.has(request.method)
     && !request.readSemanticGrant
+    && !isTransportEnvelopeRoute(request)
   ) {
     throw forbidden(VIEWER_DENIED_MESSAGE)
   }

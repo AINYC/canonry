@@ -117,7 +117,12 @@ export function createCanonryMcpServerWithCatalog(options: CanonryMcpServerOptio
   const catalog = new DynamicToolCatalog(server, entries, scope, { eager })
   catalog.applyInitialEnablement()
 
-  registerMetaTools(server, catalog)
+  // A tier-filtered server has a FIXED surface, so the toolkit loader is dead
+  // weight there: calling it could only widen a surface the endpoint exists to
+  // narrow. Excluded structurally rather than by policy, so it cannot be
+  // advertised and then fail — and so it stops costing context on a profile
+  // whose whole point is not to.
+  registerMetaTools(server, catalog, { includeToolkitLoader: options.tiers === undefined })
 
   return { server, catalog }
 }
@@ -126,7 +131,11 @@ const loadToolkitInputSchema = z.object({
   name: z.enum(CANONRY_MCP_TOOLKIT_NAMES).describe('Toolkit name. List options with canonry_help.'),
 })
 
-function registerMetaTools(server: McpServer, catalog: DynamicToolCatalog): void {
+function registerMetaTools(
+  server: McpServer,
+  catalog: DynamicToolCatalog,
+  opts: { includeToolkitLoader: boolean },
+): void {
   server.registerTool(
     'canonry_help',
     {
@@ -138,6 +147,7 @@ function registerMetaTools(server: McpServer, catalog: DynamicToolCatalog): void
     async () => withToolErrors(async () => catalog.helpResult()),
   )
 
+  if (!opts.includeToolkitLoader) return
   server.registerTool(
     'canonry_load_toolkit',
     {

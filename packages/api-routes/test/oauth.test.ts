@@ -119,6 +119,47 @@ test('authorize refuses an unregistered redirect_uri', async () => {
   expect(res.statusCode).toBe(400)
 })
 
+test('a loopback redirect matches on any port, per RFC 8252 s7.3', async () => {
+  // A native app binds an ephemeral port at runtime and cannot know it at
+  // registration time. Without this no desktop client completes the flow.
+  const now = new Date().toISOString()
+  db.insert(oauthClients).values({
+    id: 'native', name: 'Desktop', secretHash: null,
+    redirectUris: ['http://127.0.0.1:0/callback'], createdAt: now,
+  }).run()
+  const params = new URLSearchParams({
+    response_type: 'code', client_id: 'native',
+    redirect_uri: 'http://127.0.0.1:54321/callback',
+    code_challenge: CHALLENGE, code_challenge_method: 'S256',
+  })
+  const res = await app.inject({ method: 'GET', url: `/oauth/authorize?${params.toString()}` })
+  expect(res.statusCode).toBe(302)
+  expect(new URL(res.headers.location as string).port).toBe('54321')
+})
+
+test('the loopback carve-out floats ONLY the port', async () => {
+  // Scheme, host and path still match exactly; anything looser is an open
+  // redirect wearing a loopback costume.
+  const now = new Date().toISOString()
+  db.insert(oauthClients).values({
+    id: 'native2', name: 'Desktop', secretHash: null,
+    redirectUris: ['http://127.0.0.1:0/callback'], createdAt: now,
+  }).run()
+  for (const bad of [
+    'http://127.0.0.1:54321/evil',        // different path
+    'https://127.0.0.1:54321/callback',   // different scheme
+    'http://evil.example.com/callback',   // not loopback at all
+    'http://127.0.0.1.evil.com/callback', // loopback-looking host
+  ]) {
+    const params = new URLSearchParams({
+      response_type: 'code', client_id: 'native2', redirect_uri: bad,
+      code_challenge: CHALLENGE, code_challenge_method: 'S256',
+    })
+    const res = await app.inject({ method: 'GET', url: `/oauth/authorize?${params.toString()}` })
+    expect(res.statusCode, bad).toBe(400)
+  }
+})
+
 test('authorize refuses a resource that is not this server', async () => {
   const res = await app.inject({ method: 'GET', url: authorizeUrl({ resource: 'https://elsewhere.example.com/api/v1/mcp' }) })
   expect(res.statusCode).toBe(400)

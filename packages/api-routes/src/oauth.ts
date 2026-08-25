@@ -76,6 +76,47 @@ function verifyPkce(verifier: string, challenge: string): boolean {
   return a.length === b.length && crypto.timingSafeEqual(a, b)
 }
 
+/**
+ * Is this redirect_uri registered?
+ *
+ * Exact match, with ONE carve-out required by RFC 8252 s7.3: for a loopback
+ * redirect the port is ignored, because a native app binds an ephemeral port at
+ * runtime and cannot know it at registration time. Without this, no desktop
+ * client can complete the flow at all — which is most of the clients that
+ * matter here.
+ *
+ * The carve-out is narrow on purpose. Only the PORT floats; scheme, host and
+ * path must still match exactly, and only for a literal loopback host. Anything
+ * looser is an open redirect.
+ */
+export function redirectUriAllowed(registered: readonly string[], presented: string): boolean {
+  if (registered.includes(presented)) return true
+  let candidate: URL
+  try {
+    candidate = new URL(presented)
+  } catch {
+    return false
+  }
+  if (!isLoopbackHost(candidate.hostname)) return false
+  return registered.some((entry) => {
+    let allowed: URL
+    try {
+      allowed = new URL(entry)
+    } catch {
+      return false
+    }
+    return isLoopbackHost(allowed.hostname)
+      && allowed.protocol === candidate.protocol
+      && allowed.hostname === candidate.hostname
+      && allowed.pathname === candidate.pathname
+  })
+}
+
+/** Literal loopback only — never a name that could resolve elsewhere. */
+function isLoopbackHost(hostname: string): boolean {
+  return hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]' || hostname === 'localhost'
+}
+
 function badRequest(reply: FastifyReply, error: string, description: string) {
   return reply.status(400).send({ error, error_description: description })
 }
@@ -192,8 +233,7 @@ export function registerOAuthRoutes(app: FastifyInstance, opts: OAuthRoutesOptio
 
     const client = db.select().from(oauthClients).where(eq(oauthClients.id, clientId)).get()
     if (!client || client.revokedAt) return badRequest(reply, 'invalid_client', 'Unknown client.')
-    // Exact match, never a prefix: a prefix rule lets an open redirect through.
-    if (!client.redirectUris.includes(redirectUri)) {
+    if (!redirectUriAllowed(client.redirectUris, redirectUri)) {
       return badRequest(reply, 'invalid_request', 'redirect_uri is not registered for this client.')
     }
     // Audience binding. A token minted for one resource must not work on another.
