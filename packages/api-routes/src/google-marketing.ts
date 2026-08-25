@@ -1796,6 +1796,57 @@ export async function googleMarketingRoutes(app: FastifyInstance, opts: GoogleMa
 
   // --- Resource selection --------------------------------------------------------
 
+  /**
+   * Queue a provider sync right after a selection, so an operator is never left
+   * connected with no data.
+   *
+   * Selecting a customer or container clears every snapshot pointer, which put
+   * the project in a state that reads as "not set up": status stays
+   * `selection-required` because the selected resource resolves from a snapshot
+   * that no longer exists, the metrics view has nothing to show, and the
+   * conversion form falls back to hand-typed ids. Selection is an explicit act
+   * with exactly one sensible follow-up, so it should not be homework.
+   *
+   * GATED IDENTICALLY TO THE SYNC ROUTE. A caller holding only the write scope
+   * must not be able to cause a provider call through selection that it cannot
+   * make directly, so a caller failing that gate simply gets the previous
+   * behaviour rather than an error: the selection itself already succeeded.
+   */
+  const queueSelectionSync = (
+    request: FastifyRequest,
+    projectId: string,
+    kind: 'google-ads-sync' | 'gtm-sync',
+    callback: ((runId: string, projectId: string) => void | Promise<void>) | undefined,
+  ): void => {
+    if (!callback) return
+    try {
+      requireLiveRead(request)
+    } catch {
+      return
+    }
+    const candidateRun = queuedRun(projectId, RunKinds[kind])
+    let run: typeof runs.$inferSelect | typeof candidateRun = candidateRun
+    let queued = false
+    app.db.transaction((tx) => {
+      const existing = tx.select().from(runs).where(and(
+        eq(runs.projectId, projectId),
+        eq(runs.kind, RunKinds[kind]),
+        or(eq(runs.status, RunStatuses.queued), eq(runs.status, RunStatuses.running)),
+      )).orderBy(desc(runs.createdAt)).get()
+      if (existing) {
+        run = existing
+        return
+      }
+      tx.insert(runs).values(candidateRun).run()
+      queued = true
+      writeAuditLog(tx, auditFromRequest(request, {
+        projectId, actor: 'api', action: `${kind}.requested-on-selection`,
+        entityType: 'run', entityId: run.id,
+      }))
+    })
+    if (queued) enqueueAfterCommit(app, callback, run.id, projectId, kind)
+  }
+
   app.put<{ Params: { name: string }; Body: unknown }>('/projects/:name/google-ads/selection', async (request) => {
     requireWrite(request)
     const parsedBody = parseBody(googleAdsCustomerSelectionRequestSchema, request.body, 'Google Ads selection')
@@ -1834,6 +1885,7 @@ export async function googleMarketingRoutes(app: FastifyInstance, opts: GoogleMa
         diff: { loginCustomerId: body.loginCustomerId ?? null, customerId: body.customerId },
       }))
     })
+    queueSelectionSync(request, project.id, 'google-ads-sync', opts.onGoogleAdsSyncRequested)
     return googleAdsStatus(app, opts, projectRef)
   })
 
@@ -1876,6 +1928,7 @@ export async function googleMarketingRoutes(app: FastifyInstance, opts: GoogleMa
         diff: { accountId: body.accountId, containerId: body.containerId, workspaceId: body.workspaceId ?? null },
       }))
     })
+    queueSelectionSync(request, project.id, 'gtm-sync', opts.onGtmSyncRequested)
     return gtmStatus(app, opts, projectRef)
   })
 
