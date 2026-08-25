@@ -1,6 +1,6 @@
 {
   "name": "canonry",
-  "version": "4.177.2",
+  "version": "4.177.3",
   "description": "Operate Canonry AEO projects through guided skills and the typed Canonry MCP server.",
   "author": {
     "name": "Canonry",
@@ -33,6 +33,10 @@
       "Check my Canonry project and explain what changed.",
       "Run a Technical AEO audit and help fix the highest-impact issues.",
       "Review citation and mention coverage and recommend the next action."
-    ]
+    ],
+    "brandColor": "#940000",
+    "logo": "./assets/logo.svg",
+    "logoDark": "./assets/logo-dark.svg",
+    "composerIcon": "./assets/logo.svg"
   }
 }
