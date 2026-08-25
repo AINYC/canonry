@@ -9,6 +9,7 @@ import Fastify from 'fastify'
 import { beforeEach, afterEach, expect, test } from 'vitest'
 
 import { registerOAuthRoutes, resolveOAuthAccessToken } from '../src/oauth.js'
+import { hashUserPassword } from '../src/user-password.js'
 
 /**
  * OAuth 2.1 for the MCP resource. Most of these are NEGATIVE cases on purpose:
@@ -27,7 +28,9 @@ let app: ReturnType<typeof Fastify>
 let tmpDir: string
 let signedInUserId: string | null
 
-function build() {
+const PASSWORD = 'correct-horse'
+
+async function build() {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'canonry-oauth-'))
   db = createClient(path.join(tmpDir, 'test.db'))
   migrate(db)
@@ -35,7 +38,7 @@ function build() {
   const now = new Date().toISOString()
   const userId = crypto.randomUUID()
   db.insert(users).values({
-    id: userId, name: 'Sam', nameKey: 'sam', passwordHash: 'x', role: 'viewer', createdAt: now,
+    id: userId, name: 'Sam', nameKey: 'sam', passwordHash: await hashUserPassword(PASSWORD), role: 'viewer', createdAt: now,
   }).run()
   signedInUserId = userId
 
@@ -47,13 +50,14 @@ function build() {
   registerOAuthRoutes(app, {
     db,
     issuer: ISSUER,
-    resourcePath: RESOURCE_PATH,
+    resourcePaths: [RESOURCE_PATH],
     resolveUser: () => (signedInUserId ? { id: signedInUserId, name: 'Sam' } : null),
+    startSession: (id) => { signedInUserId = id; return 'session=set' },
   })
   return userId
 }
 
-beforeEach(() => { build() })
+beforeEach(async () => { await build() })
 afterEach(async () => {
   await app.close()
   fs.rmSync(tmpDir, { recursive: true, force: true })
@@ -121,13 +125,111 @@ test('authorize refuses a resource that is not this server', async () => {
   expect(res.json().error).toBe('invalid_target')
 })
 
-test('authorize sends a signed-out person to sign in and returns to the same request', async () => {
+test('authorize serves its own sign-in rather than redirecting to a route that does not exist', async () => {
+  // The obvious design — bounce to /signin?next=… — dead-ends: the dashboard
+  // has no such route, never reads `next`, and 404s under a base path. The
+  // form posts back to the same URL so the flow resumes inline.
   signedInUserId = null
   const res = await app.inject({ method: 'GET', url: authorizeUrl() })
-  expect(res.statusCode).toBe(302)
-  const location = res.headers.location as string
-  expect(location.startsWith('/signin?next=')).toBe(true)
-  expect(decodeURIComponent(location.split('next=')[1]!)).toContain('/oauth/authorize')
+  expect(res.statusCode).toBe(200)
+  expect(res.headers['content-type']).toContain('text/html')
+  expect(res.body).toContain('<form method="post"')
+  expect(res.body).toContain('/oauth/authorize')
+})
+
+test('signing in on the consent page completes the authorization', async () => {
+  signedInUserId = null
+  const url = authorizeUrl()
+  const posted = await app.inject({
+    method: 'POST',
+    url,
+    payload: 'name=sam&password=correct-horse',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+  })
+  // Re-enters the GET flow so every validation runs again rather than being
+  // duplicated in the POST handler.
+  expect(posted.statusCode).toBe(302)
+  expect(posted.headers['set-cookie']).toBeTruthy()
+})
+
+test('a wrong password re-renders the form and issues no code', async () => {
+  signedInUserId = null
+  const res = await app.inject({
+    method: 'POST',
+    url: authorizeUrl(),
+    payload: 'name=sam&password=wrong',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+  })
+  expect(res.statusCode).toBe(200)
+  expect(res.body).toContain('did not match')
+  expect(res.headers['set-cookie']).toBeFalsy()
+})
+
+test('an unknown name is indistinguishable from a wrong password', async () => {
+  // Otherwise the endpoint is a user-enumeration oracle.
+  signedInUserId = null
+  const unknown = await app.inject({
+    method: 'POST', url: authorizeUrl(), payload: 'name=nobody&password=wrong',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+  })
+  const wrong = await app.inject({
+    method: 'POST', url: authorizeUrl(), payload: 'name=sam&password=wrong',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+  })
+  expect(unknown.statusCode).toBe(wrong.statusCode)
+  expect(unknown.body).toBe(wrong.body)
+})
+
+test('the token endpoint accepts form-encoded bodies, as every real client sends', async () => {
+  // RFC 6749 s4.1.3. Fastify 415s form bodies without a parser, so a JSON-only
+  // token endpoint is unreachable by any standards-compliant client.
+  const code = await getCode()
+  const res = await app.inject({
+    method: 'POST',
+    url: '/oauth/token',
+    payload: new URLSearchParams({
+      grant_type: 'authorization_code', code, code_verifier: VERIFIER,
+      client_id: 'client-1', redirect_uri: REDIRECT,
+    }).toString(),
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+  })
+  expect(res.statusCode).toBe(200)
+  expect(res.json().access_token).toBeTruthy()
+})
+
+test('a revoked client cannot exchange a code or rotate a refresh token', async () => {
+  const code = await getCode()
+  const first = await app.inject({
+    method: 'POST', url: '/oauth/token',
+    payload: { grant_type: 'authorization_code', code, code_verifier: VERIFIER, client_id: 'client-1', redirect_uri: REDIRECT },
+  })
+  const refresh = first.json().refresh_token as string
+
+  db.update(oauthClients).set({ revokedAt: new Date().toISOString() }).where(eq(oauthClients.id, 'client-1')).run()
+
+  const rotated = await app.inject({ method: 'POST', url: '/oauth/token', payload: { grant_type: 'refresh_token', refresh_token: refresh } })
+  expect(rotated.statusCode).toBe(400)
+  expect(rotated.json().error).toBe('invalid_client')
+})
+
+test('a confidential client must present its secret', async () => {
+  const secret = 'super-secret'
+  db.update(oauthClients)
+    .set({ secretHash: crypto.createHash('sha256').update(secret).digest('hex') })
+    .where(eq(oauthClients.id, 'client-1')).run()
+
+  const code = await getCode()
+  const base = { grant_type: 'authorization_code', code, code_verifier: VERIFIER, client_id: 'client-1', redirect_uri: REDIRECT }
+  const without = await app.inject({ method: 'POST', url: '/oauth/token', payload: base })
+  expect(without.statusCode).toBe(400)
+  expect(without.json().error).toBe('invalid_client')
+
+  const code2 = await getCode()
+  const withSecret = await app.inject({
+    method: 'POST', url: '/oauth/token',
+    payload: { ...base, code: code2, client_secret: secret },
+  })
+  expect(withSecret.statusCode).toBe(200)
 })
 
 test('authorize returns a code plus state and iss', async () => {

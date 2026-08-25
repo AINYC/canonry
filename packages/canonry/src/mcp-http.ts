@@ -70,6 +70,19 @@ export interface McpHttpOptions {
   now?: () => number
 }
 
+/**
+ * Every path this transport mounts, relative to the api prefix. Exported so the
+ * OAuth server publishes one protected-resource document per segment — a 401
+ * from `/mcp/x/gsc` names its own metadata URL, and that URL must resolve.
+ */
+export function mcpTransportPaths(): string[] {
+  const paths = ['/mcp', '/mcp/readonly']
+  for (const toolkit of CANONRY_MCP_TOOLKIT_NAMES) {
+    paths.push(`/mcp/x/${toolkit}`, `/mcp/x/${toolkit}/readonly`)
+  }
+  return paths
+}
+
 export function registerMcpHttpRoutes(scope: FastifyInstance, opts: McpHttpOptions): void {
   const sessions = new Map<string, McpSession>()
   const now = opts.now ?? (() => Date.now())

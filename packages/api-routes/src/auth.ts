@@ -664,18 +664,40 @@ export async function authPlugin(app: FastifyInstance, opts: AuthPluginOptions =
       if (!key || key.revokedAt) {
         // Not an api key. Before refusing, try it as an OAuth access token:
         // this is the only credential a hosted MCP client can present.
-        const granted = opts.resolveOAuthToken?.(token) ?? null
+        // An OAuth token is ONLY ever a credential for the MCP transport. It is
+        // refused everywhere else, and that confinement is load-bearing: the
+        // token is minted for a specific resource URL, so honouring it on the
+        // wider REST surface would let a connector approved for one thing act
+        // on everything the person can reach. Checked before the token is even
+        // looked up, so a non-MCP route cannot be probed with one.
+        const granted = isTransportEnvelopeRoute(request)
+          ? opts.resolveOAuthToken?.(token) ?? null
+          : null
         if (granted) {
           const account = app.db.select().from(users).where(eq(users.id, granted.userId)).get()
           if (!account) throw authInvalid()
-          // The token carries the AUTHORITY OF THE PERSON it was issued for,
-          // never the authority of the client that asked. A viewer who
-          // approves a connector grants a viewer's reach and nothing more.
+          // Authority is the INTERSECTION of what the person can do and what
+          // they granted the client. Taking the role alone was a privilege
+          // escalation: an admin approving a `scope=read` connector handed it
+          // full admin, including minting root api keys.
+          const roleScopes = scopesForRole(account.role)
+          // `offline_access` governs refresh tokens, not API authority.
+          const requested = (granted.scope ?? '')
+            .split(/\s+/)
+            .filter(part => part.length > 0 && part !== 'offline_access')
+          // The role is a CEILING, the grant is the request, and the effective
+          // authority is the smaller of the two. A literal set intersection is
+          // wrong here because an admin's role scope is the wildcard `*`, which
+          // does not textually contain `read` — intersecting would leave an
+          // admin who granted `scope=read` with no authority at all.
+          const effective = roleScopes.includes(WILDCARD_SCOPE)
+            ? (requested.length > 0 ? requested : [READ_ONLY_SCOPE])
+            : roleScopes.filter(scope => requested.includes(scope) || requested.includes(WILDCARD_SCOPE))
           request.principal = {
             kind: 'user',
             id: account.id,
             name: account.name,
-            scopes: scopesForRole(account.role),
+            scopes: effective,
             role: account.role,
             // NOT viaCookie: a bearer is attached deliberately by the client,
             // so no browser can be induced into sending it cross-origin.

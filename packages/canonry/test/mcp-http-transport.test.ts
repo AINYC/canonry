@@ -29,11 +29,14 @@ const MCP_ACCEPT = 'application/json, text/event-stream'
 const PKCE_VERIFIER = 'v'.repeat(64)
 
 /** Drive the real authorize + token flow end to end, as a client would. */
-async function mintAccessToken(built: Built): Promise<string> {
+async function mintAccessToken(
+  built: Built,
+  opts: { role?: 'admin' | 'viewer'; scope?: string } = {},
+): Promise<string> {
   const challenge = crypto.createHash('sha256').update(PKCE_VERIFIER).digest('base64url')
   const redirectUri = 'https://client.example.com/cb'
   built.registerClient(redirectUri)
-  const sessionCookie = built.signIn()
+  const sessionCookie = built.signIn(opts.role ?? 'viewer')
 
   const params = new URLSearchParams({
     response_type: 'code',
@@ -41,6 +44,7 @@ async function mintAccessToken(built: Built): Promise<string> {
     redirect_uri: redirectUri,
     code_challenge: challenge,
     code_challenge_method: 'S256',
+    scope: opts.scope ?? 'read',
   })
   const authorized = await built.app.inject({
     method: 'GET',
@@ -69,7 +73,7 @@ interface Built {
   /** Register a pre-registered OAuth client; there is no DCR by design. */
   registerClient: (redirectUri: string) => void
   /** Create a real signed-in session and return its cookie header. */
-  signIn: () => string
+  signIn: (role?: 'admin' | 'viewer') => string
   cleanup: () => Promise<void>
 }
 
@@ -114,10 +118,11 @@ async function buildServer(): Promise<Built> {
         createdAt: new Date().toISOString(),
       }).run()
     },
-    signIn: () => {
+    signIn: (role: 'admin' | 'viewer' = 'viewer') => {
       const userId = crypto.randomUUID()
       db.insert(users).values({
-        id: userId, name: 'Sam', nameKey: 'sam', passwordHash: 'x', role: 'viewer',
+        id: userId, name: `u-${userId.slice(0, 8)}`, nameKey: `u-${userId.slice(0, 8)}`,
+        passwordHash: 'x', role,
         createdAt: new Date().toISOString(),
       }).run()
       const token = createUserSession(db, userId)
@@ -184,6 +189,41 @@ describe('MCP over OAuth', () => {
     })
     expect(res.statusCode).toBeLessThan(400)
     expect(res.headers['mcp-session-id']).toBeTruthy()
+  })
+
+  it('a read-scoped token from an ADMIN cannot mint an api key', async () => {
+    // The escalation this closes. The token used to carry the person's ROLE
+    // scopes and was accepted on every REST route, so an admin approving a
+    // `scope=read` connector handed it full admin — enough to mint a root
+    // cnry_* key through POST /api/v1/keys and keep it after revocation.
+    const token = await mintAccessToken(built, { role: 'admin', scope: 'read' })
+    const res = await built.app.inject({
+      method: 'POST',
+      url: '/api/v1/keys',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      payload: { name: 'pwned' },
+    })
+    expect(res.statusCode).toBeGreaterThanOrEqual(400)
+  })
+
+  it('an OAuth token is refused on every route except the MCP transport', async () => {
+    // Confinement, checked independently of scope: the token is minted for the
+    // MCP resource and must not authenticate the wider REST surface at all.
+    const token = await mintAccessToken(built, { role: 'admin', scope: '*' })
+    const rest = await built.app.inject({
+      method: 'GET',
+      url: '/api/v1/projects',
+      headers: { authorization: `Bearer ${token}` },
+    })
+    expect(rest.statusCode).toBe(401)
+
+    const mcp = await built.app.inject({
+      method: 'POST',
+      url: '/api/v1/mcp',
+      headers: { authorization: `Bearer ${token}`, accept: MCP_ACCEPT, 'content-type': 'application/json' },
+      payload: INIT,
+    })
+    expect(mcp.statusCode).toBeLessThan(400)
   })
 
   it('refuses a revoked OAuth token', async () => {

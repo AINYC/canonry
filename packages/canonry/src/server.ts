@@ -225,8 +225,8 @@ import { IntelligenceService } from "./intelligence-service.js";
 import { RunCoordinator } from "./run-coordinator.js";
 import { SessionRegistry } from "./agent/session-registry.js";
 import { buildAgentProvidersResponse } from "./agent/providers.js";
-import { registerMcpHttpRoutes } from "./mcp-http.js";
-import { registerOAuthRoutes, parseCookieHeader, resolveUserSession, USER_SESSION_COOKIE_NAME } from "@ainyc/canonry-api-routes";
+import { registerMcpHttpRoutes, mcpTransportPaths } from "./mcp-http.js";
+import { registerOAuthRoutes, parseCookieHeader, resolveUserSession, createUserSession, serializeUserSessionCookie, USER_SESSION_COOKIE_NAME } from "@ainyc/canonry-api-routes";
 import { registerAgentRoutes } from "./agent/agent-routes.js";
 import {
   createRecommendationExplainer,
@@ -3447,13 +3447,23 @@ export async function createServer(opts: {
     registerOAuthRoutes(app, {
       db: opts.db,
       issuer: publicOrigin,
-      resourcePath: `${basePath ?? "/"}api/v1/mcp`.replace("//", "/"),
+      resourcePaths: mcpTransportPaths().map((suffix) =>
+        `${basePath ?? "/"}api/v1${suffix}`.replace("//", "/"),
+      ),
       resolveUser: (request) => {
         const cookies = parseCookieHeader(request.headers.cookie);
         const token = cookies[USER_SESSION_COOKIE_NAME];
         if (!token) return null;
         const resolved = resolveUserSession(opts.db, token);
         return resolved ? { id: resolved.user.id, name: resolved.user.name } : null;
+      },
+      startSession: (userId) => {
+        const token = createUserSession(opts.db, userId);
+        return serializeUserSessionCookie({
+          value: token,
+          path: basePath ?? "/",
+          secure: opts.config.publicUrl?.startsWith("https://") ?? false,
+        });
       },
     });
   }

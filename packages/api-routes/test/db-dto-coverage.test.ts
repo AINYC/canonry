@@ -837,6 +837,18 @@ const COVERAGE: Record<string, CoverageEntry> = {
     kind: 'internal-only',
     reason: 'Internal rate-limit / quota counters; never exposed.',
   },
+  oauthClients: {
+    kind: 'internal-only',
+    reason: 'OAuth client registry for the remote MCP surface. Credentials, not content: the secret is stored as a digest and nothing about a client is a public DTO.',
+  },
+  oauthAuthorizationCodes: {
+    kind: 'internal-only',
+    reason: 'In-flight OAuth codes, 60s TTL and single use. Exposing any of this would defeat the flow it implements.',
+  },
+  oauthTokens: {
+    kind: 'internal-only',
+    reason: 'Issued OAuth access and refresh tokens, stored as digests. A bearer credential is never a DTO.',
+  },
   llmUsageEvents: {
     kind: 'internal-only',
     reason: 'Internal LLM token/cache/cost ledger for prompt-cache tuning; not exposed as a public DTO.',
