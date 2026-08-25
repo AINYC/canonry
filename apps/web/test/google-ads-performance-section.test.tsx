@@ -240,7 +240,9 @@ describe('GoogleAdsPerformanceSection', () => {
     // the change ratio is null and must not read as flat. Conversions,
     // conversion rate and cost/conv are all null in this fixture, so assert the
     // count rather than a unique match.
-    expect(screen.getAllByText(`${GOOGLE_ADS_NOT_AVAILABLE} vs prior 14d`).length).toBe(3)
+    // Two, not three: cost/conv has no comparison field at all, so it renders
+    // no delta line rather than an "unavailable" one.
+    expect(screen.getAllByText(`${GOOGLE_ADS_NOT_AVAILABLE} vs prior 14d`).length).toBe(2)
     expect(screen.queryByText('no change vs prior 14d')).toBeNull()
   })
 
@@ -277,12 +279,12 @@ describe('GoogleAdsPerformanceSection', () => {
     expect(screen.queryByText(/no change/)).toBeNull()
   })
 
-  test('says so visibly when the provider row cap dropped days', async () => {
+  test('says so visibly when the provider returned a bounded result', async () => {
     renderSection(performanceDto({
       source: { ...performanceDto().source!, truncated: true, campaignsQueried: 41, campaignsInInventory: 41 },
     }))
 
-    await waitFor(() => expect(screen.getByText(/provider row cap was reached/)).toBeTruthy())
+    await waitFor(() => expect(screen.getByText(/bounded result/)).toBeTruthy())
     // The row cap says nothing about campaign coverage. With every campaign
     // queried there is no shortfall to report, and claiming "41 of 41" would be
     // a caveat about nothing.
@@ -299,7 +301,7 @@ describe('GoogleAdsPerformanceSection', () => {
     }))
 
     await waitFor(() => expect(screen.getByText(/50 of 120 campaigns, so they are a subset/)).toBeTruthy())
-    expect(screen.queryByText(/provider row cap/)).toBeNull()
+    expect(screen.queryByText(/bounded result/)).toBeNull()
   })
 
   test('reports no coverage shortfall when every campaign was queried', async () => {
@@ -355,6 +357,35 @@ describe('GoogleAdsPerformanceSection', () => {
     expect(screen.getByText('Conv. rate')).toBeTruthy()
     expect(screen.getAllByText('CTR').length).toBe(2)
     expect(screen.getByText('CPC')).toBeTruthy()
+  })
+
+  test('does not invent a currency when the account currency is unresolved', async () => {
+    renderSection(performanceDto({
+      source: { ...performanceDto().source!, currencyCode: null },
+    }))
+
+    await waitFor(() => expect(screen.getAllByText('Spend').length).toBeGreaterThan(0))
+    // The magnitude still shows; the unit does not. A '$' on a EUR account is a
+    // wrong number, not a missing one.
+    expect(screen.queryByText(/\$/)).toBeNull()
+    expect(screen.getByText('1,284.50')).toBeTruthy()
+  })
+
+  test('renders no delta line for a metric the DTO cannot compare', async () => {
+    // Cost/conv has no field on comparison.change at all. "not available vs
+    // prior" would read as missing data rather than nothing computed.
+    renderSection(performanceDto())
+
+    await waitFor(() => expect(screen.getAllByText('Cost / conv.').length).toBe(2))
+    expect(screen.getAllByText(`${GOOGLE_ADS_NOT_AVAILABLE} vs prior 14d`).length).toBe(2)
+  })
+
+  test('clicks and impressions can be plotted from the rate strip', async () => {
+    renderSection(performanceDto())
+
+    await waitFor(() => expect(screen.getAllByText('Spend').length).toBeGreaterThan(0))
+    const clicks = screen.getByRole('button', { name: /Clicks/ })
+    expect(clicks.getAttribute('aria-pressed')).toBe('false')
   })
 
   test('shows a loading state before the stored snapshot arrives', () => {

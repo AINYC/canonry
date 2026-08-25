@@ -244,7 +244,12 @@ export async function googleAdsSync(
  * for this command without re-deriving anything.
  */
 function performanceMicros(micros: number | null, currencyCode: string | null): string {
-  return micros === null ? '—' : formatMicros(micros, currencyCode ?? 'USD')
+  if (micros === null) return '—'
+  // No resolved account currency: print the magnitude without asserting a unit.
+  // Defaulting to USD puts a dollar sign on a EUR account, which is a wrong
+  // number rather than a missing one.
+  if (currencyCode === null) return (micros / 1_000_000).toFixed(2)
+  return formatMicros(micros, currencyCode)
 }
 
 /** A raw ratio becomes a percentage only for a human reader; null stays visibly absent. */
