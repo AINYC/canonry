@@ -174,6 +174,61 @@ When a sweep finishes, the flow is: `JobRunner` → `RunCoordinator.onRunComplet
 
 `IntelligenceService` reads query snapshots from the DB, calls the pure analysis functions in `packages/intelligence/`, and persists insights + health snapshots. It also provides `backfill()` for reprocessing historical runs chronologically.
 
+#### What may serve as a comparison baseline (Critical)
+
+**Scope the history window in SQL, before the `LIMIT`.** `HISTORY_WINDOW_RUNS`
+bounds ROWS; the window has to mean *N sweeps at this run's location*. Anything
+scoped afterwards is scoped against a page that already dropped the rows it
+needed. Both predicates live in `analyzableRunPredicates()` + the location
+clause, and both were learned the hard way:
+
+- **Kind.** Only `answer-visibility` writes `query_snapshots`; the other 14
+  kinds (`ga-sync`, `traffic-sync`, `site-audit`, …) write none. Let one win
+  the "previous run" slot and every detector gets an empty baseline — not a
+  neutral one, a baseline in which nothing was ever cited. `detectFirstCitations`
+  and `detectGains` report every currently-cited query as brand new,
+  `detectRegressions` finds no prior citation to lose so real regressions vanish
+  silently, and `detectPersistentGaps` breaks each query's streak on the run
+  that lacks it. Worse the better an instance is configured: daily syncs +
+  weekly sweeps means the row before a sweep is almost always a sync.
+- **Location.** A sweep fans out to one run per configured location, so
+  siblings compete for the same row budget. At 3 locations a 5-row page holds
+  under 2 sweeps per location — the baseline vanishes and ALL transition
+  detection goes dead. At 6+, an arm falls outside its own window and used to
+  be refused outright: no insights *and no health snapshot*, so that location
+  left the dashboard rather than reading as flat.
+
+Neither is visible in a fixture-only test. A test that seeds two sweeps at one
+location never puts a foreign kind or a sibling arm in the window, which is why
+both survived a green suite for so long.
+
+Two supporting rules:
+
+- **Eligibility is a property of the run, not of its recency.** Resolve the run
+  being analyzed by id under `analyzableRunPredicates()`; never find it inside
+  the window. Finding it there silently makes "is this analyzable?" depend on
+  "is it one of the N newest rows?" — that coupling is what dropped fan-out
+  arms. The window is then anchored with `lte(runChronologyKey, …)` so it never
+  looks forward, which also makes re-analyzing a historical run correct instead
+  of refused.
+- **A run with no snapshots is not a comparison point.** The kind filter drops
+  sync/audit runs, but an `answer-visibility` run can still measure nothing (a
+  `completed` sweep with no tracked queries at sweep time) and anchor the same
+  false transitions, so the window also requires the run to have written
+  snapshots. In `analyzeAndPersist()` that is a third SQL predicate
+  (`exists(query_snapshots …)`) alongside kind and location — a post-LIMIT drop
+  would be the same trap as location, letting enough empty rows push the last
+  real sweep out of the window. `backfill()` loads the full chronology (no
+  limit), so it filters with `runIdsWithSnapshots(...)` after the read; the
+  comparison skips to the last run that measured either way.
+
+All of this applies to `backfill()` as well as `analyzeAndPersist()`. Backfill
+is the reanalyze path operators run to clear bad rows; without the same
+predicates it rewrites exactly the insights it was invoked to remove. (Backfill
+loads the full chronology rather than a window, so it needs the predicates but
+not the limit reasoning.) Clearing a historical instance is `canonry backfill
+insights <project>` — add `--dry-run` first to see the delta.
+
 ### Index coverage auto-refresh
 
 `gscUrlInspections` (the index-coverage dashboard's source of truth) is populated **only** by an `inspect-sitemap` run. `gsc-sync` does not inspect URLs at all: each URL Inspection call costs ~7.1s (Google's own live-index-lookup latency plus the ~1.1s pacing its 1 req/sec soft limit needs) and one unit of a 2000/property/day quota, so inspecting inline made the sync scale with the site — measured at 240.9s of a 241.9s run for 31 URLs while the search-analytics work took 1.07s, past the dashboard's 120s poll window. `server.ts` chains a full GSC `inspect-sitemap` off the **success** of both `executeGscSync` (`gsc-sync`) and `executeBingInspectSitemap` (`bing-inspect-sitemap` — Bing's coverage sync, which has no separate `bing-sync` kind). `packages/canonry/test/gsc-sync-no-inspection.test.ts` guards the split. The chaining lives in the `onGscSyncRequested` / `onBingInspectSitemapRequested` callbacks, so it covers UI and CLI uniformly (both hit the same endpoints) and the dashboard "Refresh search data" button.

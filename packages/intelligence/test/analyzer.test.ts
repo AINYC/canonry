@@ -145,8 +145,14 @@ describe('analyzeRuns', () => {
         { query: 'k1', provider: 'chatgpt', cited: false },
         { query: 'k1', provider: 'gemini', cited: false },
         { query: 'k2', provider: 'gemini', cited: true },
+        // chatgpt is ASKED about k2 and declines, and k5 is measured with no
+        // rival on it. A pickup and a competitor-gain are both claims that
+        // something CHANGED, so each needs a measured "no" on the baseline
+        // side — an absent row would mean the call errored.
+        { query: 'k2', provider: 'chatgpt', cited: false },
         { query: 'k3', provider: 'chatgpt', cited: false, citedCompetitorDomains: ['rival.com'] },
         { query: 'k4', provider: 'chatgpt', cited: false },
+        { query: 'k5', provider: 'chatgpt', cited: false },
       ],
     })
     const r2 = makeRun({
@@ -155,8 +161,14 @@ describe('analyzeRuns', () => {
         { query: 'k1', provider: 'chatgpt', cited: false },
         { query: 'k1', provider: 'gemini', cited: false },
         { query: 'k2', provider: 'gemini', cited: true },
+        // chatgpt is ASKED about k2 and declines, and k5 is measured with no
+        // rival on it. A pickup and a competitor-gain are both claims that
+        // something CHANGED, so each needs a measured "no" on the baseline
+        // side — an absent row would mean the call errored.
+        { query: 'k2', provider: 'chatgpt', cited: false },
         { query: 'k3', provider: 'chatgpt', cited: false, citedCompetitorDomains: ['rival.com'] },
         { query: 'k4', provider: 'chatgpt', cited: false },
+        { query: 'k5', provider: 'chatgpt', cited: false },
       ],
     })
     const r3 = makeRun({
@@ -184,8 +196,10 @@ describe('analyzeRuns', () => {
 
     expect(result.firstCitations.map(f => `${f.query}:${f.provider}`)).toEqual(['k1:gemini'])
     expect(result.providerPickups.map(p => `${p.query}:${p.provider}`)).toEqual(['k2:chatgpt'])
-    // Both k3 and k4 are uncited for 3 consecutive runs — both qualify as persistent-gaps
-    expect(result.persistentGaps.map(g => g.query).sort()).toEqual(['k3', 'k4'])
+    // k3, k4 and k5 are each uncited for 3 consecutive runs, so all three
+    // qualify as persistent-gaps. (k5 joins them because the baselines now
+    // measure it — which is what makes its competitor-gain claimable below.)
+    expect(result.persistentGaps.map(g => g.query).sort()).toEqual(['k3', 'k4', 'k5'])
     expect(result.competitorGains.map(c => `${c.query}:${c.competitorDomain}`)).toEqual(['k5:rival.com'])
     expect(result.competitorLosses.map(c => `${c.query}:${c.competitorDomain}`)).toEqual(['k3:rival.com'])
 
