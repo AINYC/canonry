@@ -3343,28 +3343,41 @@ export async function createServer(opts: {
       // Machine-facing shapes the SPA does not own. Both currently answer 200
       // with the app shell, which is worse than a 404 in different ways:
       //
-      // - `/.well-known/*` carries protocol discovery (OAuth protected-resource
-      //   and authorization-server metadata). A client handed index.html with a
-      //   200 cannot distinguish "no metadata here" from "metadata is
-      //   malformed", so discovery fails in the most confusing way available.
-      //   This is a hard prerequisite for serving MCP over OAuth, not polish.
+      // - `/.well-known/*` carries protocol discovery. Per RFC 9728 s3.1 the
+      //   protected-resource document for a resource at `/t/demo/mcp` lives at
+      //   `/.well-known/oauth-protected-resource/t/demo/mcp` — the well-known
+      //   segment is INSERTED between host and path, it is not appended under
+      //   the base path. Either way it lands under a leading dotted segment
+      //   here. A client handed index.html with a 200 cannot distinguish "no
+      //   metadata here" from "metadata is malformed", so discovery fails in
+      //   the most confusing way available. This is a hard prerequisite for
+      //   serving MCP over OAuth, not polish.
       // - Dotfile probes (/.env, /.env.local, /.git/config) are scanners, and a
       //   200 tells them the path exists.
       //
-      // ONE rule covers both: any dot-prefixed SEGMENT. Three things depend on
-      // matching any segment rather than just the last — /.git/config ends in
-      // "config"; /.well-known/... is caught only via its first segment; and
-      // that is also what makes discovery work under a base path
-      // (/t/demo/.well-known/...) with no second check. Narrowing this to the
-      // last segment silently breaks OAuth discovery.
+      // ONE rule covers both: any dot-prefixed SEGMENT, checked on the raw path
+      // AND on its percent-decoded form. Both halves are load-bearing:
+      //   - any segment, not just the last, because /.git/config ends in
+      //     "config" and the RFC 9728 document above ends in "mcp";
+      //   - decoded as well as raw, because `/%2eenv` and `/%2Eenv` otherwise
+      //     sail straight through to the SPA. Decoding also collapses `%2F`,
+      //     so `/foo%2F.env` cannot smuggle a dotted segment past the split.
+      // Decode exactly once and never in a loop: repeated decoding is its own
+      // bypass primitive. A malformed escape throws, and falls back to the raw
+      // check rather than opening the path.
       //
       // Deliberately NOT a general "does the SPA own this?" heuristic: the
       // dashboard owns arbitrary deep links like /projects/<name>, and those
       // must keep returning the document.
-      const isDotSegmentPath = url
-        .split("/")
-        .some((segment) => segment.startsWith("."));
-      if (isDotSegmentPath) {
+      const hasDotSegment = (candidate: string): boolean =>
+        candidate.split("/").some((segment) => segment.startsWith("."));
+      let decodedUrl = url;
+      try {
+        decodedUrl = decodeURIComponent(url);
+      } catch {
+        // Malformed percent-encoding. Keep the raw check below.
+      }
+      if (hasDotSegment(url) || hasDotSegment(decodedUrl)) {
         const error = notFound("Route", url);
         return reply.status(error.statusCode).send(error.toJSON());
       }
