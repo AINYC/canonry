@@ -41,7 +41,12 @@ export const GOOGLE_ADS_PERFORMANCE_EMPTY_TITLE = 'No Google Ads snapshot stored
 export const GOOGLE_ADS_PERFORMANCE_EMPTY_BODY = 'Connect a Google Ads account in Conversion Integrity below, choose the customer, then run a Google Ads sync. Spend, clicks, impressions, and conversions appear here once the first snapshot is stored.'
 
 export const GOOGLE_ADS_PERFORMANCE_AWAITING_TITLE = 'No closed days yet'
-export const GOOGLE_ADS_PERFORMANCE_AWAITING_BODY = 'Google Ads is connected and syncing. Figures appear once a full day has closed in the account time zone; the day a snapshot is captured is partial and is left out on purpose.'
+/**
+ * Deliberately does NOT say "syncing". This state is reached when the stored
+ * snapshot covers no closed day; nothing here knows whether a sync is running,
+ * so claiming one would mask a stalled workflow as "wait".
+ */
+export const GOOGLE_ADS_PERFORMANCE_AWAITING_BODY = 'The stored snapshot covers no completed day yet. Figures appear after a full day closes in the account time zone; the day a snapshot is captured is partial and is left out on purpose. If this persists, check the latest Google Ads sync in Activity.'
 
 /**
  * Only 'insufficient-history' can reach the comparison line. The route emits
@@ -456,7 +461,10 @@ export function GoogleAdsPerformanceSection({ projectName }: { projectName: stri
         <ul className="sr-only">
           {daily.map((point) => (
             <li key={point.date}>
-              {formatChartDateLabel(point.date)}: {formatGoogleAdsMicros(point.costMicros, currency)} spend, {CONVERSION_FORMAT.format(point.conversions)} conversions
+              {formatChartDateLabel(point.date)}:{' '}
+              {chartSeries
+                .map((series) => `${series.label} ${SERIES_META[series.dataKey as SeriesKey].formatValue(point[series.dataKey as SeriesKey])}`)
+                .join(', ')}
               {point.origin === 'filled' ? ', no delivery reported' : ''}
             </li>
           ))}
@@ -492,7 +500,7 @@ export function GoogleAdsPerformanceSection({ projectName }: { projectName: stri
                 </tr>
               ) : campaigns.map((campaign) => (
                 <tr key={campaign.campaignId}>
-                  <td className="max-w-xs truncate text-strong">
+                  <td className="max-w-xs truncate text-strong" title={campaign.name ?? campaign.campaignId}>
                     {campaign.name ?? <span className="font-mono text-secondary">{campaign.campaignId}</span>}
                   </td>
                   <td><ToneBadge tone={campaignStatusTone(campaign.status)}>{campaignStatusLabel(campaign.status)}</ToneBadge></td>
@@ -523,6 +531,10 @@ export function GoogleAdsPerformanceSection({ projectName }: { projectName: stri
           {' · '}customer {source.customerId}
           {' · '}latest closed day {formatChartDateLabel(source.asOfDate)}
           {source.openDate ? <>{' · '}{formatChartDateLabel(source.openDate)} still open, excluded</> : null}
+          {/* Days close in the ACCOUNT time zone, not the reader's. Without it a
+              cross-time-zone operator cannot tell what "closed" means, and the
+              excluded open day looks arbitrary. */}
+          {source.timeZone ? <>{' · '}days close in {source.timeZone}</> : null}
         </p>
       </div>
     </section>

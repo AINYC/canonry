@@ -1,7 +1,7 @@
 import React from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, describe, expect, onTestFinished, test, vi } from 'vitest'
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { GoogleAdsPerformanceDto } from '@ainyc/canonry-contracts'
 
 // Recharts is stubbed: this suite is about the VALUES the section renders.
@@ -202,9 +202,12 @@ describe('GoogleAdsPerformanceSection', () => {
     expect(screen.getByText(/Aug 15, 2026 still open, excluded/)).toBeTruthy()
 
     // Daily series, including the densified day marked as measured zero.
-    expect(screen.getByText(/Aug 3, 2026: \$84\.00 spend, 2\.5 conversions/)).toBeTruthy()
-    expect(screen.getByText(/Aug 4, 2026: \$96\.00 spend, 3 conversions/)).toBeTruthy()
-    expect(screen.getByText(/Aug 5, 2026: \$0\.00 spend, 0 conversions, no delivery reported/)).toBeTruthy()
+    // The screen-reader list mirrors the PLOTTED series, so it reads
+    // "Spend …, Conversions …" for the default selection. It must follow the
+    // tile toggles rather than hard-coding two metrics.
+    expect(screen.getByText(/Aug 3, 2026:\s*Spend \$84\.00, Conversions 2\.5/)).toBeTruthy()
+    expect(screen.getByText(/Aug 4, 2026:\s*Spend \$96\.00, Conversions 3/)).toBeTruthy()
+    expect(screen.getByText(/Aug 5, 2026:\s*Spend \$0\.00, Conversions 0.*no delivery reported/)).toBeTruthy()
 
     // Campaign table.
     const brand = campaignRow('Brand search')
@@ -386,6 +389,32 @@ describe('GoogleAdsPerformanceSection', () => {
     await waitFor(() => expect(screen.getAllByText('Spend').length).toBeGreaterThan(0))
     const clicks = screen.getByRole('button', { name: /Clicks/ })
     expect(clicks.getAttribute('aria-pressed')).toBe('false')
+  })
+
+  test('screen-reader series follow the plotted selection', async () => {
+    // The defect this guards: the SR list hard-coded Spend and Conversions
+    // while the tiles changed what was actually plotted, so a non-sighted
+    // reader got a different chart from a sighted one.
+    renderSection(performanceDto())
+
+    await waitFor(() => expect(screen.getAllByText('Spend').length).toBeGreaterThan(0))
+    fireEvent.click(screen.getByRole('button', { name: /Clicks/ }))
+
+    expect(screen.getByText(/Aug 3, 2026:.*Clicks/)).toBeTruthy()
+  })
+
+  test('names the time zone that decides when a day closes', async () => {
+    renderSection(performanceDto())
+
+    await waitFor(() => expect(screen.getAllByText('Spend').length).toBeGreaterThan(0))
+    expect(screen.getByText(/days close in America\/Los_Angeles/)).toBeTruthy()
+  })
+
+  test('does not claim a sync is running when no day has closed', async () => {
+    renderSection(performanceDto({ source: null, comparisonUnavailableReason: 'insufficient-history' }))
+
+    await waitFor(() => expect(screen.getByText('No closed days yet')).toBeTruthy())
+    expect(screen.queryByText(/syncing/i)).toBeNull()
   })
 
   test('shows a loading state before the stored snapshot arrives', () => {
