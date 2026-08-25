@@ -4434,6 +4434,11 @@ describe('GET /traffic/status', () => {
 })
 
 describe('GET /traffic/events', () => {
+  // The class-count case below pins the clock. Restore it unconditionally so a
+  // throw before that test's own `finally` cannot hand a frozen `Date` to the
+  // next test; a no-op when timers were never faked.
+  afterEach(() => { vi.useRealTimers() })
+
   async function syncedHarness() {
     const baseTime = new Date(Date.now() - 60 * 60_000)
     baseTime.setMinutes(0, 0, 0)
@@ -4895,8 +4900,23 @@ describe('GET /traffic/events', () => {
    * The events window totals must divide the same way as everything else: a
    * redirect hop's paid tags are not a paid session, or the same ad click is
    * a paid session on this surface and zero on the report.
+   *
+   * Pinned, and pinned at two instants on purpose. The default window is
+   * [now-24h, now], so at `granularity=day` the series always spans two UTC
+   * days and the bucket asserted below is `now`'s. A fixture seeded at
+   * `now - 1h` silently moves into the EARLIER of those two buckets whenever
+   * `now` falls inside the first hour of a UTC day, which emptied that point
+   * and failed every CI job between 00:00 and 01:00 UTC. The 00:30 instant is
+   * the standing guard: anything seeded relative to `now` here must survive it.
    */
-  it('window totals class-count only landed hits, keeping the full count beside them', async () => {
+  it.each([
+    '2026-05-07T13:45:00.000Z',
+    '2026-05-07T00:30:00.000Z',
+  ])('window totals class-count only landed hits, keeping the full count beside them (clock %s)', async (pinnedNow) => {
+    // Only `Date` is faked; the harness and Fastify's inject still need real
+    // timers to settle their promises.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(pinnedNow))
     const h = await buildHarness([])
     try {
       const connectRes = await h.app.inject({
@@ -4907,7 +4927,11 @@ describe('GET /traffic/events', () => {
       const sourceId = JSON.parse(connectRes.payload).id
       const projectId = h.db.select().from(trafficSources)
         .where(eq(trafficSources.id, sourceId)).get()!.projectId
-      const tsHour = new Date(Date.now() - 60 * 60 * 1000).toISOString().slice(0, 13) + ':00:00.000Z'
+      // Top of the CURRENT hour, never an hour back: that is inside both the
+      // 24h window and `now`'s UTC day at every instant of the day.
+      const hourStart = new Date()
+      hourStart.setUTCMinutes(0, 0, 0)
+      const tsHour = hourStart.toISOString()
       const now = new Date().toISOString()
       const base = {
         projectId, sourceId, tsHour, product: 'ChatGPT', operator: 'OpenAI',
@@ -4937,6 +4961,9 @@ describe('GET /traffic/events', () => {
       expect(t.aiReferralUnknownHits).toBe(0)
       // And the series charts the landed (session) figure per bucket.
       const today = JSON.parse(res.payload).series.points.at(-1)
+      // Name the bucket the last point actually is, so "today" stays a fact
+      // rather than an assumption about where the window happens to end.
+      expect(today.bucket).toBe(pinnedNow.slice(0, 10))
       expect(today.aiReferralHits).toBe(99)
       expect(today.aiReferralLandedHits).toBe(4)
     } finally { await h.close() }
