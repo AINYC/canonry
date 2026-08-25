@@ -33,6 +33,10 @@
       "Check my Canonry project and explain what changed.",
       "Run a Technical AEO audit and help fix the highest-impact issues.",
       "Review citation and mention coverage and recommend the next action."
-    ]
+    ],
+    "brandColor": "#940000",
+    "logo": "./assets/logo.svg",
+    "logoDark": "./assets/logo-dark.svg",
+    "composerIcon": "./assets/logo.svg"
   }
 }

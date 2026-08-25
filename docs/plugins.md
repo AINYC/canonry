@@ -9,6 +9,24 @@ legacy `.mcp.json`. The portable files are canonical; the compatibility files
 are generated adapters. Marketplaces remain client-owned and intentionally
 outside the Agent Plugins specification.
 
+## Codex brand assets
+
+The plugin tile Codex renders comes from `interface` in
+`.codex-plugin/plugin.json`: `logo`, `logoDark`, `composerIcon`, and
+`brandColor`. Without them Codex substitutes a generated placeholder icon. The
+assets themselves live in `plugins/canonry/assets/` and are the canonry.ai
+canary on a rounded tile — ink `#1C1413` on paper `#FFFAED` for light surfaces
+and the inverse for dark, with `brandColor` set to the canonry.ai accent
+`#940000`. They are a filled tile rather than a bare glyph because the mark is
+monochrome and would disappear against a matching client theme.
+
+These keys are client-only. The portable `plugin.json` is closed to the Agent
+Plugins field set (`scripts/sync-canonry-plugin.mjs` rejects anything else), and
+`syncClientAdapters` only rewrites the eight shared metadata fields, so the
+`interface` block survives `pnpm plugin:sync` untouched. Changing an asset still
+needs a version bump: clients key their update check off the manifest version
+and pin the cache by version (`~/.codex/plugins/cache/canonry/canonry/<version>/`).
+
 ## Prerequisites
 
 Install Node.js 22.14 or newer, then install Canonry globally so the plugin can
