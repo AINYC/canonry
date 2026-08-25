@@ -225,6 +225,7 @@ import { IntelligenceService } from "./intelligence-service.js";
 import { RunCoordinator } from "./run-coordinator.js";
 import { SessionRegistry } from "./agent/session-registry.js";
 import { buildAgentProvidersResponse } from "./agent/providers.js";
+import { registerMcpHttpRoutes } from "./mcp-http.js";
 import { registerAgentRoutes } from "./agent/agent-routes.js";
 import {
   createRecommendationExplainer,
@@ -2488,6 +2489,10 @@ export async function createServer(opts: {
     // Local-only Aero agent routes. Registered here so they inherit api-routes'
     // auth plugin — bare `registerAgentRoutes(app, ...)` would skip auth.
     registerAuthenticatedRoutes: async (scope) => {
+      // MCP over Streamable HTTP. Registered HERE, not on the root app, so it
+      // inherits the api-routes auth hook — the root app has none, and a route
+      // mounted there would serve MCP unauthenticated.
+      registerMcpHttpRoutes(scope, { selfApiUrl: opts.config.apiUrl });
       // Aero kill-switch: don't serve the interactive agent routes when disabled.
       if (!sessionRegistry) return;
       registerAgentRoutes(scope, { db: opts.db, sessionRegistry });
