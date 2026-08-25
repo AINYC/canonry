@@ -866,6 +866,36 @@ describe('IntelligenceService', () => {
       expect(result!.regressions[0]!.previousRunId).toBe(sweepA)
     })
 
+    it('keeps the real baseline when snapshotless sweeps overflow the window', () => {
+      // The measurement filter has to run in SQL, before the LIMIT — exactly
+      // like kind and location. Dropped only from the LIMITed page, enough
+      // snapshotless answer-visibility sweeps push the last measured baseline
+      // out of the row budget and the regression against it silently vanishes.
+      // Six empties (> HISTORY_WINDOW_RUNS) sit between the baseline and the
+      // current run and would consume the entire window.
+      const { db } = createTempDb('intel-empty-overflow-')
+      const projectId = seedProject(db)
+      const q1 = seedQuery(db, projectId, 'roof repair')
+
+      const sweepA = insertRun(db, projectId, 'answer-visibility', '2026-01-01T00:00:00Z')
+      seedSnapshot(db, sweepA, q1, 'gemini', 'cited', { citedDomains: ['example.com'] })
+
+      for (let day = 2; day <= 7; day++) {
+        insertRun(db, projectId, 'answer-visibility', `2026-01-0${day}T00:00:00Z`)
+      }
+
+      const sweepB = insertRun(db, projectId, 'answer-visibility', '2026-01-08T00:00:00Z')
+      seedSnapshot(db, sweepB, q1, 'gemini', 'not-cited')
+
+      const result = new IntelligenceService(db).analyzeAndPersist(sweepB, projectId)
+
+      // The window scopes to measured sweeps first, so sweepA is still the
+      // baseline and the real cited→not-cited regression is reported.
+      expect(result!.firstCitations).toHaveLength(0)
+      expect(result!.regressions).toHaveLength(1)
+      expect(result!.regressions[0]!.previousRunId).toBe(sweepA)
+    })
+
     it('counts sweeps, not syncs, against the persistent-gap history window', () => {
       // PERSISTENT_GAP_THRESHOLD is 3 and the window holds 5 runs. Unfiltered,
       // the syncs consumed the budget so the window rarely reached back far

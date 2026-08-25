@@ -211,11 +211,16 @@ Two supporting rules:
   arms. The window is then anchored with `lte(runChronologyKey, …)` so it never
   looks forward, which also makes re-analyzing a historical run correct instead
   of refused.
-- **A run with no snapshots is not a comparison point.** A sweep whose every
-  provider call failed still lands in the window as `status='partial'` with zero
-  snapshots and anchors the same false transitions, so baselines and history
-  entries are drawn from `runIdsWithSnapshots(...)`; the comparison skips to the
-  last run that measured.
+- **A run with no snapshots is not a comparison point.** The kind filter drops
+  sync/audit runs, but an `answer-visibility` run can still measure nothing (a
+  `completed` sweep with no tracked queries at sweep time) and anchor the same
+  false transitions, so the window also requires the run to have written
+  snapshots. In `analyzeAndPersist()` that is a third SQL predicate
+  (`exists(query_snapshots …)`) alongside kind and location — a post-LIMIT drop
+  would be the same trap as location, letting enough empty rows push the last
+  real sweep out of the window. `backfill()` loads the full chronology (no
+  limit), so it filters with `runIdsWithSnapshots(...)` after the read; the
+  comparison skips to the last run that measured either way.
 
 All of this applies to `backfill()` as well as `analyzeAndPersist()`. Backfill
 is the reanalyze path operators run to clear bad rows; without the same

@@ -1,4 +1,4 @@
-import { eq, desc, asc, and, ne, or, inArray, gte, lte, isNull, sql } from 'drizzle-orm'
+import { eq, desc, asc, and, ne, or, inArray, gte, lte, isNull, sql, exists } from 'drizzle-orm'
 import type { DatabaseClient } from '@ainyc/canonry-db'
 import { competitors, groupRunsByCreatedAt, gscSearchData, healthSnapshots, insights, projects, queries, querySnapshots, runs, gbpLocations, gbpDailyMetrics, gbpKeywordMonthly, gbpPlaceActions, gbpLodgingSnapshots, gbpPlaceDetails, parseJsonColumn } from '@ainyc/canonry-db'
 import { analyzeRuns, analyzeGbp, classifyRegressionSeverity, compileCompetitiveSignalResolver, PERSISTENT_GAP_THRESHOLD, GBP_INSIGHT_PROVIDER } from '@ainyc/canonry-intelligence'
@@ -115,13 +115,13 @@ export class IntelligenceService {
 
     const currentLocation = currentRunRecord.location ?? null
 
-    // 2. The run's own history window: the most recent sweeps AT ITS LOCATION,
-    //    ending at this run.
+    // 2. The run's own history window: the most recent MEASURED sweeps AT ITS
+    //    LOCATION, ending at this run.
     //
-    //    Both scoping predicates are in the WHERE, not applied to a LIMITed
-    //    page, and that placement is the whole point. `HISTORY_WINDOW_RUNS`
-    //    rows of any kind at any location is not the same window as
-    //    `HISTORY_WINDOW_RUNS` sweeps here:
+    //    All three scoping predicates are in the WHERE, not applied to a
+    //    LIMITed page, and that placement is the whole point. `HISTORY_WINDOW_RUNS`
+    //    rows of any kind, at any location, that measured nothing is not the
+    //    same window as `HISTORY_WINDOW_RUNS` real sweeps here:
     //
     //    - KIND. Only answer-visibility runs write query_snapshots. Every
     //      other kind (ga-sync, traffic-sync, site-audit, …) writes none, so
@@ -137,6 +137,16 @@ export class IntelligenceService {
     //      location, so the baseline vanished and ALL transition detection
     //      went dead. A post-LIMIT filter reads as though the scoping is
     //      handled, which is exactly why nobody saw it.
+    //    - MEASUREMENT. A run with no query_snapshots is not a comparison
+    //      point: as a baseline it manufactures false first-citations and
+    //      gains (nothing was ever cited), and as a history entry it truncates
+    //      every persistent-gap streak, since `detectPersistentGaps` breaks on
+    //      any run missing the query. The kind filter already drops sync/audit
+    //      runs, but an answer-visibility sweep can still land here having
+    //      measured nothing (a completed run with no tracked queries at sweep
+    //      time). Dropping those AFTER the LIMIT is the same trap as LOCATION —
+    //      enough empty rows push the last real sweep out of the window — so
+    //      the `exists(...)` keeps the page to runs that actually wrote rows.
     //
     //    Ordering stays finishedAt-then-createdAt so chronology is defined
     //    even when fan-out siblings share a wall-clock createdAt.
@@ -151,6 +161,14 @@ export class IntelligenceService {
           // re-analyzing a historical run compares it against its true
           // predecessor rather than against sweeps that came after it.
           lte(runChronologyKey, currentRunRecord.finishedAt ?? currentRunRecord.createdAt),
+          // MEASUREMENT: only runs that actually wrote snapshots — see above.
+          // Index seek on idx_snapshots_run, short-circuited on the first row.
+          exists(
+            this.db
+              .select({ one: sql`1` })
+              .from(querySnapshots)
+              .where(eq(querySnapshots.runId, runs.id)),
+          ),
         ),
       )
       .orderBy(desc(runs.finishedAt), desc(runs.createdAt))
@@ -174,24 +192,12 @@ export class IntelligenceService {
     }
 
     // 4. Build RunData for previous run + history window (oldest → newest,
-    //    ending at current). Location scoping already happened in SQL; the
-    //    only thing left to drop is runs that measured nothing.
-    //
-    //    A run with no snapshots is not a comparison point. This backstops
-    //    the kind filter: an answer-visibility run whose every provider call
-    //    failed still lands in the window with `status='partial'` and as a
-    //    baseline manufactures the same false first-citations. As a history
-    //    entry it is worse than useless — `detectPersistentGaps` breaks a
-    //    query's streak on any run that lacks it, so one empty run truncates
-    //    every streak. Dropping them lands the comparison on the last run
-    //    that actually measured.
+    //    ending at current). Kind, location, and measurement scoping all
+    //    happened in SQL above, so the LIMITed page already IS the window: the
+    //    N most recent measured sweeps at this location, current run included.
     const orderedRecent = [...recentRuns].reverse()
-    const measuredRunIds = this.runIdsWithSnapshots(orderedRecent.map(r => r.id))
-    const sameLocationOrdered = orderedRecent.filter(
-      r => r.id === runId || measuredRunIds.has(r.id),
-    )
-    const currentLocIdx = sameLocationOrdered.findIndex(r => r.id === runId)
-    const previousRunRecord = currentLocIdx > 0 ? sameLocationOrdered[currentLocIdx - 1]! : null
+    const currentIdx = orderedRecent.findIndex(r => r.id === runId)
+    const previousRunRecord = currentIdx > 0 ? orderedRecent[currentIdx - 1]! : null
     const previousRun = previousRunRecord
       ? this.buildRunData(
         previousRunRecord.id,
@@ -202,8 +208,8 @@ export class IntelligenceService {
       )
       : null
 
-    const history = sameLocationOrdered
-      .slice(0, currentLocIdx + 1)
+    const history = orderedRecent
+      .slice(0, currentIdx + 1)
       .map(r => r.id === runId
         ? currentRun
         : this.buildRunData(
