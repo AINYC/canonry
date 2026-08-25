@@ -69,12 +69,26 @@ export class IntelligenceService {
     //    previous run and enough history for persistent-gap detection.
     //    Order by finishedAt (then createdAt) so chronology is well-defined
     //    even when multiple test rows share a wall-clock createdAt.
+    //
+    //    ONLY answer-visibility runs. Every other kind (ga-sync,
+    //    traffic-sync, site-audit, …) writes no query_snapshots, so letting
+    //    one into the window makes it the "previous run" and hands every
+    //    detector an empty baseline: each cited query reads as a brand-new
+    //    first citation, each cited pair as a gain, and each real regression
+    //    silently disappears. The effect is WORSE on well-configured
+    //    instances — daily syncs plus weekly sweeps means the row before a
+    //    sweep is nearly always a sync. Unfiltered, HISTORY_WINDOW_RUNS also
+    //    counts syncs against its budget, so the window rarely reached far
+    //    enough back to hold PERSISTENT_GAP_THRESHOLD real sweeps.
+    //    `applySeverityTiering` below has always filtered on kind; this
+    //    query is the one that did not.
     const recentRuns = this.db
       .select()
       .from(runs)
       .where(
         and(
           eq(runs.projectId, projectId),
+          eq(runs.kind, RunKinds['answer-visibility']),
           or(eq(runs.status, 'completed'), eq(runs.status, 'partial')),
           // Defensive: RunCoordinator already skips probes before this is
           // called, but if a future call site invokes analyzeAndPersist
@@ -122,9 +136,21 @@ export class IntelligenceService {
     // treat the geo difference as a regression/gain. Filter the ordered
     // window to same-location entries, treating null/undefined as one
     // bucket (locationless runs share a chronology).
+    //
+    // Runs that wrote no snapshots measured nothing, so they are not
+    // comparison points. Backstop to the kind filter above: an
+    // answer-visibility run whose every provider call failed still lands in
+    // the window with `status='partial'`, and as a baseline it manufactures
+    // the same false first-citations. As a history entry it is worse than
+    // useless — `detectPersistentGaps` breaks a query's streak on any run
+    // that lacks it, so one empty run truncates every streak. Drop them and
+    // the comparison lands on the last run that actually measured.
     const orderedRecent = [...recentRuns].reverse()
     const currentLocation = currentRunRecord.location ?? null
-    const sameLocationOrdered = orderedRecent.filter(r => (r.location ?? null) === currentLocation)
+    const measuredRunIds = this.runIdsWithSnapshots(orderedRecent.map(r => r.id))
+    const sameLocationOrdered = orderedRecent.filter(
+      r => (r.location ?? null) === currentLocation && (r.id === runId || measuredRunIds.has(r.id)),
+    )
     const currentLocIdx = sameLocationOrdered.findIndex(r => r.id === runId)
     const previousRunRecord = currentLocIdx > 0 ? sameLocationOrdered[currentLocIdx - 1]! : null
     const previousRun = previousRunRecord
@@ -547,12 +573,17 @@ export class IntelligenceService {
       sinceTimestamp = parsed
     }
 
+    // Same window contract as `analyzeAndPersist`: answer-visibility runs
+    // only, and only those that actually wrote snapshots. A sync or audit run
+    // in this chronology becomes some sweep's baseline and replays the exact
+    // false first-citations this backfill exists to clear. See step 1 there.
     const allRuns = this.db
       .select()
       .from(runs)
       .where(
         and(
           eq(runs.projectId, project.id),
+          eq(runs.kind, RunKinds['answer-visibility']),
           or(eq(runs.status, 'completed'), eq(runs.status, 'partial')),
           // Backfill must not replay probe runs as if they were real sweeps.
           ne(runs.trigger, RunTriggers.probe),
@@ -560,6 +591,13 @@ export class IntelligenceService {
       )
       .orderBy(asc(runs.finishedAt))
       .all()
+
+    // Baselines and history entries are drawn from this narrower list: runs
+    // that wrote no snapshots measured nothing and must not anchor a
+    // comparison. `allRuns` stays the TARGET chronology so a snapshotless run
+    // is still visited and still counted as skipped.
+    const measuredRunIds = this.runIdsWithSnapshots(allRuns.map(r => r.id))
+    const measuredRuns = allRuns.filter(r => measuredRunIds.has(r.id))
 
     // Apply --from-run / --to-run range
     let startIdx = 0
@@ -619,7 +657,7 @@ export class IntelligenceService {
       // they were a temporal sequence (Michigan→Florida is not a transition).
       // Locationless runs share a chronology (treated as one bucket).
       const runLocation = run.location ?? null
-      const sameLocationRuns = allRuns.filter(r => (r.location ?? null) === runLocation)
+      const sameLocationRuns = measuredRuns.filter(r => (r.location ?? null) === runLocation)
       const sameLocIdx = sameLocationRuns.indexOf(run)
       const previousRun = sameLocIdx > 0 ? sameLocationRuns[sameLocIdx - 1]! : null
       // History window for persistent-gap: last HISTORY_WINDOW_RUNS entries
@@ -668,6 +706,22 @@ export class IntelligenceService {
       .where(eq(competitors.projectId, projectId))
       .all()
       .map(r => r.domain)
+  }
+
+  /**
+   * Which of `runIds` actually wrote query snapshots. One grouped read, so
+   * callers can drop the runs that measured nothing before paying to build
+   * RunData for them. An empty input returns an empty set without querying.
+   */
+  private runIdsWithSnapshots(runIds: readonly string[]): Set<string> {
+    if (runIds.length === 0) return new Set()
+    const rows = this.db
+      .select({ runId: querySnapshots.runId })
+      .from(querySnapshots)
+      .where(inArray(querySnapshots.runId, [...runIds]))
+      .groupBy(querySnapshots.runId)
+      .all()
+    return new Set(rows.map(r => r.runId))
   }
 
   /**

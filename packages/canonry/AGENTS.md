@@ -174,6 +174,35 @@ When a sweep finishes, the flow is: `JobRunner` → `RunCoordinator.onRunComplet
 
 `IntelligenceService` reads query snapshots from the DB, calls the pure analysis functions in `packages/intelligence/`, and persists insights + health snapshots. It also provides `backfill()` for reprocessing historical runs chronologically.
 
+#### What may serve as a comparison baseline (Critical)
+
+Every run-window query inside `IntelligenceService` must filter
+`eq(runs.kind, RunKinds['answer-visibility'])`. Only that kind writes
+`query_snapshots`; the other 14 (`ga-sync`, `traffic-sync`, `site-audit`, …)
+write none. An unfiltered window lets one of them win the "previous run" slot,
+and an empty baseline is not a neutral one — it is a baseline in which nothing
+was ever cited. `detectFirstCitations` and `detectGains` then report every
+currently-cited query as brand new, `detectRegressions` finds no prior citation
+to lose so real regressions vanish silently, and `detectPersistentGaps` breaks
+each query's streak on the run that lacks it.
+
+The failure gets **worse the better an instance is configured**: with daily
+syncs and weekly sweeps, the row immediately before a sweep is almost always a
+sync. It is also invisible in a fixture-only test, because a test that seeds
+two sweeps and nothing else never puts a foreign kind in the window.
+
+A kind filter alone is not enough. A sweep whose every provider call failed
+still lands in the window as `status='partial'` with zero snapshots and
+anchors the same false transitions, so baselines and history entries are drawn
+from `runIdsWithSnapshots(...)` — a run that measured nothing is not a
+comparison point, and the comparison skips to the last run that measured.
+
+Both rules apply to `backfill()` as well as `analyzeAndPersist()`. Backfill is
+the reanalyze path operators run to clear bad rows; without the same filters it
+rewrites exactly the insights it was invoked to remove. Clearing a historical
+instance is `canonry backfill insights <project>` (add `--dry-run` first to see
+the delta).
+
 ### Index coverage auto-refresh
 
 `gscUrlInspections` (the index-coverage dashboard's source of truth) is populated **only** by an `inspect-sitemap` run. `gsc-sync` does not inspect URLs at all: each URL Inspection call costs ~7.1s (Google's own live-index-lookup latency plus the ~1.1s pacing its 1 req/sec soft limit needs) and one unit of a 2000/property/day quota, so inspecting inline made the sync scale with the site — measured at 240.9s of a 241.9s run for 31 URLs while the search-analytics work took 1.07s, past the dashboard's 120s poll window. `server.ts` chains a full GSC `inspect-sitemap` off the **success** of both `executeGscSync` (`gsc-sync`) and `executeBingInspectSitemap` (`bing-inspect-sitemap` — Bing's coverage sync, which has no separate `bing-sync` kind). `packages/canonry/test/gsc-sync-no-inspection.test.ts` guards the split. The chaining lives in the `onGscSyncRequested` / `onBingInspectSitemapRequested` callbacks, so it covers UI and CLI uniformly (both hit the same endpoints) and the dashboard "Refresh search data" button.

@@ -709,6 +709,200 @@ describe('IntelligenceService', () => {
     })
   })
 
+  // Regression suite: the run-history window used to select the "previous
+  // run" without filtering by kind. Only `answer-visibility` runs write
+  // query_snapshots, but any of the other 14 kinds could win the baseline
+  // slot — and an empty baseline makes every cited query read as a
+  // brand-new first citation. Counterintuitively this got WORSE the better
+  // an instance was configured: daily syncs plus weekly sweeps means the
+  // row immediately before a sweep is almost always a sync.
+  describe('baseline selection ignores runs that measured nothing', () => {
+    function insertRun(
+      db: ReturnType<typeof createClient>,
+      projectId: string,
+      kind: string,
+      finishedAt: string,
+    ): string {
+      const runId = crypto.randomUUID()
+      db.insert(runs).values({
+        id: runId,
+        projectId,
+        kind,
+        status: 'completed',
+        trigger: 'manual',
+        createdAt: finishedAt,
+        finishedAt,
+      }).run()
+      return runId
+    }
+
+    it('does not manufacture first-citations when a sync run sits between two sweeps', () => {
+      const { db } = createTempDb('intel-kind-baseline-')
+      const projectId = seedProject(db)
+      const q1 = seedQuery(db, projectId, 'roof repair')
+      const q2 = seedQuery(db, projectId, 'metal roofing')
+
+      // Sweep A cited BOTH queries — so nothing in sweep B is a first citation.
+      const sweepA = insertRun(db, projectId, 'answer-visibility', '2026-01-01T00:00:00Z')
+      seedSnapshot(db, sweepA, q1, 'gemini', 'cited', { citedDomains: ['example.com'] })
+      seedSnapshot(db, sweepA, q2, 'gemini', 'cited', { citedDomains: ['example.com'] })
+
+      // Four days of syncs land between the two sweeps. Each is a completed,
+      // non-probe run with zero snapshots, and together they fill the entire
+      // 5-run history window.
+      insertRun(db, projectId, 'ga-sync', '2026-01-02T00:00:00Z')
+      insertRun(db, projectId, 'traffic-sync', '2026-01-03T00:00:00Z')
+      insertRun(db, projectId, 'gsc-sync', '2026-01-04T00:00:00Z')
+      insertRun(db, projectId, 'site-audit', '2026-01-05T00:00:00Z')
+
+      const sweepB = insertRun(db, projectId, 'answer-visibility', '2026-01-06T00:00:00Z')
+      seedSnapshot(db, sweepB, q1, 'gemini', 'cited', { citedDomains: ['example.com'] })
+      seedSnapshot(db, sweepB, q2, 'gemini', 'cited', { citedDomains: ['example.com'] })
+
+      const service = new IntelligenceService(db)
+      const result = service.analyzeAndPersist(sweepB, projectId)
+
+      expect(result).not.toBeNull()
+      // Both queries were already cited in the real previous sweep. Pre-fix
+      // the baseline was the site-audit run, whose empty snapshot set made
+      // both look brand new: 2 first-citations + 2 gains, all false.
+      expect(result!.firstCitations).toHaveLength(0)
+      expect(result!.gains).toHaveLength(0)
+      expect(result!.insights.filter(i => i.type === 'first-citation')).toHaveLength(0)
+      expect(result!.insights.filter(i => i.type === 'gain')).toHaveLength(0)
+
+      // And the persisted rows agree with the in-memory result.
+      const savedTypes = db.select().from(insights).all().map(i => i.type)
+      expect(savedTypes.filter(t => t === 'first-citation')).toHaveLength(0)
+      expect(savedTypes.filter(t => t === 'gain')).toHaveLength(0)
+    })
+
+    it('still detects a real regression across an interleaved sync run', () => {
+      // The mirror of the case above: an empty baseline holds no cited pairs,
+      // so `detectRegressions` finds nothing and a real loss is silently
+      // dropped. The kind filter has to restore the true negative AND the
+      // true positive.
+      const { db } = createTempDb('intel-kind-regression-')
+      const projectId = seedProject(db)
+      const q1 = seedQuery(db, projectId, 'roof repair')
+
+      const sweepA = insertRun(db, projectId, 'answer-visibility', '2026-01-01T00:00:00Z')
+      seedSnapshot(db, sweepA, q1, 'gemini', 'cited', { citedDomains: ['example.com'] })
+
+      insertRun(db, projectId, 'ga-sync', '2026-01-02T00:00:00Z')
+      insertRun(db, projectId, 'traffic-sync', '2026-01-03T00:00:00Z')
+
+      const sweepB = insertRun(db, projectId, 'answer-visibility', '2026-01-04T00:00:00Z')
+      seedSnapshot(db, sweepB, q1, 'gemini', 'not-cited')
+
+      const service = new IntelligenceService(db)
+      const result = service.analyzeAndPersist(sweepB, projectId)
+
+      expect(result!.regressions).toHaveLength(1)
+      expect(result!.regressions[0]!.query).toBe('roof repair')
+      expect(result!.regressions[0]!.provider).toBe('gemini')
+      expect(result!.regressions[0]!.previousRunId).toBe(sweepA)
+    })
+
+    it('does not let a snapshotless answer-visibility run anchor the comparison', () => {
+      // The kind filter alone is not enough: a sweep whose every provider
+      // call failed still lands in the window as a completed/partial
+      // answer-visibility run with zero snapshots, and would anchor the same
+      // false first-citations. The snapshot guard skips it to the last run
+      // that actually measured.
+      const { db } = createTempDb('intel-empty-baseline-')
+      const projectId = seedProject(db)
+      const q1 = seedQuery(db, projectId, 'roof repair')
+
+      const sweepA = insertRun(db, projectId, 'answer-visibility', '2026-01-01T00:00:00Z')
+      seedSnapshot(db, sweepA, q1, 'gemini', 'cited', { citedDomains: ['example.com'] })
+
+      // A sweep that produced nothing — right kind, no measurement.
+      insertRun(db, projectId, 'answer-visibility', '2026-01-02T00:00:00Z')
+
+      const sweepC = insertRun(db, projectId, 'answer-visibility', '2026-01-03T00:00:00Z')
+      seedSnapshot(db, sweepC, q1, 'gemini', 'not-cited')
+
+      const service = new IntelligenceService(db)
+      const result = service.analyzeAndPersist(sweepC, projectId)
+
+      expect(result!.firstCitations).toHaveLength(0)
+      expect(result!.gains).toHaveLength(0)
+      // The comparison lands on sweepA, the last run that measured anything.
+      expect(result!.regressions).toHaveLength(1)
+      expect(result!.regressions[0]!.previousRunId).toBe(sweepA)
+    })
+
+    it('counts sweeps, not syncs, against the persistent-gap history window', () => {
+      // PERSISTENT_GAP_THRESHOLD is 3 and the window holds 5 runs. Unfiltered,
+      // the syncs consumed the budget so the window rarely reached back far
+      // enough to hold 3 real sweeps — and each empty run also truncated the
+      // uncited streak, since detectPersistentGaps breaks on any run missing
+      // the query. Three uncited sweeps interleaved with syncs is a real
+      // 3-run gap and must be reported as one.
+      const { db } = createTempDb('intel-gap-window-')
+      const projectId = seedProject(db)
+      const q1 = seedQuery(db, projectId, 'roof repair')
+
+      const sweeps: string[] = []
+      for (const [i, day] of ['01', '03', '05'].entries()) {
+        const sweep = insertRun(db, projectId, 'answer-visibility', `2026-01-${day}T00:00:00Z`)
+        seedSnapshot(db, sweep, q1, 'gemini', 'not-cited')
+        sweeps.push(sweep)
+        // A sync the day after each sweep except the last.
+        if (i < 2) insertRun(db, projectId, 'ga-sync', `2026-01-0${Number(day) + 1}T00:00:00Z`)
+      }
+
+      const service = new IntelligenceService(db)
+      const result = service.analyzeAndPersist(sweeps[2]!, projectId)
+
+      expect(result!.persistentGaps).toHaveLength(1)
+      expect(result!.persistentGaps[0]!.query).toBe('roof repair')
+      expect(result!.persistentGaps[0]!.streak).toBe(3)
+    })
+
+    it('backfill draws baselines from sweeps only, so a reanalyze clears the false rows', () => {
+      // The reanalyze path had the same defect, so re-running it would have
+      // rewritten the same false insights it exists to clear.
+      const { db } = createTempDb('intel-backfill-kind-')
+      const projectId = seedProject(db)
+      const q1 = seedQuery(db, projectId, 'roof repair')
+
+      const sweepA = insertRun(db, projectId, 'answer-visibility', '2026-01-01T00:00:00Z')
+      seedSnapshot(db, sweepA, q1, 'gemini', 'cited', { citedDomains: ['example.com'] })
+      insertRun(db, projectId, 'ga-sync', '2026-01-02T00:00:00Z')
+      const sweepB = insertRun(db, projectId, 'answer-visibility', '2026-01-03T00:00:00Z')
+      seedSnapshot(db, sweepB, q1, 'gemini', 'cited', { citedDomains: ['example.com'] })
+
+      const service = new IntelligenceService(db)
+
+      // Plant the false rows a pre-fix analysis would have written, then
+      // prove the backfill removes them rather than reproducing them.
+      db.insert(insights).values({
+        id: crypto.randomUUID(),
+        projectId,
+        runId: sweepB,
+        type: 'first-citation',
+        severity: 'medium',
+        title: 'First citation for "roof repair" on gemini',
+        query: 'roof repair',
+        provider: 'gemini',
+        dismissed: false,
+        createdAt: '2026-01-03T00:00:00Z',
+      }).run()
+
+      const result = service.backfill('test-project')
+
+      // Only the two sweeps are visited; the sync is not a target.
+      expect(result.processed).toBe(2)
+      expect(result.skipped).toBe(0)
+
+      const remaining = db.select().from(insights).all()
+      expect(remaining.filter(i => i.type === 'first-citation')).toHaveLength(0)
+      expect(remaining.filter(i => i.type === 'gain')).toHaveLength(0)
+    })
+  })
+
   // Regression suite for #480: the recurrence lookback used to count rows
   // instead of time-points, so a multi-location project's effective look-back
   // window was halved (or worse for 3+ locations). The fix walks fan-out
