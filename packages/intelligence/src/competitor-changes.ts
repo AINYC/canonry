@@ -1,4 +1,5 @@
 import type { RunData, CompetitorChange } from './types.js'
+import { observedKeys } from './observation-coverage.js'
 
 interface BuildOptions {
   trackedCompetitors: readonly string[]
@@ -32,12 +33,16 @@ export function detectCompetitorGains(
 
   const currentMap = buildCompetitorQueryMap(currentRun, tracked)
   const previousMap = buildCompetitorQueryMap(previousRun, tracked)
+  // "Did not appear before" is only knowable for a query the baseline
+  // measured. See `observation-coverage.ts`.
+  const previousObservedQueries = observedKeys(previousRun, snap => snap.query)
 
   const result: CompetitorChange[] = []
   for (const competitorDomain of tracked) {
     const currentQs = currentMap.get(competitorDomain) ?? new Set<string>()
     const previousQs = previousMap.get(competitorDomain) ?? new Set<string>()
     for (const query of currentQs) {
+      if (!previousObservedQueries.has(query)) continue
       if (previousQs.has(query)) continue
       result.push({ query, competitorDomain })
     }
@@ -59,12 +64,17 @@ export function detectCompetitorLosses(
 
   const currentMap = buildCompetitorQueryMap(currentRun, tracked)
   const previousMap = buildCompetitorQueryMap(previousRun, tracked)
+  // The MIRROR case: a loss is claimed from absence in the CURRENT run, so it
+  // is the current run that must have measured the query. A rival does not
+  // "drop off" a query this sweep failed to ask. See `observation-coverage.ts`.
+  const currentObservedQueries = observedKeys(currentRun, snap => snap.query)
 
   const result: CompetitorChange[] = []
   for (const competitorDomain of tracked) {
     const currentQs = currentMap.get(competitorDomain) ?? new Set<string>()
     const previousQs = previousMap.get(competitorDomain) ?? new Set<string>()
     for (const query of previousQs) {
+      if (!currentObservedQueries.has(query)) continue
       if (currentQs.has(query)) continue
       result.push({ query, competitorDomain })
     }

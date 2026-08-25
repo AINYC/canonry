@@ -23,10 +23,12 @@ declare(strict_types=1);
 namespace Canonry\TrafficLogger;
 
 final class Plugin {
-    // Schema 2 (plugin 0.3.0): the per-site IP hash was replaced by the raw
-    // client IP so the canonry server can verify bot claims against
-    // published operator IP ranges.
-    public const SCHEMA_VERSION = '2';
+    public const VERSION = '1.1.1';
+
+    // Schema 2 (plugin 0.3.0) replaced the per-site IP hash with the raw
+    // client IP. Schema 3 (plugin 1.1.1) removes the retired browser-beacon
+    // option; the events table itself is unchanged by that cleanup.
+    public const SCHEMA_VERSION = '3';
     public const SCHEMA_VERSION_OPTION = 'canonry_traffic_logger_schema_version';
 
     public const RETENTION_OPTION = 'canonry_traffic_logger_retention_days';
@@ -44,6 +46,9 @@ final class Plugin {
     // Pre-0.3.0 stored a per-site IP-hash salt. Hashing is gone; the option
     // is deleted on uninstall so upgraded sites do not leave it behind.
     public const LEGACY_SALT_OPTION = 'canonry_traffic_logger_ip_salt';
+    // Plugin 1.1.0 briefly stored a browser-beacon mode. The beacon was
+    // removed in 1.1.1; clean the orphan on upgrade and uninstall.
+    public const LEGACY_BEACON_OPTION = 'canonry_traffic_logger_beacon';
 
     public const PRUNE_HOOK = 'canonry_traffic_logger_prune';
 
@@ -116,6 +121,7 @@ final class Plugin {
         }
 
         self::dropLegacyIpHashColumn($table);
+        delete_option(self::LEGACY_BEACON_OPTION);
     }
 
     /**
@@ -147,6 +153,7 @@ final class Plugin {
         delete_option(self::TRUST_PROXY_OPTION);
         delete_option(self::ANONYMOUS_ID_OPTION);
         delete_option(self::LEGACY_SALT_OPTION);
+        delete_option(self::LEGACY_BEACON_OPTION);
 
         if (function_exists('wp_clear_scheduled_hook')) {
             wp_clear_scheduled_hook(self::PRUNE_HOOK);

@@ -59,6 +59,10 @@ final class EndpointAuthTest extends TestCase {
         $this->assertArrayHasKey('next_cursor', $body);
         $this->assertArrayHasKey('has_more', $body);
         $this->assertArrayHasKey('site', $body);
+        $this->assertSame(
+            \Canonry\TrafficLogger\Plugin::VERSION,
+            $body['site']['plugin_version'] ?? null
+        );
         $this->assertMatchesRegex(
             '/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/',
             (string) ($body['site']['anonymous_id'] ?? '')

@@ -1,4 +1,5 @@
 import type { RunData, Gain, Snapshot } from './types.js'
+import { observedKeys } from './observation-coverage.js'
 
 /**
  * See `regressions.ts` — same key composition keeps multi-location fan-out
@@ -16,6 +17,10 @@ export function detectGains(currentRun: RunData, previousRun: RunData): Gain[] {
   }
   const gains: Gain[] = []
 
+  // What the baseline OBSERVED, separately from what it found cited. A pair
+  // its provider errored on has no row at all, and no row is not a "not
+  // cited" reading to have gained against. See `observation-coverage.ts`.
+  const previousObserved = observedKeys(previousRun, snapshotKey)
   const previousCited = new Set<string>()
   for (const snap of previousRun.snapshots) {
     if (snap.cited) {
@@ -25,7 +30,7 @@ export function detectGains(currentRun: RunData, previousRun: RunData): Gain[] {
 
   for (const snap of currentRun.snapshots) {
     const key = snapshotKey(snap)
-    if (snap.cited && !previousCited.has(key)) {
+    if (snap.cited && previousObserved.has(key) && !previousCited.has(key)) {
       gains.push({
         query: snap.query,
         provider: snap.provider,

@@ -72,21 +72,17 @@ sync flow does NOT echo the private key back in any response.
 ## Connecting a WordPress source
 
 The WordPress adapter pulls events from the **Canonry Traffic Logger**
-WordPress plugin, which captures every non-admin GET page-load **that
-reaches PHP** and exposes a paginated REST endpoint protected by an
-Application Password.
+WordPress plugin, which is PHP-only: it captures non-admin GET page-loads
+**that reach PHP** and exposes a paginated REST endpoint protected by an
+Application Password. It has no browser-side capture path.
 
-> **Cache blind spot.** The plugin is a PHP hook, so it only sees
-> requests that execute WordPress. A full-page cache (LiteSpeed, WP
-> Rocket, W3 Total Cache, WP Super Cache) or CDN serves cached pages
-> before PHP runs, so cache-served page views, including live AI
-> user-fetches (Claude-User, ChatGPT-User), are NOT logged. Bot crawls
-> of uncached endpoints (sitemap, feeds, assets, cache misses) still
-> come through, which can make capture look healthy while real page
-> views go uncounted. Exclude AI user-agents from the cache (and any
-> CDN), or capture from access/edge logs instead. The
-> `traffic.source.cache-blindspot` doctor check warns whenever a
-> WordPress source is connected.
+> **Cache blind spot.** Cache-served requests never execute PHP, so they
+> produce no plugin event. A full-page cache (LiteSpeed, WP Rocket, W3 Total
+> Cache, WP Super Cache) or any CDN can therefore make the source look active
+> while real page views, AI crawlers, and live AI user-fetches such as
+> `Claude-User` and `ChatGPT-User` go uncounted. To use this source for
+> AI-agent traffic, bypass **every** cache layer for the selected AI user
+> agents, or capture from access/edge logs instead.
 
 **Which user-agents to exclude from the cache** (one per line in
 LiteSpeed's "Do Not Cache User Agents", WP Rocket's
@@ -94,23 +90,61 @@ LiteSpeed's "Do Not Cache User Agents", WP Rocket's
 Agents"):
 
 ```
-Claude-User
-ClaudeBot
-ChatGPT-User
-OAI-SearchBot
 GPTBot
+OAI-SearchBot
+OAI-AdsBot
+ChatGPT-User
+openai-mcp
+ClaudeBot
+Claude-
+anthropic-ai
 PerplexityBot
 Perplexity-User
+ShapBot
+Shap-User
+Google-Agent
+Google-GeminiNotebook
+Google-NotebookLM
+Google-CloudVertexBot
+Bytespider
+Applebot
+meta-externalagent
+CCBot
+cohere-ai
+Diffbot
+MistralAI-User
+MistralAI-Index
+MistralAI-Training
+MistralBot
+DeepSeekBot
+xAI-Bot
+Grok-Bot
+GrokBot
+YouBot
+DuckAssistBot
+Amazonbot
+Amzn-SearchBot
+Amzn-User
 ```
 
-These are the answer-engine fetchers in both live-user-fetch (`*-User`)
-and crawler forms. Do NOT add `Googlebot` or `Bingbot`: caching helps
-search crawlers (page speed is a ranking signal, and cached pages let
-them crawl more per visit, which matters most on crawl-budget-starved
-sites), and their crawl stats are already authoritative in GSC and Bing
-Webmaster Tools. Rule of thumb: bypass cache only for agents you cannot
-measure elsewhere and that gain nothing from being cached. Answer-engine
-fetchers fit both; search crawlers fit neither.
+This list mirrors Canonry's current classifier: answer-engine user-fetch,
+crawl, search, and training agents for which WordPress has no cache-independent
+measurement surface. `ClaudeBot` covers Anthropic's unhyphenated core crawler;
+`Claude-` is a separate family rule so newly named `Claude-*Bot` variants
+inherit the bypass. Do NOT add traditional search agents
+`Googlebot`, `bingbot`, `DuckDuckBot`, `YandexBot`, or `Baiduspider`: caching
+helps them crawl efficiently, and the important Google/Bing crawl evidence is
+available through their webmaster tools.
+
+> **1.1.0 -> 1.1.1 measurement boundary.** Plugin 1.1.0 briefly added a
+> JavaScript beacon to recover browser/referral page views served from cache.
+> Plugin 1.1.1 removes it and returns to PHP-only capture. This intentionally
+> means cache-served browser referrals can again be absent even when GA4
+> reports sessions; neither version made cache-served crawler requests visible
+> to PHP. Annotate the upgrade time, do not interpret a trend spanning it as
+> like-for-like traffic, and purge HTML from both the WordPress cache and every
+> outer CDN. A temporary `/wp-json/canonry/v1/pv` compatibility route returns
+> `204` for scripts stranded in old cached HTML, but never records an event.
 
 ```bash
 # 1. Install the plugin. Download the latest release zip from the
@@ -978,7 +1012,7 @@ The doctor checks are adapter-agnostic. When they fail or warn:
 | `traffic.source.queue-backlog` | `traffic.queue-backlog.within-drain-budget` | 1–1,000 Queue messages remain. If no new messages arrive, the next scheduled sync can drain them. Run a manual sync to accelerate. |
 | `traffic.source.queue-backlog` | `traffic.queue-backlog.remaining` | More than 1,000 Queue messages remain. Run a manual sync. If the backlog persists, shorten the traffic-sync schedule. |
 | `traffic.source.credentials` | `traffic.credentials.resolve-failed` | Reconnect from the host that owns the source credentials. Queue pull requires a non-empty Account Queues Edit token paired by source ID. |
-| `traffic.source.cache-blindspot` | `traffic.cache-blindspot.wordpress-plugin` | A WordPress source is connected, so the plugin cannot see cache-served page views. Exclude AI user-agents from the page cache and any CDN, or switch to a log/edge source. Warns only, not a failure. |
+| `traffic.source.cache-blindspot` | `traffic.cache-blindspot.wordpress-plugin` | Cache-served requests never execute PHP and produce no event, so a source can look active while real page views go uncounted. Exclude selected AI user agents from every page-cache and CDN layer, or switch to a log/edge source. Warns only, not a failure. |
 | `traffic.source.worker-version` | `traffic.worker-version.waiting-for-first-event` | Send a smoke-test request through the Worker. For Queue delivery, run a sync to ingest it. Then run the doctor again. |
 | `traffic.source.worker-version` | `traffic.worker-version.stale` | Regenerate and redeploy the Worker from the credential-owning host with the source's existing delivery mode, then verify the route or Queue binding. |
 
@@ -1043,21 +1077,18 @@ domains, or PII are surfaced.
 
 ## Limits & caveats
 
-- **The WordPress plugin is blind to cache-served traffic.** The
-  `wordpress` adapter logs only requests that reach PHP. A full-page
-  cache or CDN serves cached pages from the edge, so cache-served page
-  views, including live AI user-fetches (Claude-User, ChatGPT-User),
-  never reach the plugin and go uncounted, even though bot crawls of
-  uncached endpoints (sitemap, assets) still appear. On a cached
-  WordPress site, treat the plugin's page-view counts as a floor, not a
-  total. Either exclude AI user-agents from the cache + CDN, or capture
-  cache-independent via a `cloud-run` / `vercel` / edge-log source. The
-  `traffic.source.cache-blindspot` doctor check surfaces this. Adapter
-  coverage differs: `vercel` ingests edge request-logs so cache hits are
-  captured (it records the `cache` HIT/MISS label), and `cloud-run` logs
-  every request that reaches the service, missing only what a CDN placed
-  in front of Cloud Run serves from its own edge cache. Only the
-  hook-based `wordpress` adapter has the always-present blind spot.
+- **The WordPress plugin is PHP-only.** The `wordpress` adapter records only
+  requests that reach PHP. Cache-served page requests, including AI crawlers
+  and live AI user-fetches, go uncounted even while crawls of uncached
+  sitemaps, assets, or cache misses appear. On a cached WordPress site, treat
+  this source as a floor unless the selected AI user agents bypass every
+  page-cache and CDN layer. The static doctor warning surfaces this limitation
+  without requesting the origin. Otherwise, use a cache-independent
+  `cloud-run`, `vercel`, or edge-log source. Adapter coverage
+  differs: `vercel` ingests edge request logs so cache hits are captured (it
+  records the `cache` HIT/MISS label), and `cloud-run` logs every request that
+  reaches the service, missing only what a CDN ahead of Cloud Run serves at its
+  own edge.
 - **Path-level citation cross-reference is not implemented yet.** The
   citation store is domain-grain (`query_snapshots.cited_domains`). A
   future iteration that lands URL-grain citation evidence will extend
@@ -1078,17 +1109,21 @@ domains, or PII are surfaced.
   `traffic_sources.source_type` and a `TrafficSourceValidator`
   registration.
 
-### Page caches and the beacon lane
+### Page caches and PHP-only coverage
 
-A page cache (LiteSpeed, WP Rocket, Super Cache, any `advanced-cache.php`
-drop-in) serves visitors before WordPress PHP boots, so the plugin's request
-hook never sees those page views: on a cached site the PHP lane records only
-redirects, errors, and crawlers on uncached URLs, and landed AI referrals read
-as zero while GA4 shows sessions. Plugin 1.1.0 adds a beacon lane — a
-first-party inline ping to the plugin's own REST route (never page-cached) —
-that records real browser views, cached or not. It auto-enables when a page
-cache is detected (`Settings → Canonry Traffic Logger` can force on/off).
-Bots and non-200s stay in the PHP lane; browser 200s belong to the beacon, so
-uncached views are not double-counted. On sites running plugin ≤ 1.0.x behind
-a cache, treat GA4 as the landed-visit signal and the server source as the
-bot/crawler signal only.
+A page cache (LiteSpeed, WP Rocket, Super Cache, or any
+`advanced-cache.php` drop-in) can serve a request before WordPress boots. The
+plugin therefore has one capture lane only: PHP. It cannot recover a
+cache-served crawler, user fetch, referral, or browser page view after the
+fact.
+
+For the AI agents measured by this source, configure cache bypasses at every
+layer that can answer the public request: the WordPress cache, a host/CDN cache,
+and any edge cache. A LiteSpeed exclusion alone is insufficient when an outer
+CDN can return a cached response first.
+
+Cache exclusions for the selected AI agents can recover crawler and user-fetch
+coverage, but they do not recover ordinary browser referrals served from cache.
+Use GA4 for landed browser visits or edge/access logs for cache-independent
+request coverage. The `traffic.source.cache-blindspot` doctor check is a static
+warning; it does not request or impersonate traffic against the public origin.

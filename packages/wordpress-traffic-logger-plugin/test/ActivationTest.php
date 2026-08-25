@@ -72,6 +72,18 @@ final class ActivationTest extends TestCase {
         );
     }
 
+    public function test_maybe_upgrade_removes_retired_beacon_option(): void {
+        update_option('canonry_traffic_logger_schema_version', '2');
+        update_option(\Canonry\TrafficLogger\Plugin::LEGACY_BEACON_OPTION, 'on');
+
+        \Canonry\TrafficLogger\Plugin::maybeUpgrade();
+
+        $this->assertSame(
+            false,
+            get_option(\Canonry\TrafficLogger\Plugin::LEGACY_BEACON_OPTION, false)
+        );
+    }
+
     public function test_maybe_upgrade_runs_when_no_version_recorded(): void {
         // No schema-version option at all (files dropped in, never activated).
         \Canonry\TrafficLogger\Plugin::maybeUpgrade();
@@ -104,5 +116,17 @@ final class ActivationTest extends TestCase {
             }
         }
         $this->assertTrue($wired, 'maybeUpgrade must be wired to admin_init');
+    }
+
+    public function test_release_version_is_consistent_across_plugin_surfaces(): void {
+        $main = (string) file_get_contents(__DIR__ . '/../plugin/canonry-traffic-logger.php');
+        preg_match('/^ \\* Version:\\s+([^\\s]+)$/m', $main, $matches);
+        $package = json_decode(
+            (string) file_get_contents(__DIR__ . '/../package.json'),
+            true
+        );
+
+        $this->assertSame(\Canonry\TrafficLogger\Plugin::VERSION, $matches[1] ?? null);
+        $this->assertSame(\Canonry\TrafficLogger\Plugin::VERSION, $package['version'] ?? null);
     }
 }
