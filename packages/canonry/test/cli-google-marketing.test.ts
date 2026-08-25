@@ -183,7 +183,8 @@ describe('Google Marketing CLI', () => {
     const commands = createGoogleMarketingCliCommands(() => client)
 
     await expect(captureStdout(async () => {
-      await dispatchRegisteredCommand(['google-ads', 'performance', 'example', '--window', '30d'], 'text', commands)
+      // 30d is servable now; 90d is the window the stored snapshot cannot reach.
+      await dispatchRegisteredCommand(['google-ads', 'performance', 'example', '--window', '90d'], 'text', commands)
     })).rejects.toMatchObject({ code: 'CLI_USAGE_ERROR' })
     expect(client.getGoogleAdsPerformance).not.toHaveBeenCalled()
   })
