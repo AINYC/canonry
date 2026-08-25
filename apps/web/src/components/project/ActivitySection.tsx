@@ -75,6 +75,7 @@ function aiLandingPageSearchText(row: ApiGaTrafficAiLandingPage): string {
   return urlSearchText(row.landingPage)
 }
 const AI_LANDING_PAGE_SIZE = 25
+const TOP_PAGE_SIZE = 10
 
 const EMPTY_AI_DAILY: GA4AiReferralDailyDto = {
   days: [],
@@ -378,6 +379,7 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
   }
 
   function handlePageSort(key: PageSortKey) {
+    topPagesTable.setPage(1)
     if (pageSortKey === key) {
       setPageSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))
     } else {
@@ -415,6 +417,12 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
       return pageSortDir === 'asc' ? (av as number) - (bv as number) : (bv as number) - (av as number)
     })
   }, [traffic?.topPages, pageSortKey, pageSortDir])
+
+  const topPagesTable = useClientTable({
+    rows: sortedPages,
+    getSearchText: (page) => urlSearchText(page.landingPage),
+    pageSize: TOP_PAGE_SIZE,
+  })
 
   const sortedAiReferrals = useMemo(() => {
     if (!traffic?.aiReferrals) return []
@@ -761,7 +769,7 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
             <Card className="surface-card p-5 mb-4">
               <div className="mb-4">
                 <p className="eyebrow eyebrow-soft">Summary</p>
-                <h3 className="text-sm font-semibold text-heading">Channel breakdown</h3>
+                <h3 className="text-sm font-semibold text-heading">Sessions by channel</h3>
               </div>
 
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
@@ -787,7 +795,7 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
                   tooltip="Sessions with no source — bookmarks, typed URLs, untagged email, in-app browsers, and AI-driven traffic whose referrer header was stripped. Known AI referrers are removed if GA4 classified them as Direct."
                 />
                 <AttributionStat
-                  label="Known AI referrers (lower bound)"
+                  label="Visitors from AI (at least)"
                   value={aiSharePctBySessionDisplay}
                   hint={paidAiSessionsBySession > 0
                     ? `${aiSessionsBySession.toLocaleString()} sessions · ${paidAiSessionsBySession.toLocaleString()} paid`
@@ -818,7 +826,7 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
               <div className="mb-4 flex items-end justify-between gap-3">
                 <div>
                   <p className="eyebrow eyebrow-soft">Detail</p>
-                  <h3 className="text-sm font-semibold text-heading">Known AI referrers by source</h3>
+                  <h3 className="text-sm font-semibold text-heading">Where AI visitors came from</h3>
                 </div>
                 <p className="text-xs text-muted">
                   {traffic.aiReferrals.length > 0 ? `${aiSourceCount} unique sources, ${traffic.aiReferrals.length} rows` : 'No source rows'}
@@ -859,7 +867,7 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
               <div className="mb-4 flex items-end justify-between gap-3">
                 <div>
                   <p className="eyebrow eyebrow-soft">Detail</p>
-                  <h3 className="text-sm font-semibold text-heading">Known AI referrers by landing page</h3>
+                  <h3 className="text-sm font-semibold text-heading">Pages AI visitors landed on</h3>
                 </div>
                 <p className="text-xs text-muted">
                   {aiLandingRowCount}
@@ -923,9 +931,9 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
                 </>
               ) : (
                 <div className="flex flex-col items-center justify-center py-8 text-center">
-                  <p className="text-sm text-secondary mb-2">No AI landing pages detected yet</p>
+                  <p className="text-sm text-secondary mb-2">No AI visits recorded yet</p>
                   <p className="text-xs text-muted max-w-sm">
-                    Known-AI landing pages appear after a GA4 sync records visits from AI referrers.
+                    Pages appear here once a GA4 sync records a visit that arrived from an AI engine.
                   </p>
                 </div>
               )}
@@ -953,7 +961,7 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
                 <div className="mb-4 flex items-end justify-between gap-3">
                   <div>
                     <p className="eyebrow eyebrow-soft">Trend</p>
-                    <h3 className="text-sm font-semibold text-heading">Social sessions over time</h3>
+                    <h3 className="text-sm font-semibold text-heading">Social sessions</h3>
                   </div>
                   {socialOtherCount > 0 && (
                     <p className="text-xs text-muted">
@@ -1029,7 +1037,7 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
               <Card className="surface-card p-5">
                 <div className="mb-4">
                   <p className="eyebrow eyebrow-soft">Summary</p>
-                  <h3 className="text-sm font-semibold text-heading">Social media visits</h3>
+                  <h3 className="text-sm font-semibold text-heading">Visits from social</h3>
                 </div>
 
                 {traffic.socialReferrals.length > 0 ? (
@@ -1092,7 +1100,7 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
                 <div className="mb-4 flex items-end justify-between gap-3">
                   <div>
                     <p className="eyebrow eyebrow-soft">Breakdown</p>
-                    <h3 className="text-sm font-semibold text-heading">Source / medium</h3>
+                    <h3 className="text-sm font-semibold text-heading">Social sources</h3>
                   </div>
                   <p className="text-xs text-muted">
                     {traffic.socialReferrals.length > 0
@@ -1178,6 +1186,14 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
               </h2>
             </div>
 
+            <DataTableSearch
+              value={topPagesTable.query}
+              onChange={topPagesTable.setQuery}
+              label="Filter landing page URLs"
+              placeholder="Filter landing pages"
+              className="mb-4 max-w-md"
+            />
+
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
@@ -1189,12 +1205,25 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedPages.map((page) => (
+                  {topPagesTable.rows.map((page) => (
                     <LandingPageRow key={page.landingPage} page={page} />
                   ))}
                 </tbody>
               </table>
             </div>
+
+            {topPagesTable.totalRows === 0 && topPagesTable.hasQuery && (
+              <p className="text-sm text-secondary mt-3">No landing pages match this filter</p>
+            )}
+
+            <DataTablePagination
+              page={topPagesTable.page}
+              pageSize={topPagesTable.pageSize}
+              visibleRows={topPagesTable.rows.length}
+              totalRows={topPagesTable.totalRows}
+              onPageChange={topPagesTable.setPage}
+              itemLabel={topPagesTable.hasQuery ? 'matches' : 'pages'}
+            />
           </section>
         </>
       )}
