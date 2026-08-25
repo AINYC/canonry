@@ -296,8 +296,8 @@ const googleMarketingSnapshotCursorParameter: OpenApiParameter = {
 const googleAdsMetricsWindowParameter: OpenApiParameter = {
   name: 'window',
   in: 'query',
-  description: 'Reporting window over closed days: 7d, 14d, or 28d. Defaults to 14d.',
-  schema: { type: 'string', enum: ['7d', '14d', '28d'] },
+  description: 'Reporting window over closed days: 7d, 14d, or 30d. Defaults to 14d.',
+  schema: { type: 'string', enum: ['7d', '14d', '30d'] },
 }
 
 const limitQueryParameter: OpenApiParameter = {

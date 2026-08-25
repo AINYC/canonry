@@ -436,6 +436,6 @@ describe('google ads ratio formatting', () => {
     expect(formatGoogleAdsChange(0, 7)).toBe('no change vs prior 7d')
     expect(formatGoogleAdsChange(null, 7)).toBe(`${GOOGLE_ADS_NOT_AVAILABLE} vs prior 7d`)
     expect(formatGoogleAdsChange(0.0004, 7)).toBe('↑ <0.1% vs prior 7d')
-    expect(formatGoogleAdsChange(-0.25, 28)).toBe('↓ 25% vs prior 28d')
+    expect(formatGoogleAdsChange(-0.25, 30)).toBe('↓ 25% vs prior 30d')
   })
 })

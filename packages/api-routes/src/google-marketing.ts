@@ -880,7 +880,7 @@ const googleAdsPerformanceQuerySchema = z.object({
 const GOOGLE_ADS_PERFORMANCE_WINDOW_DAYS: Record<GoogleAdsMetricsWindow, number> = {
   '7d': 7,
   '14d': 14,
-  '28d': 28,
+  '30d': 30,
 }
 
 const GOOGLE_ADS_PERFORMANCE_DEFAULT_WINDOW: GoogleAdsMetricsWindow = '14d'
@@ -1106,7 +1106,7 @@ function googleAdsChangeRatio(current: number | null, prior: number | null): num
  * 2N closed days.
  *
  * A snapshot holds GOOGLE_ADS_CAMPAIGN_METRICS_MAX_DAYS (31) days of which at
- * most 30 are closed, so a 28d window can never have a prior period. Reporting
+ * most 30 are closed, so a 30d window can never have a prior period. Reporting
  * a truncated prior period as if it were equal-length would manufacture a
  * decline out of the missing days.
  */

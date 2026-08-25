@@ -9,6 +9,7 @@ import {
 import { getApiV1ProjectsByNameGoogleAdsPerformanceOptions } from '@ainyc/canonry-api-client/react-query'
 
 import { heyClient } from '../../api.js'
+import { MetricsWindowPicker } from '../shared/MetricsWindowPicker.js'
 import { extractErrorMessage } from '../../lib/extract-error-message.js'
 import type { MetricTone } from '../../view-models.js'
 import { InfoTooltip } from '../shared/InfoTooltip.js'
@@ -25,7 +26,7 @@ import {
 import { Button } from '../ui/button.js'
 
 const GOOGLE_ADS_PERFORMANCE_STALE_MS = 60_000
-const GOOGLE_ADS_WINDOWS: GoogleAdsMetricsWindow[] = ['7d', '14d', '28d']
+const GOOGLE_ADS_WINDOWS: GoogleAdsMetricsWindow[] = ['7d', '14d', '30d']
 
 /**
  * A ratio whose denominator was zero is UNDEFINED, not zero. The API sends
@@ -176,19 +177,12 @@ export function GoogleAdsPerformanceSection({ projectName }: { projectName: stri
           </p>
         ) : null}
       </div>
-      <div className="segmented" role="group" aria-label="Ad performance time period">
-        {GOOGLE_ADS_WINDOWS.map((option) => (
-          <button
-            key={option}
-            type="button"
-            aria-pressed={metricsWindow === option}
-            className={`segmented-option ${metricsWindow === option ? 'segmented-option-active' : ''}`}
-            onClick={() => setMetricsWindow(option)}
-          >
-            {option}
-          </button>
-        ))}
-      </div>
+      <MetricsWindowPicker
+        windows={GOOGLE_ADS_WINDOWS}
+        value={metricsWindow}
+        onChange={setMetricsWindow}
+        label="Google Ads time period"
+      />
     </div>
   )
 

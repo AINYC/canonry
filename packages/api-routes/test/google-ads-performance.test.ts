@@ -463,18 +463,19 @@ describe('GET /projects/:name/google-ads/performance', () => {
     expect(performance.comparison?.prior).toMatchObject({ startDate: '2026-07-28', endDate: '2026-08-10' })
   })
 
-  it('refuses a 28 day comparison the stored snapshot can never cover', async () => {
+  it('refuses a 30 day comparison the stored snapshot can never cover', async () => {
     const context = buildApp()
     contexts.push(context)
     await context.app.ready()
     seedReferenceFixture(context)
 
-    const performance = await readPerformance(context, '?window=28d')
+    const performance = await readPerformance(context, '?window=30d')
 
-    expect(performance.days).toBe(28)
-    expect(performance.startDate).toBe('2026-07-28')
+    expect(performance.days).toBe(30)
+    expect(performance.startDate).toBe('2026-07-26')
     expect(performance.endDate).toBe(AS_OF_DATE)
-    // 31 stored days hold at most 30 closed days; 2 x 28 = 56 never fit.
+    // 31 stored days hold at most 30 closed days, so 30d consumes all of them
+    // and 2 x 30 = 60 never fit.
     expect(performance.comparison).toBeNull()
     expect(performance.comparisonUnavailableReason).toBe('insufficient-history')
     // The window itself is still real evidence.
@@ -521,7 +522,9 @@ describe('GET /projects/:name/google-ads/performance', () => {
     await context.app.ready()
     seedReferenceFixture(context)
 
-    for (const window of ['30d', '90d', '7', 'week', '']) {
+    // 30d is now SERVABLE (it consumes all 30 closed days) so it is no longer a
+    // rejection case; 90d still is, since the stored snapshot cannot reach it.
+    for (const window of ['28d', '90d', '7', 'week', '']) {
       const response = await context.app.inject({
         method: 'GET',
         url: `/projects/acme/google-ads/performance?window=${encodeURIComponent(window)}`,

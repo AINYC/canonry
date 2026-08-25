@@ -2672,7 +2672,7 @@ export type GoogleAdsCustomerSelectionRequest = {
 };
 
 export type GoogleAdsPerformanceDto = {
-    window: '7d' | '14d' | '28d';
+    window: '7d' | '14d' | '30d';
     startDate: string;
     endDate: string;
     days: number;
@@ -16371,9 +16371,9 @@ export type GetApiV1ProjectsByNameGoogleAdsPerformanceData = {
     };
     query?: {
         /**
-         * Reporting window over closed days: 7d, 14d, or 28d. Defaults to 14d.
+         * Reporting window over closed days: 7d, 14d, or 30d. Defaults to 14d.
          */
-        window?: '7d' | '14d' | '28d';
+        window?: '7d' | '14d' | '30d';
     };
     url: '/api/v1/projects/{name}/google-ads/performance';
 };

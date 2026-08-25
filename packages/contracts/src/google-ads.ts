@@ -482,11 +482,16 @@ export type GoogleAdsRawSnapshotDto = z.infer<typeof googleAdsRawSnapshotDtoSche
  * Windows the stored 31-day metrics snapshot can actually serve.
  *
  * A snapshot holds GOOGLE_ADS_CAMPAIGN_METRICS_MAX_DAYS (31) days, of which at
- * most 30 are closed. A period-over-period comparison needs 2N closed days, so
- * 7d and 14d can be compared and 28d cannot. Offering 30d/90d here would
- * promise a comparison the stored data can never satisfy.
+ * most 30 are closed, so 30d is the widest servable window and it consumes all
+ * of them. A period-over-period comparison needs 2N closed days, so 7d and 14d
+ * carry one and 30d cannot; that is reported as 'insufficient-history' rather
+ * than hidden by removing the option. 90d is not offered at all because the
+ * stored snapshot cannot answer it.
+ *
+ * 30d rather than 28d on purpose: 28 is an artifact of what happened to fit,
+ * and operators think in months and weeks, not in multiples of a fortnight.
  */
-export const googleAdsMetricsWindowSchema = z.enum(['7d', '14d', '28d'])
+export const googleAdsMetricsWindowSchema = z.enum(['7d', '14d', '30d'])
 export type GoogleAdsMetricsWindow = z.infer<typeof googleAdsMetricsWindowSchema>
 
 /**
