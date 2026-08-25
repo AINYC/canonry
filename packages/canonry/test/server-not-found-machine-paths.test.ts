@@ -84,9 +84,17 @@ describe('not-found handler: machine-facing paths', () => {
     expect(res.headers['content-type']).toContain('text/html')
   })
 
+  it('serves the real authorization-server metadata rather than 404ing it', async () => {
+    // This path used to 404 here, correctly, because nothing served it. It now
+    // has a real handler, and the guard below must not shadow a live route.
+    const res = await built.app.inject({ method: 'GET', url: '/.well-known/oauth-authorization-server' })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().code_challenge_methods_supported).toEqual(['S256'])
+  })
+
   it.each([
     '/.well-known/oauth-protected-resource',
-    '/.well-known/oauth-authorization-server',
+    '/.well-known/openid-configuration',
     '/.well-known/anything-at-all',
   ])('returns a JSON 404 for %s', async (url) => {
     const res = await built.app.inject({ method: 'GET', url })

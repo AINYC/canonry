@@ -4,6 +4,7 @@ import type { DatabaseClient } from '@ainyc/canonry-db'
 import fs from 'node:fs'
 import { AppError, runtimeStateMissing, describeError } from '@ainyc/canonry-contracts'
 import { authPlugin } from './auth.js'
+import { resolveOAuthAccessToken } from './oauth.js'
 import { projectRoutes } from './projects.js'
 import type { ProjectRoutesOptions } from './projects.js'
 import { queryRoutes } from './queries.js'
@@ -97,11 +98,20 @@ declare module 'fastify' {
   }
 }
 
+export { registerOAuthRoutes, resolveOAuthAccessToken } from './oauth.js'
+export type { OAuthRoutesOptions } from './oauth.js'
 export * from './notifications/alert.js'
 export * from './notifications/destinations.js'
 export { resolveVercelSyncDeadlineMs, VERCEL_MAX_SYNC_WINDOW_MS, DEFAULT_VERCEL_SYNC_DEADLINE_MS, TRAFFIC_SOURCE_MAX_CATCHUP_MS } from './traffic-limits.js'
 export interface ApiRoutesOptions {
   db: DatabaseClient
+  /**
+   * Absolute URL of the MCP resource, e.g. https://host/api/v1/mcp. Enables
+   * OAuth bearer acceptance and is the audience every token is checked against,
+   * so a token minted for another resource cannot be replayed here. Undefined
+   * leaves OAuth off entirely.
+   */
+  oauthResourceUrl?: string
   openApiInfo?: OpenApiInfo
   /** Skip auth for testing */
   skipAuth?: boolean
@@ -438,6 +448,13 @@ export async function apiRoutes(app: FastifyInstance, opts: ApiRoutesOptions) {
 
     if (!opts.skipAuth) {
       await authPlugin(api, {
+        // A bearer that is not an api key is tried as an OAuth access token.
+        // Wired unconditionally: the table is empty until an operator registers
+        // a client, so an install with no OAuth in use pays one indexed miss.
+        resolveOAuthToken: (token) =>
+          opts.oauthResourceUrl
+            ? resolveOAuthAccessToken(opts.db, token, opts.oauthResourceUrl)
+            : null,
         sessionCookieName: opts.sessionCookieName,
         resolveSessionApiKeyId: opts.resolveSessionApiKeyId,
         userSessionCookie: opts.userSessionCookie,
@@ -681,7 +698,7 @@ export async function apiRoutes(app: FastifyInstance, opts: ApiRoutesOptions) {
 export type { DatabaseClient } from '@ainyc/canonry-db'
 // Whether this install has named accounts. The host needs the same answer the
 // auth layer uses, so it is exported rather than reimplemented.
-export { anyUsersExist, USER_SESSION_COOKIE_NAME, USER_SESSION_TTL_MS } from './user-session.js'
+export { anyUsersExist, createUserSession, parseCookieHeader, resolveUserSession, USER_SESSION_COOKIE_NAME, USER_SESSION_TTL_MS } from './user-session.js'
 export type { UserSessionCookieOptions } from './user-session.js'
 export { requireAdminSession, requireBroadInstanceKey, requirePaidReadScope } from './auth.js'
 export { assertSameOriginWrite, assertCookieWriteOrigin, FOREIGN_ORIGIN_MESSAGE } from './same-origin.js'

@@ -60,6 +60,12 @@ interface McpSession {
 export interface McpHttpOptions {
   /** Base URL the per-session client calls back on — loopback, not the public host. */
   selfApiUrl: string
+  /**
+   * Public origin this instance is reached on. Used only to point an
+   * unauthenticated caller at its RFC 9728 discovery document. Omitted when the
+   * instance has no OAuth server, in which case no challenge is advertised.
+   */
+  issuer?: string
   /** Overridable for tests. */
   now?: () => number
 }
@@ -85,6 +91,21 @@ export function registerMcpHttpRoutes(scope: FastifyInstance, opts: McpHttpOptio
   }, SWEEP_INTERVAL_MS)
   // Never hold the process open for a housekeeping timer.
   sweep.unref()
+
+  // The auth hook rejects an unauthenticated request BEFORE any handler runs,
+  // so the RFC 9728 challenge cannot be set inside `handle`. Attach it on the
+  // way out instead, narrowed to this transport's own routes by the config flag
+  // rather than by matching on the URL.
+  if (opts.issuer) {
+    scope.addHook('onSend', async (request, reply, payload) => {
+      const isTransport = request.routeOptions.config?.transportEnvelope === true
+      if (isTransport && reply.statusCode === 401 && !reply.getHeader('WWW-Authenticate')) {
+        const metadata = `${opts.issuer}/.well-known/oauth-protected-resource${request.routeOptions.url ?? ''}`
+        void reply.header('WWW-Authenticate', `Bearer resource_metadata="${metadata}"`)
+      }
+      return payload
+    })
+  }
 
   scope.addHook('onClose', async () => {
     clearInterval(sweep)
@@ -167,6 +188,9 @@ export function registerMcpHttpRoutes(scope: FastifyInstance, opts: McpHttpOptio
   ): Promise<void> {
     const keyId = request.principal?.id ?? request.apiKey?.id
     if (!keyId) {
+      // The onSend hook above attaches the RFC 9728 challenge to any 401 on
+      // this route, including this one. Reachable only when auth is skipped
+      // entirely, since otherwise the auth hook rejects before we get here.
       await reply.status(401).send({ error: { code: 'AUTH_REQUIRED', message: 'Authentication required.' } })
       return
     }

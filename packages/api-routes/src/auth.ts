@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import { eq } from 'drizzle-orm'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
-import { apiKeys, projects, runs } from '@ainyc/canonry-db'
+import { apiKeys, projects, runs, users } from '@ainyc/canonry-db'
 import {
   ADS_ACTIVATE_SCOPE,
   ADS_APPROVE_SCOPE,
@@ -383,7 +383,24 @@ function scopesForRole(role: UserRole): string[] {
   return role === UserRoles.admin ? [WILDCARD_SCOPE] : [READ_ONLY_SCOPE]
 }
 
+/** What an OAuth access token resolved to. */
+export interface ResolvedOAuthToken {
+  userId: string
+  clientId: string
+  scope: string | null
+}
+
 export interface AuthPluginOptions {
+  /**
+   * Resolve a bearer that is NOT an api key as an OAuth 2.1 access token.
+   *
+   * Hosted MCP clients cannot present an api key at all — ChatGPT offers only
+   * OAuth, no-auth, or a mix — so without this the remote MCP surface is
+   * unreachable from them no matter what else is built. Tried only after the
+   * api-key lookup misses, so nothing about existing keys changes.
+   */
+  resolveOAuthToken?: (token: string) => ResolvedOAuthToken | null
+
   sessionCookieName?: string
   resolveSessionApiKeyId?: (sessionId: string) => string | null | Promise<string | null>
   /** Cookie attributes for named-account sessions. Must match the sign-in routes. */
@@ -599,7 +616,13 @@ function applyRoleGates(request: FastifyRequest): void {
   const principal = request.principal
   if (!principal || principal.kind !== 'user') return
 
-  request.readSemanticGrant = principal.role === UserRoles.viewer && isReadSemanticRoute(request)
+  // A transport envelope is a read for a viewer exactly as it is for a
+  // read-only key: the POST carries the JSON-RPC message, and every operation
+  // inside it re-enters the API as its own request where this gate runs again.
+  // Without this a viewer who approves an OAuth connector is refused at the
+  // door, which is the whole population the connector exists for.
+  request.readSemanticGrant = principal.role === UserRoles.viewer
+    && (isReadSemanticRoute(request) || isTransportEnvelopeRoute(request))
 
   if (
     isReadOnlyKey(principal.scopes)
@@ -639,6 +662,29 @@ export async function authPlugin(app: FastifyInstance, opts: AuthPluginOptions =
         .get()
 
       if (!key || key.revokedAt) {
+        // Not an api key. Before refusing, try it as an OAuth access token:
+        // this is the only credential a hosted MCP client can present.
+        const granted = opts.resolveOAuthToken?.(token) ?? null
+        if (granted) {
+          const account = app.db.select().from(users).where(eq(users.id, granted.userId)).get()
+          if (!account) throw authInvalid()
+          // The token carries the AUTHORITY OF THE PERSON it was issued for,
+          // never the authority of the client that asked. A viewer who
+          // approves a connector grants a viewer's reach and nothing more.
+          request.principal = {
+            kind: 'user',
+            id: account.id,
+            name: account.name,
+            scopes: scopesForRole(account.role),
+            role: account.role,
+            // NOT viaCookie: a bearer is attached deliberately by the client,
+            // so no browser can be induced into sending it cross-origin.
+            viaCookie: false,
+          }
+          applyRoleGates(request)
+          enforceEmbedProjectTabs(request, opts.embedProjectTabs)
+          return
+        }
         throw authInvalid()
       }
     } else if (resolveSignedInPerson(app, request, reply, opts.userSessionCookie)) {

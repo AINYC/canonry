@@ -3,7 +3,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { createClient, migrate, apiKeys, type DatabaseClient } from '@ainyc/canonry-db'
+import { createClient, migrate, apiKeys, oauthClients, users, type DatabaseClient } from '@ainyc/canonry-db'
+import { createUserSession, USER_SESSION_COOKIE_NAME } from '@ainyc/canonry-api-routes'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import type { CanonryConfig } from '../src/config.js'
@@ -24,10 +25,51 @@ const INIT = {
 }
 const MCP_ACCEPT = 'application/json, text/event-stream'
 
+
+const PKCE_VERIFIER = 'v'.repeat(64)
+
+/** Drive the real authorize + token flow end to end, as a client would. */
+async function mintAccessToken(built: Built): Promise<string> {
+  const challenge = crypto.createHash('sha256').update(PKCE_VERIFIER).digest('base64url')
+  const redirectUri = 'https://client.example.com/cb'
+  built.registerClient(redirectUri)
+  const sessionCookie = built.signIn()
+
+  const params = new URLSearchParams({
+    response_type: 'code',
+    client_id: 'test-client',
+    redirect_uri: redirectUri,
+    code_challenge: challenge,
+    code_challenge_method: 'S256',
+  })
+  const authorized = await built.app.inject({
+    method: 'GET',
+    url: `/oauth/authorize?${params.toString()}`,
+    headers: { cookie: sessionCookie },
+  })
+  const code = new URL(authorized.headers.location as string).searchParams.get('code')!
+  const token = await built.app.inject({
+    method: 'POST',
+    url: '/oauth/token',
+    payload: {
+      grant_type: 'authorization_code',
+      code,
+      code_verifier: PKCE_VERIFIER,
+      client_id: 'test-client',
+      redirect_uri: redirectUri,
+    },
+  })
+  return token.json().access_token as string
+}
+
 interface Built {
   app: Awaited<ReturnType<typeof createServer>>
   wildcardKey: string
   readOnlyKey: string
+  /** Register a pre-registered OAuth client; there is no DCR by design. */
+  registerClient: (redirectUri: string) => void
+  /** Create a real signed-in session and return its cookie header. */
+  signIn: () => string
   cleanup: () => Promise<void>
 }
 
@@ -55,6 +97,7 @@ async function buildServer(): Promise<Built> {
     apiUrl: 'http://127.0.0.1:4100',
     database: dbPath,
     apiKey: wildcardKey,
+    publicUrl: 'https://instance.example.com',
     providers: {},
   }
   const app = await createServer({ config, db, logger: false })
@@ -62,6 +105,24 @@ async function buildServer(): Promise<Built> {
     app,
     wildcardKey,
     readOnlyKey,
+    registerClient: (redirectUri: string) => {
+      db.insert(oauthClients).values({
+        id: 'test-client',
+        name: 'Test client',
+        secretHash: null,
+        redirectUris: [redirectUri],
+        createdAt: new Date().toISOString(),
+      }).run()
+    },
+    signIn: () => {
+      const userId = crypto.randomUUID()
+      db.insert(users).values({
+        id: userId, name: 'Sam', nameKey: 'sam', passwordHash: 'x', role: 'viewer',
+        createdAt: new Date().toISOString(),
+      }).run()
+      const token = createUserSession(db, userId)
+      return `${USER_SESSION_COOKIE_NAME}=${token}`
+    },
     cleanup: async () => {
       await app.close()
       fs.rmSync(tmpDir, { recursive: true, force: true })
@@ -77,6 +138,66 @@ function initRequest(built: Built, key: string) {
     payload: INIT,
   })
 }
+
+describe('MCP over OAuth', () => {
+  let built: Built
+
+  beforeEach(async () => {
+    built = await buildServer()
+  })
+
+  afterEach(async () => {
+    await built.cleanup()
+  })
+
+  it('challenges an unauthenticated caller with its discovery document', async () => {
+    // RFC 9728 s5.1. This header is the entire entry point: a client holding no
+    // credential learns from it where the authorization server lives. Without
+    // it there is nothing to discover and the connector simply fails.
+    const res = await built.app.inject({
+      method: 'POST',
+      url: '/api/v1/mcp',
+      headers: { accept: MCP_ACCEPT, 'content-type': 'application/json' },
+      payload: INIT,
+    })
+    expect(res.statusCode).toBe(401)
+    const challenge = res.headers['www-authenticate'] as string
+    expect(challenge).toContain('Bearer')
+    expect(challenge).toContain('/.well-known/oauth-protected-resource/api/v1/mcp')
+  })
+
+  it('serves the protected-resource document the challenge points at', async () => {
+    const res = await built.app.inject({ method: 'GET', url: '/.well-known/oauth-protected-resource/api/v1/mcp' })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().authorization_servers).toEqual(['https://instance.example.com'])
+  })
+
+  it('accepts an OAuth access token as a bearer on the MCP endpoint', async () => {
+    // The link that makes the whole chain work: a hosted client cannot present
+    // an api key, so if this fails OAuth is decorative.
+    const token = await mintAccessToken(built)
+    const res = await built.app.inject({
+      method: 'POST',
+      url: '/api/v1/mcp',
+      headers: { authorization: `Bearer ${token}`, accept: MCP_ACCEPT, 'content-type': 'application/json' },
+      payload: INIT,
+    })
+    expect(res.statusCode).toBeLessThan(400)
+    expect(res.headers['mcp-session-id']).toBeTruthy()
+  })
+
+  it('refuses a revoked OAuth token', async () => {
+    const token = await mintAccessToken(built)
+    await built.app.inject({ method: 'POST', url: '/oauth/revoke', payload: { token } })
+    const res = await built.app.inject({
+      method: 'POST',
+      url: '/api/v1/mcp',
+      headers: { authorization: `Bearer ${token}`, accept: MCP_ACCEPT, 'content-type': 'application/json' },
+      payload: INIT,
+    })
+    expect(res.statusCode).toBe(401)
+  })
+})
 
 describe('MCP over Streamable HTTP', () => {
   let built: Built

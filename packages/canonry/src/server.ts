@@ -226,6 +226,7 @@ import { RunCoordinator } from "./run-coordinator.js";
 import { SessionRegistry } from "./agent/session-registry.js";
 import { buildAgentProvidersResponse } from "./agent/providers.js";
 import { registerMcpHttpRoutes } from "./mcp-http.js";
+import { registerOAuthRoutes, parseCookieHeader, resolveUserSession, USER_SESSION_COOKIE_NAME } from "@ainyc/canonry-api-routes";
 import { registerAgentRoutes } from "./agent/agent-routes.js";
 import {
   createRecommendationExplainer,
@@ -2083,6 +2084,17 @@ export async function createServer(opts: {
   // let the proxy handle path rewriting instead.
   const apiPrefix = basePath ? `${basePath}api/v1` : "/api/v1";
   const googlePublicUrl = resolveGooglePublicUrl(opts.config, basePath);
+  // The OAuth issuer is an ORIGIN, never a base path: RFC 9728 inserts the
+  // well-known segment between host and path, so the document lives at the
+  // root of the host regardless of where the resource itself is mounted.
+  const publicOrigin = (() => {
+    if (!googlePublicUrl) return undefined;
+    try {
+      return new URL(googlePublicUrl).origin;
+    } catch {
+      return undefined;
+    }
+  })();
   // Ensure the configured API key exists in the DB — handles upgrades from
   // older versions that stored the key in config.yaml but never inserted it
   // into the api_keys table (or used a different DB file).
@@ -2488,11 +2500,14 @@ export async function createServer(opts: {
     vercelSyncDeadlineMs: resolveVercelSyncDeadlineMs(process.env),
     // Local-only Aero agent routes. Registered here so they inherit api-routes'
     // auth plugin — bare `registerAgentRoutes(app, ...)` would skip auth.
+    oauthResourceUrl: publicOrigin
+      ? `${publicOrigin}${`${basePath ?? "/"}api/v1/mcp`.replace("//", "/")}`
+      : undefined,
     registerAuthenticatedRoutes: async (scope) => {
       // MCP over Streamable HTTP. Registered HERE, not on the root app, so it
       // inherits the api-routes auth hook — the root app has none, and a route
       // mounted there would serve MCP unauthenticated.
-      registerMcpHttpRoutes(scope, { selfApiUrl: opts.config.apiUrl });
+      registerMcpHttpRoutes(scope, { selfApiUrl: opts.config.apiUrl, issuer: publicOrigin });
       // Aero kill-switch: don't serve the interactive agent routes when disabled.
       if (!sessionRegistry) return;
       registerAgentRoutes(scope, { db: opts.db, sessionRegistry });
@@ -3424,6 +3439,25 @@ export async function createServer(opts: {
       ...(update ? { updateAvailable: update } : {}),
     };
   };
+  // OAuth 2.1, mounted at the ROOT and outside the api-key auth scope: a client
+  // with no credential must be able to discover where to get one. Registered
+  // only when the instance knows its own public origin, since every URL in the
+  // metadata documents has to be absolute and externally reachable.
+  if (publicOrigin) {
+    registerOAuthRoutes(app, {
+      db: opts.db,
+      issuer: publicOrigin,
+      resourcePath: `${basePath ?? "/"}api/v1/mcp`.replace("//", "/"),
+      resolveUser: (request) => {
+        const cookies = parseCookieHeader(request.headers.cookie);
+        const token = cookies[USER_SESSION_COOKIE_NAME];
+        if (!token) return null;
+        const resolved = resolveUserSession(opts.db, token);
+        return resolved ? { id: resolved.user.id, name: resolved.user.name } : null;
+      },
+    });
+  }
+
   app.get("/health", healthHandler);
   if (basePath) {
     app.get(`${basePath}health`, healthHandler);
