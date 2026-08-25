@@ -4,8 +4,8 @@
 
 PHP WordPress plugin that ships the **producer side** of canonry's WordPress
 traffic-ingestion path. It captures every non-admin, non-AJAX GET page-load
-on a WP site, records the real client IP, and exposes the resulting event
-log through a Basic-auth (Application Password) REST endpoint that the
+that reaches WordPress PHP, records the real client IP, and exposes the resulting
+event log through a Basic-auth (Application Password) REST endpoint that the
 `@ainyc/canonry-integration-wordpress-traffic` TS adapter pulls. Non-GET
 requests (comment submissions, logins, admin saves) are skipped — AI
 crawlers and human clicks from AI referrers are always GET, and the
@@ -30,13 +30,14 @@ plugin/
     class-plugin.php            Activation + uninstall + retention prune callback
     class-recorder.php          Request -> row writer (shutdown hook entry point)
     class-rest.php              GET /wp-json/canonry/v1/events handler + cursor pagination + since/until + page-cache opt-out
+    class-legacy-beacon-route.php  Temporary no-op POST /wp-json/canonry/v1/pv compatibility route for stale 1.1.0 cached HTML
     class-client-ip.php         Pure client-IP resolver (proxy-header aware)
     class-settings-page.php     Settings → Canonry Traffic Logger admin form
 test/
   run-tests.php                 Discovers *Test.php, runs every public test_* method
   lib/TestCase.php              Minimal assertion API (no PHPUnit dependency)
   lib/WpShim.php                In-memory stub of the WP API surface the plugin touches
-  *Test.php                     Test cases (Activation, Ingestion, ClientIp, EndpointAuth, CursorPagination, WindowFilter, CacheControl, Uninstall, Retention, SettingsPage)
+  *Test.php                     Test cases (Activation, Ingestion, ClientIp, EndpointAuth, CursorPagination, WindowFilter, CacheControl, LegacyBeaconRoute, Uninstall, Retention, SettingsPage)
 ```
 
 ## Auth
@@ -74,7 +75,10 @@ loggers. `ClientIp::resolve()` is a pure function (`class-client-ip.php`):
 Plugin 0.3.0 replaced the previous per-site SHA-256 IP hash. Schema 2 drops
 the legacy `remote_ip_hash` column on upgrade (`Plugin::maybeUpgrade()` runs
 on `admin_init`, so an in-place plugin update is migrated too), and the old
-`canonry_traffic_logger_ip_salt` option is deleted on uninstall.
+`canonry_traffic_logger_ip_salt` option is deleted on uninstall. Schema 3
+(plugin 1.1.1) removes the short-lived 1.1.0 browser-beacon setting; the events
+table is unchanged. The plugin is PHP-only again and records every eligible GET
+that reaches WordPress.
 
 ## What's in scope (wave 2 shipped)
 
@@ -96,6 +100,11 @@ on `admin_init`, so an in-place plugin update is migrated too), and the old
   per-request, so a cached copy would freeze the traffic canonry pulls. The
   TS pull adapter also appends a unique cache-buster param as a second line
   of defense.
+- **Legacy beacon compatibility.** Plugin 1.1.1 no longer emits or records
+  browser beacons. Its public `/wp-json/canonry/v1/pv` POST route temporarily
+  returns `204` without reading the body or writing an event, so 1.1.0 scripts
+  stranded in stale page caches do not create 404 noise while operators purge
+  every cache layer.
 
 ## What's out of scope (deferred)
 
