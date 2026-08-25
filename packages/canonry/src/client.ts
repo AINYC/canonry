@@ -110,6 +110,7 @@ import type {
   GoogleAdsConnectionStatusDto,
   GoogleAdsCustomerSelectionRequest,
   GoogleAdsMetricsWindow,
+  ConversionTrackingOptionsDto,
   GoogleAdsPerformanceDto,
   GoogleAdsStoredSnapshotPage,
   GoogleAdsStoredSnapshotReadEnvelope,
@@ -336,6 +337,7 @@ import {
   getApiV1ProjectsByNameGoogleAdsCustomers,
   putApiV1ProjectsByNameGoogleAdsSelection,
   postApiV1ProjectsByNameGoogleAdsSync,
+  getApiV1ProjectsByNameConversionTrackingOptions,
   getApiV1ProjectsByNameGoogleAdsPerformance,
   getApiV1ProjectsByNameGoogleAdsSnapshots,
   getApiV1ProjectsByNameGoogleAdsSnapshotsBySnapshotId,
@@ -2406,6 +2408,15 @@ export class ApiClient {
   async triggerGoogleAdsSync(project: string): Promise<RunDto> {
     return this.invoke<RunDto>(() =>
       postApiV1ProjectsByNameGoogleAdsSync({
+        client: this.heyClient,
+        path: { name: project },
+      }),
+    )
+  }
+
+  async getConversionTrackingOptions(project: string): Promise<ConversionTrackingOptionsDto> {
+    return this.invoke<ConversionTrackingOptionsDto>(() =>
+      getApiV1ProjectsByNameConversionTrackingOptions({
         client: this.heyClient,
         path: { name: project },
       }),
