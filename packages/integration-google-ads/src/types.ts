@@ -35,6 +35,7 @@ export type GoogleAdsReadOperation =
   | 'campaign-conversion-goals'
   | 'custom-conversion-goals'
   | 'conversion-goal-campaign-configs'
+  | 'campaign-spend-ranking'
   | 'daily-campaign-metrics'
   | 'daily-conversion-metrics'
 

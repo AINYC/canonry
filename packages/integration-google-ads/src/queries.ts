@@ -161,8 +161,15 @@ function dailyMetricClauses(options: GoogleAdsDailyMetricsOptions): string[] {
 
   const filters = [
     `segments.date BETWEEN '${options.startDate}' AND '${options.endDate}'`,
-    "campaign.status != 'REMOVED'",
   ]
+
+  // Excluding REMOVED here silently drops the historical spend of a campaign
+  // deleted mid-window, while coverage still reads complete. When campaignIds
+  // scopes the query the filter is redundant anyway; it is kept only for the
+  // unscoped form, where it bounds an otherwise account-wide scan.
+  if (options.campaignIds === undefined) {
+    filters.push("campaign.status != 'REMOVED'")
+  }
 
   if (options.campaignIds !== undefined) {
     if (!Array.isArray(options.campaignIds) || options.campaignIds.length === 0) {
@@ -190,6 +197,36 @@ function dailyMetricClauses(options: GoogleAdsDailyMetricsOptions): string[] {
     'ORDER BY segments.date ASC, campaign.id ASC',
     `LIMIT ${validatedLimit(options.limit)}`,
   ]
+}
+
+/**
+ * Spend per campaign over a window, highest first, INCLUDING removed campaigns.
+ *
+ * Exists because the daily-metrics query has to be scoped to at most
+ * GOOGLE_ADS_CAMPAIGN_METRICS_MAX_CAMPAIGNS ids, and picking those by campaign
+ * id ascending selects an arbitrary subset: it can spend the whole budget of
+ * the cap on dormant campaigns while the account's biggest spender is left out
+ * of the totals entirely.
+ *
+ * No `segments.date` in the SELECT, so the API aggregates to one row per
+ * campaign over the range rather than returning a row per campaign-day.
+ */
+export function buildCampaignSpendRankingQuery(options: GoogleAdsDailyMetricsOptions): string {
+  const start = parseIsoDate(options.startDate, 'Start date')
+  const end = parseIsoDate(options.endDate, 'End date')
+  if (start > end) {
+    throw new GoogleAdsApiError('Start date must be on or before end date', 400)
+  }
+
+  return selectQuery([
+    'campaign.id',
+    'campaign.status',
+    'metrics.cost_micros',
+  ], 'campaign', [
+    `WHERE segments.date BETWEEN '${options.startDate}' AND '${options.endDate}'`,
+    'ORDER BY metrics.cost_micros DESC',
+    `LIMIT ${validatedLimit(options.limit)}`,
+  ])
 }
 
 export function buildCampaignsQuery(options: GoogleAdsListOptions = {}): string {

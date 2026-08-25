@@ -20,6 +20,7 @@ import {
 import { resolveEffectiveCampaignGoalInputs } from './goal-semantics.js'
 import {
   buildCampaignConversionGoalsQuery,
+  buildCampaignSpendRankingQuery,
   buildCampaignsQuery,
   buildConversionActionsQuery,
   buildConversionGoalCampaignConfigsQuery,
@@ -419,6 +420,22 @@ export class GoogleAdsClient {
         ],
       },
     }
+  }
+
+  /**
+   * Campaigns ranked by spend over a window, removed ones included, so the
+   * bounded daily-metrics query can be scoped to where the money actually went
+   * rather than to the lowest campaign ids.
+   */
+  async getCampaignSpendRanking(
+    customerId: string,
+    options: GoogleAdsDailyMetricsOptions,
+  ): Promise<GoogleAdsResult<GoogleAdsDailyCampaignMetricsRow[]>> {
+    return this.#searchStream(
+      customerId,
+      'campaign-spend-ranking',
+      buildCampaignSpendRankingQuery(options),
+    )
   }
 
   async getDailyCampaignMetrics(

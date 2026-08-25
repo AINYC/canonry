@@ -498,25 +498,57 @@ function campaignMetricDto(row: GoogleAdsDailyCampaignMetricsRow): GoogleAdsCamp
   }
 }
 
+/**
+ * The window every metrics read covers: the last MAX_DAYS calendar days in the
+ * account's own time zone.
+ */
+function defaultMetricsWindow(now: Date, timeZone: string | null | undefined): { startDate: string; endDate: string } {
+  const customerTimeZone = typeof timeZone === 'string' && timeZone.trim() !== '' ? timeZone : 'UTC'
+  const endDate = formatIsoDateInTimeZone(now.toISOString(), customerTimeZone)
+  return { startDate: shiftIsoCalendarDate(endDate, -(GOOGLE_ADS_CAMPAIGN_METRICS_MAX_DAYS - 1)), endDate }
+}
+
+/**
+ * Which campaigns the bounded daily-metrics query should cover.
+ *
+ * `rankedCampaignIds` is the account's campaigns ordered by spend over the same
+ * window, removed ones included. Selecting by spend rather than by campaign id
+ * matters twice over:
+ *
+ * - id order is arbitrary with respect to money, so an account above the cap
+ *   could spend the whole allowance on dormant campaigns and omit its biggest
+ *   spender from the totals;
+ * - a campaign removed mid-window still spent real money in it, and the
+ *   inventory list excludes removed campaigns, so selecting from inventory
+ *   alone loses that spend while coverage still reads complete.
+ *
+ * Falls back to inventory order when the ranking is unavailable, so a failed
+ * ranking read degrades to the old behaviour rather than to no metrics at all.
+ */
 function defaultMetricsQuery(
   now: Date,
   campaigns: readonly GoogleAdsCampaignDto[],
   timeZone: string | null | undefined,
+  rankedCampaignIds?: readonly string[],
 ): { query: GoogleAdsCampaignMetricsQuery | null; inventoryTruncated: boolean } {
-  const campaignIds = campaigns
+  const inventoryIds = campaigns
     .map(campaign => campaign.id)
     .sort((left, right) => left.localeCompare(right))
-  const selected = campaignIds.slice(0, GOOGLE_ADS_CAMPAIGN_METRICS_MAX_CAMPAIGNS)
+
+  // The ranking is authoritative when present. Inventory ids that the ranking
+  // never mentioned had no delivery in the window, so they are appended rather
+  // than dropped: a zero-spend campaign is still a real campaign to report.
+  const ranked = rankedCampaignIds ?? []
+  const ordered = ranked.length > 0
+    ? [...ranked, ...inventoryIds.filter(id => !ranked.includes(id))]
+    : inventoryIds
+
+  const selected = ordered.slice(0, GOOGLE_ADS_CAMPAIGN_METRICS_MAX_CAMPAIGNS)
   if (selected.length === 0) return { query: null, inventoryTruncated: false }
-  const customerTimeZone = typeof timeZone === 'string' && timeZone.trim() !== '' ? timeZone : 'UTC'
-  const endDate = formatIsoDateInTimeZone(now.toISOString(), customerTimeZone)
+  const { startDate, endDate } = defaultMetricsWindow(now, timeZone)
   return {
-    query: googleAdsCampaignMetricsQuerySchema.parse({
-      campaignIds: selected,
-      startDate: shiftIsoCalendarDate(endDate, -(GOOGLE_ADS_CAMPAIGN_METRICS_MAX_DAYS - 1)),
-      endDate,
-    }),
-    inventoryTruncated: campaignIds.length > selected.length,
+    query: googleAdsCampaignMetricsQuerySchema.parse({ campaignIds: selected, startDate, endDate }),
+    inventoryTruncated: ordered.length > selected.length,
   }
 }
 
@@ -927,7 +959,24 @@ class DefaultGoogleMarketingRuntime implements GoogleMarketingRuntime {
     )
     const effectiveGoalGraph = deriveGoogleAdsEffectiveGoalGraph(inventory)
 
-    const defaults = defaultMetricsQuery(this.#now(), inventory.campaigns, customerResult.data.timeZone)
+    // One extra bounded read: campaigns ranked by spend over the same window,
+    // removed ones included, so the daily query is scoped to where the money
+    // went. A failure here is not fatal; selection degrades to inventory order.
+    const rankingWindow = defaultMetricsWindow(this.#now(), customerResult.data.timeZone)
+    const rankedCampaignIds = await client
+      .getCampaignSpendRanking(customerId, {
+        ...rankingWindow,
+        limit: GOOGLE_ADS_CAMPAIGN_METRICS_MAX_CAMPAIGNS,
+      })
+      .then(result => result.data.map(row => String(row.campaign.id)))
+      .catch(() => undefined)
+
+    const defaults = defaultMetricsQuery(
+      this.#now(),
+      inventory.campaigns,
+      customerResult.data.timeZone,
+      rankedCampaignIds,
+    )
     const metricsQuery = suppliedMetricsQuery ?? defaults.query
     if (!metricsQuery) {
       return {

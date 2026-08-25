@@ -2,6 +2,7 @@ export { GoogleAdsClient } from './google-ads-client.js'
 export { resolveEffectiveCampaignGoalInputs } from './goal-semantics.js'
 export {
   buildCampaignConversionGoalsQuery,
+  buildCampaignSpendRankingQuery,
   buildCampaignsQuery,
   buildConversionActionsQuery,
   buildConversionGoalCampaignConfigsQuery,
