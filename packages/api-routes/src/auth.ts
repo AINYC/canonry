@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import { eq } from 'drizzle-orm'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
-import { apiKeys, projects, runs } from '@ainyc/canonry-db'
+import { apiKeys, projects, runs, users } from '@ainyc/canonry-db'
 import {
   ADS_ACTIVATE_SCOPE,
   ADS_APPROVE_SCOPE,
@@ -143,6 +143,26 @@ declare module 'fastify' {
      * as it was before.
      */
     readSemantic?: boolean
+
+    /**
+     * This route's POST is a PROTOCOL ENVELOPE, not an operation.
+     *
+     * A JSON-RPC transport (MCP over Streamable HTTP) carries every message —
+     * including pure reads like `initialize` and `tools/list` — inside a POST.
+     * The method-based read-only gate below would therefore refuse a
+     * `['read']` key at the door, which defeats the entire point of handing a
+     * client a read-only credential.
+     *
+     * WHY THIS IS SAFE, and the reason it is scoped to one route: the flag
+     * lets the ENVELOPE through, never the operations inside it. The transport
+     * re-dispatches each tool call as a fresh authenticated HTTP request
+     * carrying the caller's own bearer, so the read-only gate, the ads gate and
+     * the project-scope gate all re-apply per operation, at their normal
+     * strength. Nothing reaches a handler without passing this hook again.
+     *
+     * Set this ONLY on a transport endpoint that does no work of its own.
+     */
+    transportEnvelope?: boolean
   }
 }
 
@@ -153,6 +173,14 @@ function principalScopes(request: FastifyRequest): string[] | undefined {
 /** True when the route this request landed on declared itself a pure read. */
 function isReadSemanticRoute(request: FastifyRequest): boolean {
   return request.routeOptions.config.readSemantic === true
+}
+
+/**
+ * True when this route is a JSON-RPC transport envelope rather than an
+ * operation. See `transportEnvelope` above for why this exemption is sound.
+ */
+function isTransportEnvelopeRoute(request: FastifyRequest): boolean {
+  return request.routeOptions.config.transportEnvelope === true
 }
 
 /**
@@ -355,7 +383,24 @@ function scopesForRole(role: UserRole): string[] {
   return role === UserRoles.admin ? [WILDCARD_SCOPE] : [READ_ONLY_SCOPE]
 }
 
+/** What an OAuth access token resolved to. */
+export interface ResolvedOAuthToken {
+  userId: string
+  clientId: string
+  scope: string | null
+}
+
 export interface AuthPluginOptions {
+  /**
+   * Resolve a bearer that is NOT an api key as an OAuth 2.1 access token.
+   *
+   * Hosted MCP clients cannot present an api key at all — ChatGPT offers only
+   * OAuth, no-auth, or a mix — so without this the remote MCP surface is
+   * unreachable from them no matter what else is built. Tried only after the
+   * api-key lookup misses, so nothing about existing keys changes.
+   */
+  resolveOAuthToken?: (token: string) => ResolvedOAuthToken | null
+
   sessionCookieName?: string
   resolveSessionApiKeyId?: (sessionId: string) => string | null | Promise<string | null>
   /** Cookie attributes for named-account sessions. Must match the sign-in routes. */
@@ -573,10 +618,19 @@ function applyRoleGates(request: FastifyRequest): void {
 
   request.readSemanticGrant = principal.role === UserRoles.viewer && isReadSemanticRoute(request)
 
+  // A transport envelope is a read no matter WHO is asking, so the exemption is
+  // separate from `readSemanticGrant` rather than folded into it. Those two
+  // pivot on different things and conflating them was a live bug: this gate
+  // keys off SCOPES, while readSemanticGrant keys off the viewer ROLE. An
+  // admin who grants an OAuth connector `scope=read` correctly ends up with
+  // read-only scopes and a non-viewer role, so the gate fired and the grant did
+  // not exempt it — the connector was refused at the door for exactly the
+  // person who set it up.
   if (
     isReadOnlyKey(principal.scopes)
     && WRITE_METHODS.has(request.method)
     && !request.readSemanticGrant
+    && !isTransportEnvelopeRoute(request)
   ) {
     throw forbidden(VIEWER_DENIED_MESSAGE)
   }
@@ -611,6 +665,58 @@ export async function authPlugin(app: FastifyInstance, opts: AuthPluginOptions =
         .get()
 
       if (!key || key.revokedAt) {
+        // Not an api key. Before refusing, try it as an OAuth access token:
+        // this is the only credential a hosted MCP client can present.
+        // An OAuth token is ONLY ever a credential for the MCP transport. It is
+        // refused everywhere else, and that confinement is load-bearing: the
+        // token is minted for a specific resource URL, so honouring it on the
+        // wider REST surface would let a connector approved for one thing act
+        // on everything the person can reach. Checked before the token is even
+        // looked up, so a non-MCP route cannot be probed with one.
+        const granted = isTransportEnvelopeRoute(request)
+          ? opts.resolveOAuthToken?.(token) ?? null
+          : null
+        if (granted) {
+          const account = app.db.select().from(users).where(eq(users.id, granted.userId)).get()
+          if (!account) throw authInvalid()
+          // Authority is the INTERSECTION of what the person can do and what
+          // they granted the client. Taking the role alone was a privilege
+          // escalation: an admin approving a `scope=read` connector handed it
+          // full admin, including minting root api keys.
+          const roleScopes = scopesForRole(account.role)
+          // `offline_access` governs refresh tokens, not API authority.
+          const requested = (granted.scope ?? '')
+            .split(/\s+/)
+            .filter(part => part.length > 0 && part !== 'offline_access')
+          // The role is a CEILING, the grant is the request, and the effective
+          // authority is the smaller of the two. A literal set intersection is
+          // wrong here because an admin's role scope is the wildcard `*`, which
+          // does not textually contain `read` — intersecting would leave an
+          // admin who granted `scope=read` with no authority at all.
+          const narrowed = roleScopes.includes(WILDCARD_SCOPE)
+            ? (requested.length > 0 ? requested : [READ_ONLY_SCOPE])
+            : roleScopes.filter(scope => requested.includes(scope) || requested.includes(WILDCARD_SCOPE))
+          // An EMPTY set is not "no authority" — isReadOnlyKey([]) is false,
+          // because empty means "no read-only marker", so an empty set reads as
+          // NOT read-only and widens the catalog. A grant that intersects
+          // nothing must therefore floor at read, never at nothing: otherwise
+          // the narrowest possible grant to the least privileged account yields
+          // the WIDEST tool surface.
+          const effective = narrowed.length > 0 ? narrowed : [READ_ONLY_SCOPE]
+          request.principal = {
+            kind: 'user',
+            id: account.id,
+            name: account.name,
+            scopes: effective,
+            role: account.role,
+            // NOT viaCookie: a bearer is attached deliberately by the client,
+            // so no browser can be induced into sending it cross-origin.
+            viaCookie: false,
+          }
+          applyRoleGates(request)
+          enforceEmbedProjectTabs(request, opts.embedProjectTabs)
+          return
+        }
         throw authInvalid()
       }
     } else if (resolveSignedInPerson(app, request, reply, opts.userSessionCookie)) {
@@ -678,7 +784,11 @@ export async function authPlugin(app: FastifyInstance, opts: AuthPluginOptions =
     // automatically. Safe methods (GET/HEAD/OPTIONS) always pass. This runs
     // after `shouldSkipAuth` (so public routes stay open) and does not gate
     // the `last_used_at` write above (infrastructural usage tracking).
-    if (isReadOnlyKey(scopes) && WRITE_METHODS.has(request.method)) {
+    if (
+      isReadOnlyKey(scopes) &&
+      WRITE_METHODS.has(request.method) &&
+      !isTransportEnvelopeRoute(request)
+    ) {
       throw forbidden('This API key is read-only and cannot perform write operations.')
     }
 

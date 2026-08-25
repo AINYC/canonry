@@ -225,6 +225,8 @@ import { IntelligenceService } from "./intelligence-service.js";
 import { RunCoordinator } from "./run-coordinator.js";
 import { SessionRegistry } from "./agent/session-registry.js";
 import { buildAgentProvidersResponse } from "./agent/providers.js";
+import { registerMcpHttpRoutes, mcpTransportPaths } from "./mcp-http.js";
+import { registerOAuthRoutes, registerOAuthAdminRoutes, createCredentialChecker, parseCookieHeader, resolveUserSession, createUserSession, serializeUserSessionCookie, USER_SESSION_COOKIE_NAME } from "@ainyc/canonry-api-routes";
 import { registerAgentRoutes } from "./agent/agent-routes.js";
 import {
   createRecommendationExplainer,
@@ -2081,7 +2083,25 @@ export async function createServer(opts: {
   // If the proxy does strip the prefix, set CANONRY_BASE_PATH to empty/unset and
   // let the proxy handle path rewriting instead.
   const apiPrefix = basePath ? `${basePath}api/v1` : "/api/v1";
+  // One checker, shared by /auth/login and the OAuth consent page, so the two
+  // sign-in doors carry the same brute-force and threadpool budgets.
+  const credentialChecker = createCredentialChecker({
+    db: opts.db,
+    trustProxyConfigured: trustProxy !== false,
+  })
+
   const googlePublicUrl = resolveGooglePublicUrl(opts.config, basePath);
+  // The OAuth issuer is an ORIGIN, never a base path: RFC 9728 inserts the
+  // well-known segment between host and path, so the document lives at the
+  // root of the host regardless of where the resource itself is mounted.
+  const publicOrigin = (() => {
+    if (!googlePublicUrl) return undefined;
+    try {
+      return new URL(googlePublicUrl).origin;
+    } catch {
+      return undefined;
+    }
+  })();
   // Ensure the configured API key exists in the DB — handles upgrades from
   // older versions that stored the key in config.yaml but never inserted it
   // into the api_keys table (or used a different DB file).
@@ -2487,7 +2507,18 @@ export async function createServer(opts: {
     vercelSyncDeadlineMs: resolveVercelSyncDeadlineMs(process.env),
     // Local-only Aero agent routes. Registered here so they inherit api-routes'
     // auth plugin — bare `registerAgentRoutes(app, ...)` would skip auth.
+    credentials: credentialChecker,
+    oauthResourceUrl: publicOrigin
+      ? `${publicOrigin}${`${basePath ?? "/"}api/v1/mcp`.replace("//", "/")}`
+      : undefined,
     registerAuthenticatedRoutes: async (scope) => {
+      // MCP over Streamable HTTP. Registered HERE, not on the root app, so it
+      // inherits the api-routes auth hook — the root app has none, and a route
+      // mounted there would serve MCP unauthenticated.
+      registerMcpHttpRoutes(scope, { selfApiUrl: opts.config.apiUrl, issuer: publicOrigin, db: opts.db });
+      // Operator-only OAuth routes: inside the authenticated scope, behind the
+      // api-key auth and the admin gate, while /oauth/* stays public.
+      registerOAuthAdminRoutes(scope, { db: opts.db });
       // Aero kill-switch: don't serve the interactive agent routes when disabled.
       if (!sessionRegistry) return;
       registerAgentRoutes(scope, { db: opts.db, sessionRegistry });
@@ -3340,6 +3371,48 @@ export async function createServer(opts: {
         return reply.status(error.statusCode).send(error.toJSON());
       }
 
+      // Machine-facing shapes the SPA does not own. Both currently answer 200
+      // with the app shell, which is worse than a 404 in different ways:
+      //
+      // - `/.well-known/*` carries protocol discovery. Per RFC 9728 s3.1 the
+      //   protected-resource document for a resource at `/t/demo/mcp` lives at
+      //   `/.well-known/oauth-protected-resource/t/demo/mcp` — the well-known
+      //   segment is INSERTED between host and path, it is not appended under
+      //   the base path. Either way it lands under a leading dotted segment
+      //   here. A client handed index.html with a 200 cannot distinguish "no
+      //   metadata here" from "metadata is malformed", so discovery fails in
+      //   the most confusing way available. This is a hard prerequisite for
+      //   serving MCP over OAuth, not polish.
+      // - Dotfile probes (/.env, /.env.local, /.git/config) are scanners, and a
+      //   200 tells them the path exists.
+      //
+      // ONE rule covers both: any dot-prefixed SEGMENT, checked on the raw path
+      // AND on its percent-decoded form. Both halves are load-bearing:
+      //   - any segment, not just the last, because /.git/config ends in
+      //     "config" and the RFC 9728 document above ends in "mcp";
+      //   - decoded as well as raw, because `/%2eenv` and `/%2Eenv` otherwise
+      //     sail straight through to the SPA. Decoding also collapses `%2F`,
+      //     so `/foo%2F.env` cannot smuggle a dotted segment past the split.
+      // Decode exactly once and never in a loop: repeated decoding is its own
+      // bypass primitive. A malformed escape throws, and falls back to the raw
+      // check rather than opening the path.
+      //
+      // Deliberately NOT a general "does the SPA own this?" heuristic: the
+      // dashboard owns arbitrary deep links like /projects/<name>, and those
+      // must keep returning the document.
+      const hasDotSegment = (candidate: string): boolean =>
+        candidate.split("/").some((segment) => segment.startsWith("."));
+      let decodedUrl = url;
+      try {
+        decodedUrl = decodeURIComponent(url);
+      } catch {
+        // Malformed percent-encoding. Keep the raw check below.
+      }
+      if (hasDotSegment(url) || hasDotSegment(decodedUrl)) {
+        const error = notFound("Route", url);
+        return reply.status(error.statusCode).send(error.toJSON());
+      }
+
       // When a base path is configured, only serve the SPA for paths under it.
       if (basePath && !url.startsWith(basePath)) {
         return reply
@@ -3377,6 +3450,36 @@ export async function createServer(opts: {
       ...(update ? { updateAvailable: update } : {}),
     };
   };
+  // OAuth 2.1, mounted at the ROOT and outside the api-key auth scope: a client
+  // with no credential must be able to discover where to get one. Registered
+  // only when the instance knows its own public origin, since every URL in the
+  // metadata documents has to be absolute and externally reachable.
+  if (publicOrigin) {
+    registerOAuthRoutes(app, {
+      db: opts.db,
+      issuer: publicOrigin,
+      resourcePaths: mcpTransportPaths().map((suffix) =>
+        `${basePath ?? "/"}api/v1${suffix}`.replace("//", "/"),
+      ),
+      resolveUser: (request) => {
+        const cookies = parseCookieHeader(request.headers.cookie);
+        const token = cookies[USER_SESSION_COOKIE_NAME];
+        if (!token) return null;
+        const resolved = resolveUserSession(opts.db, token);
+        return resolved ? { id: resolved.user.id, name: resolved.user.name } : null;
+      },
+      credentials: credentialChecker,
+      startSession: (userId) => {
+        const token = createUserSession(opts.db, userId);
+        return serializeUserSessionCookie({
+          value: token,
+          path: basePath ?? "/",
+          secure: opts.config.publicUrl?.startsWith("https://") ?? false,
+        });
+      },
+    });
+  }
+
   app.get("/health", healthHandler);
   if (basePath) {
     app.get(`${basePath}health`, healthHandler);

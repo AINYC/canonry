@@ -327,6 +327,9 @@ Local-AEO signals. The OAuth connection reuses `google_connections` with `connec
 |-------|---------|
 | **api_keys** | API authentication. Unique: `keyHash` |
 | **usage_counters** | Rate limiting and usage tracking. Unique: `(scope, period, metric)` |
+| **oauth_clients** | OAuth 2.1 clients for the remote MCP surface. `registration` records how one came to exist: `operator` (created deliberately) or `dynamic` (registered itself over the open RFC 7591 endpoint and chose its own display name, so the consent screen marks that name unverified). `secretHash` is NULL for a public client authenticating by PKCE alone. `redirectUris` is an exact-match allowlist, except that RFC 8252 s7.3 lets the PORT float for loopback redirects so a native app can bind an ephemeral one. Revoking a client also revokes its outstanding tokens |
+| **oauth_authorization_codes** | Single-use authorization codes, 60s TTL, bound to their PKCE challenge and RFC 8707 resource. Key is the SHA-256 of the code. Burned on first redemption even when that attempt fails, so a wrong verifier cannot be retried. FK: clientId → oauth_clients, userId → users |
+| **oauth_tokens** | Issued access and refresh tokens, stored as SHA-256 digests for the same reason `user_sessions` stores one: the row records that a token exists, it is not a way to become it. `resource` is the audience and is enforced on every resource request. Refresh tokens rotate, so a stolen one is usable at most once. FK: clientId → oauth_clients, userId → users |
 
 ### Agent
 

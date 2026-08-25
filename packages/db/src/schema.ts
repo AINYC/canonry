@@ -474,6 +474,86 @@ export const userSessions = sqliteTable('user_sessions', {
   index('idx_user_sessions_expires').on(table.expiresAt),
 ])
 
+/**
+ * OAuth 2.1 clients registered against this instance.
+ *
+ * Pre-registered only. Dynamic Client Registration (RFC 7591) is deprecated in
+ * the current MCP revision and retained there only for backwards compatibility,
+ * and the hosts that matter do not need it: Gemini Enterprise has no DCR path
+ * at all and wants a client id and secret typed into a form, and ChatGPT keeps
+ * predefined clients working. So an operator registers a client explicitly and
+ * nothing on the network can mint one.
+ */
+export const oauthClients = sqliteTable('oauth_clients', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  /**
+   * scrypt digest, or NULL for a public client that authenticates by PKCE
+   * alone. Never the secret: a client secret is a bearer credential, and a
+   * copied database file must not be a working client.
+   */
+  secretHash: text('secret_hash'),
+  /** Exact-match allowlist. A redirect_uri not in here is refused. */
+  redirectUris: text('redirect_uris', { mode: 'json' }).$type<string[]>().notNull().default([]),
+  /**
+   * How this client came to exist.
+   *
+   * `dynamic` means it registered ITSELF over the open RFC 7591 endpoint and
+   * chose its own display name — so that name is a claim, not a fact, and the
+   * consent page must say so. A client calling itself "Canonry Dashboard"
+   * otherwise reads as first-party on the one screen where trust is decided.
+   */
+  registration: text('registration').$type<'operator' | 'dynamic'>().notNull().default('operator'),
+  createdAt: text('created_at').notNull(),
+  revokedAt: text('revoked_at'),
+})
+
+/**
+ * In-flight authorization codes. Single use, short lived, and bound to the
+ * PKCE challenge plus the resource the client asked for.
+ */
+export const oauthAuthorizationCodes = sqliteTable('oauth_authorization_codes', {
+  /** SHA-256 of the code. The code itself is 256 bits of randomness. */
+  codeHash: text('code_hash').primaryKey(),
+  clientId: text('client_id').notNull().references(() => oauthClients.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  redirectUri: text('redirect_uri').notNull(),
+  /** S256 only. `plain` is refused at the authorize endpoint, not stored. */
+  codeChallenge: text('code_challenge').notNull(),
+  /**
+   * RFC 8707 resource indicator. Carried from authorize to token and stamped
+   * into the token's audience, so a token minted for one MCP endpoint cannot
+   * be replayed against another.
+   */
+  resource: text('resource'),
+  scope: text('scope'),
+  expiresAt: text('expires_at').notNull(),
+  createdAt: text('created_at').notNull(),
+}, (table) => [
+  index('idx_oauth_codes_expires').on(table.expiresAt),
+])
+
+/**
+ * Issued access and refresh tokens, stored as digests for the same reason
+ * `user_sessions` stores a digest: the row records that a token exists, it is
+ * not a way to become that token.
+ */
+export const oauthTokens = sqliteTable('oauth_tokens', {
+  tokenHash: text('token_hash').primaryKey(),
+  kind: text('kind').$type<'access' | 'refresh'>().notNull(),
+  clientId: text('client_id').notNull().references(() => oauthClients.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  /** Audience. Enforced on every resource request. */
+  resource: text('resource'),
+  scope: text('scope'),
+  expiresAt: text('expires_at').notNull(),
+  revokedAt: text('revoked_at'),
+  createdAt: text('created_at').notNull(),
+}, (table) => [
+  index('idx_oauth_tokens_user').on(table.userId),
+  index('idx_oauth_tokens_expires').on(table.expiresAt),
+])
+
 export const schedules = sqliteTable('schedules', {
   id: text('id').primaryKey(),
   projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),

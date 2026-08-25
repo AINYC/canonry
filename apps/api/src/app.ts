@@ -170,6 +170,21 @@ export function buildApp(env: PlatformEnv) {
     trustProxyConfigured: trustProxy !== false,
   })
 
+  // NO MCP TRANSPORT AND NO OAUTH HERE, deliberately.
+  //
+  // The MCP server lives in the engine package (@ainyc/canonry) and this app
+  // depends only on api-routes/config/contracts/db. Wiring it would mean taking
+  // a dependency on the whole engine — providers, browser automation, the run
+  // coordinator — inside a deployable that exists precisely to stay light.
+  //
+  // Nothing is lost: `canonry serve` is what runs on every self-hosted install
+  // and every fleet tenant, and it registers the transport and the
+  // authorization server. This app is the stateless REST surface, and an OAuth
+  // server with no MCP resource behind it would authorize access to nothing.
+  //
+  // If that changes, both must move together: the metadata documents advertise
+  // absolute URLs, so a host that publishes them without serving the resource
+  // sends clients somewhere that 404s.
   registerTelemetryCollectorRoutes(app)
   registerHealthRoutes(app, env)
 
