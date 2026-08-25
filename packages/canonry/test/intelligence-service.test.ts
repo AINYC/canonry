@@ -189,18 +189,46 @@ describe('IntelligenceService', () => {
       expect(result).toBeNull()
     })
 
-    it('returns null for a run not in recent completed list', () => {
-      const { db } = createTempDb('intel-old-')
+    it('returns null for a run that is not eligible for analysis', () => {
+      // Eligibility is a property of the RUN, not of its recency: wrong kind,
+      // non-terminal status, or a probe trigger. (This case used to be
+      // "not in the recent completed list", which coupled eligibility to
+      // whether the run happened to be one of the 5 newest rows — the
+      // coupling that refused whole arms of a 6+ location fan-out.)
+      const { db } = createTempDb('intel-ineligible-')
       const projectId = seedProject(db)
-      // Create 3 runs — the oldest one won't be in the top 2
-      const oldRun = seedRun(db, projectId, 'completed', '2024-01-01T00:00:00Z')
-      seedRun(db, projectId, 'completed', '2024-06-01T00:00:00Z')
-      seedRun(db, projectId, 'completed', '2024-12-01T00:00:00Z')
-
+      const queryId = seedQuery(db, projectId, 'roof repair')
       const service = new IntelligenceService(db)
-      const result = service.analyzeAndPersist(oldRun, projectId)
 
-      expect(result).toBeNull()
+      const ineligible: Array<[string, Partial<typeof runs.$inferInsert>]> = [
+        ['wrong kind', { kind: 'ga-sync' }],
+        ['still running', { status: 'running' }],
+        ['failed', { status: 'failed' }],
+        ['probe trigger', { trigger: 'probe' }],
+      ]
+
+      for (const [label, overrides] of ineligible) {
+        const runId = crypto.randomUUID()
+        db.insert(runs).values({
+          id: runId,
+          projectId,
+          kind: 'answer-visibility',
+          status: 'completed',
+          trigger: 'manual',
+          createdAt: '2024-01-01T00:00:00Z',
+          finishedAt: '2024-01-01T00:00:00Z',
+          ...overrides,
+        }).run()
+        // Snapshots present, so a null result can only come from eligibility.
+        seedSnapshot(db, runId, queryId, 'gemini', 'cited', { citedDomains: ['example.com'] })
+
+        expect(service.analyzeAndPersist(runId, projectId), label).toBeNull()
+      }
+
+      // Control: same shape, eligible — proves the seed itself is analyzable.
+      const eligible = seedRun(db, projectId, 'completed', '2024-02-01T00:00:00Z')
+      seedSnapshot(db, eligible, queryId, 'gemini', 'cited', { citedDomains: ['example.com'] })
+      expect(service.analyzeAndPersist(eligible, projectId)).not.toBeNull()
     })
 
     it('is idempotent — reprocessing preserves dismissed state', async () => {
@@ -900,6 +928,185 @@ describe('IntelligenceService', () => {
       const remaining = db.select().from(insights).all()
       expect(remaining.filter(i => i.type === 'first-citation')).toHaveLength(0)
       expect(remaining.filter(i => i.type === 'gain')).toHaveLength(0)
+    })
+  })
+
+  // Regression suite: `HISTORY_WINDOW_RUNS` bounded ROWS, but the location
+  // scoping was a post-LIMIT filter — so a fan-out sweep's own siblings ate
+  // the window. Measured before the fix, with a real cited→not-cited
+  // regression present at every location: detected at 1-2 locations, silently
+  // dropped at 3 and 5, and at 8 the run was refused outright (`null` — no
+  // insights AND no health snapshot for that arm). Both scoping predicates
+  // now live in the WHERE, so the limit means N sweeps AT THIS LOCATION.
+  describe('fan-out siblings do not consume the history window', () => {
+    function seedFanOutProject(
+      db: ReturnType<typeof createClient>,
+      locationCount: number,
+    ): { projectId: string; queryId: string } {
+      const now = new Date().toISOString()
+      const projectId = crypto.randomUUID()
+      db.insert(projects).values({
+        id: projectId,
+        name: 'fan-out',
+        displayName: 'Fan Out',
+        canonicalDomain: 'example.com',
+        country: 'US',
+        language: 'en',
+        providers: '["gemini"]',
+        locations: JSON.stringify(
+          Array.from({ length: locationCount }, (_, i) => ({ label: `loc${i}`, country: 'US' })),
+        ),
+        createdAt: now,
+        updatedAt: now,
+      }).run()
+      return { projectId, queryId: seedQuery(db, projectId, 'roof repair') }
+    }
+
+    /** One sweep fanned out across every location, each arm citing or not. */
+    function seedSweep(
+      db: ReturnType<typeof createClient>,
+      projectId: string,
+      queryId: string,
+      locationCount: number,
+      day: number,
+      citationState: string,
+    ): string[] {
+      const ids: string[] = []
+      for (let l = 0; l < locationCount; l++) {
+        const runId = crypto.randomUUID()
+        const ts = `2026-01-${String(day).padStart(2, '0')}T${String(l).padStart(2, '0')}:00:00Z`
+        db.insert(runs).values({
+          id: runId,
+          projectId,
+          kind: 'answer-visibility',
+          status: 'completed',
+          trigger: 'manual',
+          location: `loc${l}`,
+          createdAt: ts,
+          finishedAt: ts,
+        }).run()
+        seedSnapshot(db, runId, queryId, 'gemini', citationState, {
+          citedDomains: citationState === 'cited' ? ['example.com'] : [],
+        })
+        ids.push(runId)
+      }
+      return ids
+    }
+
+    // 8 exceeds HISTORY_WINDOW_RUNS (5), which is where the arms used to fall
+    // out of their own window entirely.
+    for (const locationCount of [2, 3, 5, 8]) {
+      it(`detects a real regression at ${locationCount} locations`, () => {
+        const { db } = createTempDb(`intel-fanout-reg-${locationCount}-`)
+        const { projectId, queryId } = seedFanOutProject(db, locationCount)
+
+        const before = seedSweep(db, projectId, queryId, locationCount, 1, 'cited')
+        const after = seedSweep(db, projectId, queryId, locationCount, 2, 'not-cited')
+
+        const service = new IntelligenceService(db)
+        // Assert on the FIRST arm: it finished earliest, so it is the one the
+        // later siblings pushed out of a row-bounded window.
+        const result = service.analyzeAndPersist(after[0]!, projectId)
+
+        expect(result).not.toBeNull()
+        expect(result!.regressions).toHaveLength(1)
+        expect(result!.regressions[0]!.query).toBe('roof repair')
+        // Compared against its OWN location's predecessor, never a sibling.
+        expect(result!.regressions[0]!.previousRunId).toBe(before[0]!)
+        // And the arm still gets a health snapshot — at 8 locations it used
+        // to get none, silently dropping that location off the dashboard.
+        const health = db.select().from(healthSnapshots).all()
+        expect(health).toHaveLength(1)
+        expect(health[0]!.runId).toBe(after[0]!)
+      })
+    }
+
+    it('reaches PERSISTENT_GAP_THRESHOLD sweeps back at every location count', () => {
+      // 4 uncited sweeps is a real 4-run gap at every location. Pre-fix this
+      // was found only for a single-location project; at 2+ the window could
+      // not hold the 3 same-location sweeps the threshold needs.
+      for (const locationCount of [2, 3, 5, 8]) {
+        const { db } = createTempDb(`intel-fanout-gap-${locationCount}-`)
+        const { projectId, queryId } = seedFanOutProject(db, locationCount)
+
+        let lastFirstArm = ''
+        for (let day = 1; day <= 4; day++) {
+          lastFirstArm = seedSweep(db, projectId, queryId, locationCount, day, 'not-cited')[0]!
+        }
+
+        const result = new IntelligenceService(db).analyzeAndPersist(lastFirstArm, projectId)
+
+        expect(result!.persistentGaps, `locations=${locationCount}`).toHaveLength(1)
+        expect(result!.persistentGaps[0]!.streak, `locations=${locationCount}`).toBe(4)
+      }
+    })
+
+    it('never compares an arm against a sibling location', () => {
+      // The invariant the window must not break: florida cited, michigan not,
+      // in the SAME sweep. Neither is a transition of the other.
+      const { db } = createTempDb('intel-fanout-sibling-')
+      const { projectId, queryId } = seedFanOutProject(db, 3)
+
+      seedSweep(db, projectId, queryId, 3, 1, 'cited')
+      // Second sweep: loc0 stays cited, others drop. Only loc1/loc2 regressed.
+      const day2: string[] = []
+      for (let l = 0; l < 3; l++) {
+        const runId = crypto.randomUUID()
+        const ts = `2026-01-02T0${l}:00:00Z`
+        db.insert(runs).values({
+          id: runId, projectId, kind: 'answer-visibility', status: 'completed',
+          trigger: 'manual', location: `loc${l}`, createdAt: ts, finishedAt: ts,
+        }).run()
+        seedSnapshot(db, runId, queryId, 'gemini', l === 0 ? 'cited' : 'not-cited', {
+          citedDomains: l === 0 ? ['example.com'] : [],
+        })
+        day2.push(runId)
+      }
+
+      const service = new IntelligenceService(db)
+      // loc0 held its citation — no regression, and no phantom gain either.
+      const loc0 = service.analyzeAndPersist(day2[0]!, projectId)
+      expect(loc0!.regressions).toHaveLength(0)
+      expect(loc0!.gains).toHaveLength(0)
+      expect(loc0!.firstCitations).toHaveLength(0)
+      // loc1 lost it — a real regression against loc1's own predecessor.
+      const loc1 = service.analyzeAndPersist(day2[1]!, projectId)
+      expect(loc1!.regressions).toHaveLength(1)
+    })
+
+    it('compares a re-analyzed historical run against its own predecessor, not a later sweep', () => {
+      // The window is anchored at the run being analyzed, so re-running
+      // analysis over an old run is correct rather than refused. Pre-fix the
+      // run had to be among the 5 most recent rows to be analyzed at all.
+      const { db } = createTempDb('intel-anchor-')
+      const projectId = seedProject(db)
+      const queryId = seedQuery(db, projectId, 'roof repair')
+
+      const mk = (day: number, state: string) => {
+        const runId = crypto.randomUUID()
+        const ts = `2026-01-0${day}T00:00:00Z`
+        db.insert(runs).values({
+          id: runId, projectId, kind: 'answer-visibility', status: 'completed',
+          trigger: 'manual', createdAt: ts, finishedAt: ts,
+        }).run()
+        seedSnapshot(db, runId, queryId, 'gemini', state, {
+          citedDomains: state === 'cited' ? ['example.com'] : [],
+        })
+        return runId
+      }
+
+      const day1 = mk(1, 'cited')
+      const day2 = mk(2, 'not-cited')  // the regression happened HERE
+      mk(3, 'cited')
+      mk(4, 'cited')
+      mk(5, 'cited')
+      mk(6, 'cited')
+
+      const result = new IntelligenceService(db).analyzeAndPersist(day2, projectId)
+
+      expect(result).not.toBeNull()
+      expect(result!.regressions).toHaveLength(1)
+      expect(result!.regressions[0]!.previousRunId).toBe(day1)
     })
   })
 

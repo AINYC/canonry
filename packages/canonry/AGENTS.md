@@ -176,32 +176,53 @@ When a sweep finishes, the flow is: `JobRunner` → `RunCoordinator.onRunComplet
 
 #### What may serve as a comparison baseline (Critical)
 
-Every run-window query inside `IntelligenceService` must filter
-`eq(runs.kind, RunKinds['answer-visibility'])`. Only that kind writes
-`query_snapshots`; the other 14 (`ga-sync`, `traffic-sync`, `site-audit`, …)
-write none. An unfiltered window lets one of them win the "previous run" slot,
-and an empty baseline is not a neutral one — it is a baseline in which nothing
-was ever cited. `detectFirstCitations` and `detectGains` then report every
-currently-cited query as brand new, `detectRegressions` finds no prior citation
-to lose so real regressions vanish silently, and `detectPersistentGaps` breaks
-each query's streak on the run that lacks it.
+**Scope the history window in SQL, before the `LIMIT`.** `HISTORY_WINDOW_RUNS`
+bounds ROWS; the window has to mean *N sweeps at this run's location*. Anything
+scoped afterwards is scoped against a page that already dropped the rows it
+needed. Both predicates live in `analyzableRunPredicates()` + the location
+clause, and both were learned the hard way:
 
-The failure gets **worse the better an instance is configured**: with daily
-syncs and weekly sweeps, the row immediately before a sweep is almost always a
-sync. It is also invisible in a fixture-only test, because a test that seeds
-two sweeps and nothing else never puts a foreign kind in the window.
+- **Kind.** Only `answer-visibility` writes `query_snapshots`; the other 14
+  kinds (`ga-sync`, `traffic-sync`, `site-audit`, …) write none. Let one win
+  the "previous run" slot and every detector gets an empty baseline — not a
+  neutral one, a baseline in which nothing was ever cited. `detectFirstCitations`
+  and `detectGains` report every currently-cited query as brand new,
+  `detectRegressions` finds no prior citation to lose so real regressions vanish
+  silently, and `detectPersistentGaps` breaks each query's streak on the run
+  that lacks it. Worse the better an instance is configured: daily syncs +
+  weekly sweeps means the row before a sweep is almost always a sync.
+- **Location.** A sweep fans out to one run per configured location, so
+  siblings compete for the same row budget. At 3 locations a 5-row page holds
+  under 2 sweeps per location — the baseline vanishes and ALL transition
+  detection goes dead. At 6+, an arm falls outside its own window and used to
+  be refused outright: no insights *and no health snapshot*, so that location
+  left the dashboard rather than reading as flat.
 
-A kind filter alone is not enough. A sweep whose every provider call failed
-still lands in the window as `status='partial'` with zero snapshots and
-anchors the same false transitions, so baselines and history entries are drawn
-from `runIdsWithSnapshots(...)` — a run that measured nothing is not a
-comparison point, and the comparison skips to the last run that measured.
+Neither is visible in a fixture-only test. A test that seeds two sweeps at one
+location never puts a foreign kind or a sibling arm in the window, which is why
+both survived a green suite for so long.
 
-Both rules apply to `backfill()` as well as `analyzeAndPersist()`. Backfill is
-the reanalyze path operators run to clear bad rows; without the same filters it
-rewrites exactly the insights it was invoked to remove. Clearing a historical
-instance is `canonry backfill insights <project>` (add `--dry-run` first to see
-the delta).
+Two supporting rules:
+
+- **Eligibility is a property of the run, not of its recency.** Resolve the run
+  being analyzed by id under `analyzableRunPredicates()`; never find it inside
+  the window. Finding it there silently makes "is this analyzable?" depend on
+  "is it one of the N newest rows?" — that coupling is what dropped fan-out
+  arms. The window is then anchored with `lte(runChronologyKey, …)` so it never
+  looks forward, which also makes re-analyzing a historical run correct instead
+  of refused.
+- **A run with no snapshots is not a comparison point.** A sweep whose every
+  provider call failed still lands in the window as `status='partial'` with zero
+  snapshots and anchors the same false transitions, so baselines and history
+  entries are drawn from `runIdsWithSnapshots(...)`; the comparison skips to the
+  last run that measured.
+
+All of this applies to `backfill()` as well as `analyzeAndPersist()`. Backfill
+is the reanalyze path operators run to clear bad rows; without the same
+predicates it rewrites exactly the insights it was invoked to remove. (Backfill
+loads the full chronology rather than a window, so it needs the predicates but
+not the limit reasoning.) Clearing a historical instance is `canonry backfill
+insights <project>` — add `--dry-run` first to see the delta.
 
 ### Index coverage auto-refresh
 

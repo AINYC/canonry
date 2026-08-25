@@ -1,11 +1,11 @@
-import { eq, desc, asc, and, ne, or, inArray, gte, lte } from 'drizzle-orm'
+import { eq, desc, asc, and, ne, or, inArray, gte, lte, isNull, sql } from 'drizzle-orm'
 import type { DatabaseClient } from '@ainyc/canonry-db'
 import { competitors, groupRunsByCreatedAt, gscSearchData, healthSnapshots, insights, projects, queries, querySnapshots, runs, gbpLocations, gbpDailyMetrics, gbpKeywordMonthly, gbpPlaceActions, gbpLodgingSnapshots, gbpPlaceDetails, parseJsonColumn } from '@ainyc/canonry-db'
 import { analyzeRuns, analyzeGbp, classifyRegressionSeverity, compileCompetitiveSignalResolver, PERSISTENT_GAP_THRESHOLD, GBP_INSIGHT_PROVIDER } from '@ainyc/canonry-intelligence'
 import type { RunData, Snapshot, AnalysisResult, Insight, GbpLocationSignals, GbpKeywordPoint } from '@ainyc/canonry-intelligence'
 import { extractPlaceAmenities, type PlaceDetails } from '@ainyc/canonry-integration-google-places'
 import { buildGbpSummary } from '@ainyc/canonry-api-routes'
-import { CitationStates, RunKinds, RunTriggers, effectiveDomains } from '@ainyc/canonry-contracts'
+import { CitationStates, RunKinds, RunStatuses, RunTriggers, effectiveDomains } from '@ainyc/canonry-contracts'
 import crypto from 'node:crypto'
 import { createLogger } from './logger.js'
 import { pickProjectCitedDomain } from './citation-utils.js'
@@ -15,6 +15,34 @@ const RECURRENCE_LOOKBACK_RUNS = 5
 const HISTORY_WINDOW_RUNS = Math.max(PERSISTENT_GAP_THRESHOLD, 5)
 
 const log = createLogger('IntelligenceService')
+
+/**
+ * A run's position in its project's chronology. `finishedAt` is set on every
+ * terminal run, but the rest of this file reads it as `finishedAt ?? createdAt`
+ * — matching that in SQL keeps a row with a null `finishedAt` inside the window
+ * instead of silently dropping it (`NULL <= x` is NULL, not true).
+ */
+const runChronologyKey = sql`coalesce(${runs.finishedAt}, ${runs.createdAt})`
+
+/**
+ * What makes a run analyzable by the intelligence engine. Shared by the
+ * by-id lookup and the history window so the two CANNOT drift — they did,
+ * and the window's missing kind filter is what let a `ga-sync` become some
+ * sweep's citation baseline. A new predicate belongs here, not at one call
+ * site.
+ */
+function analyzableRunPredicates(projectId: string) {
+  return [
+    eq(runs.projectId, projectId),
+    // Only this kind writes query_snapshots.
+    eq(runs.kind, RunKinds['answer-visibility']),
+    or(eq(runs.status, RunStatuses.completed), eq(runs.status, RunStatuses.partial)),
+    // Defensive: RunCoordinator already skips probes before analyzeAndPersist
+    // is called, but a future call site invoking it directly for a probe must
+    // still not pollute the intelligence window.
+    ne(runs.trigger, RunTriggers.probe),
+  ]
+}
 
 function readStoredGroundingSources(rawResponse: string | null): Array<{ uri: string }> {
   const parsed = parseJsonColumn<Record<string, unknown>>(rawResponse, {})
@@ -65,56 +93,73 @@ export class IntelligenceService {
    * Returns the analysis result for the coordinator to inspect (e.g. for webhook dispatch).
    */
   analyzeAndPersist(runId: string, projectId: string): AnalysisResult | null {
-    // 1. Fetch a window of recent completed/partial runs — covers immediate
-    //    previous run and enough history for persistent-gap detection.
-    //    Order by finishedAt (then createdAt) so chronology is well-defined
-    //    even when multiple test rows share a wall-clock createdAt.
+    // 1. Resolve the run being analyzed, BY ID, under the same eligibility
+    //    predicates the history window uses. It used to be found inside that
+    //    window instead, which silently made "is this run analyzable?" depend
+    //    on "is it one of the 5 most recent rows?" — two different questions.
+    //    A sweep fans out to one run per configured location, so a project
+    //    with 6+ locations puts more than HISTORY_WINDOW_RUNS sibling rows
+    //    ahead of the arms that finished first, and those arms were refused
+    //    outright: no insights AND no health snapshot, so they disappeared
+    //    from the dashboard rather than reading as flat.
+    const currentRunRecord = this.db
+      .select()
+      .from(runs)
+      .where(and(eq(runs.id, runId), ...analyzableRunPredicates(projectId)))
+      .get()
+
+    if (!currentRunRecord) {
+      log.info('intelligence.skip', { runId, reason: 'run not eligible for analysis' })
+      return null
+    }
+
+    const currentLocation = currentRunRecord.location ?? null
+
+    // 2. The run's own history window: the most recent sweeps AT ITS LOCATION,
+    //    ending at this run.
     //
-    //    ONLY answer-visibility runs. Every other kind (ga-sync,
-    //    traffic-sync, site-audit, …) writes no query_snapshots, so letting
-    //    one into the window makes it the "previous run" and hands every
-    //    detector an empty baseline: each cited query reads as a brand-new
-    //    first citation, each cited pair as a gain, and each real regression
-    //    silently disappears. The effect is WORSE on well-configured
-    //    instances — daily syncs plus weekly sweeps means the row before a
-    //    sweep is nearly always a sync. Unfiltered, HISTORY_WINDOW_RUNS also
-    //    counts syncs against its budget, so the window rarely reached far
-    //    enough back to hold PERSISTENT_GAP_THRESHOLD real sweeps.
-    //    `applySeverityTiering` below has always filtered on kind; this
-    //    query is the one that did not.
+    //    Both scoping predicates are in the WHERE, not applied to a LIMITed
+    //    page, and that placement is the whole point. `HISTORY_WINDOW_RUNS`
+    //    rows of any kind at any location is not the same window as
+    //    `HISTORY_WINDOW_RUNS` sweeps here:
+    //
+    //    - KIND. Only answer-visibility runs write query_snapshots. Every
+    //      other kind (ga-sync, traffic-sync, site-audit, …) writes none, so
+    //      one winning the "previous run" slot hands every detector an empty
+    //      baseline — each cited query reads as a brand-new first citation,
+    //      each cited pair as a gain, and each real regression silently
+    //      disappears because there is no prior citation to lose. It got
+    //      WORSE the better an instance was configured: with daily syncs and
+    //      weekly sweeps the row before a sweep is almost always a sync.
+    //    - LOCATION. This used to be a filter applied to the LIMITed page,
+    //      so a fan-out sweep's siblings ate the budget, and the arithmetic
+    //      is brutal: at 3 locations a 5-row page holds under 2 sweeps per
+    //      location, so the baseline vanished and ALL transition detection
+    //      went dead. A post-LIMIT filter reads as though the scoping is
+    //      handled, which is exactly why nobody saw it.
+    //
+    //    Ordering stays finishedAt-then-createdAt so chronology is defined
+    //    even when fan-out siblings share a wall-clock createdAt.
     const recentRuns = this.db
       .select()
       .from(runs)
       .where(
         and(
-          eq(runs.projectId, projectId),
-          eq(runs.kind, RunKinds['answer-visibility']),
-          or(eq(runs.status, 'completed'), eq(runs.status, 'partial')),
-          // Defensive: RunCoordinator already skips probes before this is
-          // called, but if a future call site invokes analyzeAndPersist
-          // directly for a probe, probes still must not pollute the
-          // intelligence window.
-          ne(runs.trigger, RunTriggers.probe),
+          ...analyzableRunPredicates(projectId),
+          currentLocation === null ? isNull(runs.location) : eq(runs.location, currentLocation),
+          // Never look forward. The window is this run's own past, so
+          // re-analyzing a historical run compares it against its true
+          // predecessor rather than against sweeps that came after it.
+          lte(runChronologyKey, currentRunRecord.finishedAt ?? currentRunRecord.createdAt),
         ),
       )
       .orderBy(desc(runs.finishedAt), desc(runs.createdAt))
       .limit(HISTORY_WINDOW_RUNS)
       .all()
 
-    if (recentRuns.length === 0) {
-      log.info('intelligence.skip', { runId, reason: 'no completed runs' })
-      return null
-    }
-
-    const currentRunRecord = recentRuns.find(r => r.id === runId)
-    if (!currentRunRecord) {
-      log.info('intelligence.skip', { runId, reason: 'run not in recent completed list' })
-      return null
-    }
-
     const trackedCompetitors = this.loadTrackedCompetitors(projectId)
 
-    // 2. Build RunData for the current run
+    // 3. Build RunData for the current run
     const currentRun = this.buildRunData(
       runId,
       projectId,
@@ -128,28 +173,22 @@ export class IntelligenceService {
       return null
     }
 
-    // 3. Build RunData for previous run + history window (oldest → newest, ending at current).
+    // 4. Build RunData for previous run + history window (oldest → newest,
+    //    ending at current). Location scoping already happened in SQL; the
+    //    only thing left to drop is runs that measured nothing.
     //
-    // Multi-location fan-out: a single sweep produces one run per configured
-    // location. We must compare each run against the previous run *at the
-    // same location* — comparing Michigan to its sibling Florida arm would
-    // treat the geo difference as a regression/gain. Filter the ordered
-    // window to same-location entries, treating null/undefined as one
-    // bucket (locationless runs share a chronology).
-    //
-    // Runs that wrote no snapshots measured nothing, so they are not
-    // comparison points. Backstop to the kind filter above: an
-    // answer-visibility run whose every provider call failed still lands in
-    // the window with `status='partial'`, and as a baseline it manufactures
-    // the same false first-citations. As a history entry it is worse than
-    // useless — `detectPersistentGaps` breaks a query's streak on any run
-    // that lacks it, so one empty run truncates every streak. Drop them and
-    // the comparison lands on the last run that actually measured.
+    //    A run with no snapshots is not a comparison point. This backstops
+    //    the kind filter: an answer-visibility run whose every provider call
+    //    failed still lands in the window with `status='partial'` and as a
+    //    baseline manufactures the same false first-citations. As a history
+    //    entry it is worse than useless — `detectPersistentGaps` breaks a
+    //    query's streak on any run that lacks it, so one empty run truncates
+    //    every streak. Dropping them lands the comparison on the last run
+    //    that actually measured.
     const orderedRecent = [...recentRuns].reverse()
-    const currentLocation = currentRunRecord.location ?? null
     const measuredRunIds = this.runIdsWithSnapshots(orderedRecent.map(r => r.id))
     const sameLocationOrdered = orderedRecent.filter(
-      r => (r.location ?? null) === currentLocation && (r.id === runId || measuredRunIds.has(r.id)),
+      r => r.id === runId || measuredRunIds.has(r.id),
     )
     const currentLocIdx = sameLocationOrdered.findIndex(r => r.id === runId)
     const previousRunRecord = currentLocIdx > 0 ? sameLocationOrdered[currentLocIdx - 1]! : null
@@ -175,7 +214,7 @@ export class IntelligenceService {
           trackedCompetitors,
         ))
 
-    // 4. Run analysis — skip transition detection on first run (no baseline to compare)
+    // 5. Run analysis — skip transition detection on first run (no baseline to compare)
     if (!previousRun) {
       const result = analyzeRuns(currentRun, currentRun, { trackedCompetitors, history })
       log.info('intelligence.analyzed', {
@@ -205,7 +244,7 @@ export class IntelligenceService {
       insights: result.insights.length,
     })
 
-    // 5. Tier severities once, pass tiered insights to persist + return so
+    // 6. Tier severities once, pass tiered insights to persist + return so
     // RunCoordinator / webhook dispatch see the same severities the DB holds.
     const tieredResult = this.tierResult(result, runId, projectId)
     this.persistResult(tieredResult, runId, projectId)
@@ -580,15 +619,7 @@ export class IntelligenceService {
     const allRuns = this.db
       .select()
       .from(runs)
-      .where(
-        and(
-          eq(runs.projectId, project.id),
-          eq(runs.kind, RunKinds['answer-visibility']),
-          or(eq(runs.status, 'completed'), eq(runs.status, 'partial')),
-          // Backfill must not replay probe runs as if they were real sweeps.
-          ne(runs.trigger, RunTriggers.probe),
-        ),
-      )
+      .where(and(...analyzableRunPredicates(project.id)))
       .orderBy(asc(runs.finishedAt))
       .all()
 
