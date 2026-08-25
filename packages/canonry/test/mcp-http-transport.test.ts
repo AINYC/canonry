@@ -152,6 +152,87 @@ describe('MCP over Streamable HTTP', () => {
     expect(stolen.statusCode).toBe(404)
   })
 
+  async function toolsFor(url: string, key: string): Promise<string[]> {
+    const init = await built.app.inject({
+      method: 'POST',
+      url,
+      headers: { authorization: `Bearer ${key}`, accept: MCP_ACCEPT, 'content-type': 'application/json' },
+      payload: INIT,
+    })
+    const sessionId = init.headers['mcp-session-id'] as string
+    const res = await built.app.inject({
+      method: 'POST',
+      url,
+      headers: {
+        authorization: `Bearer ${key}`,
+        accept: MCP_ACCEPT,
+        'content-type': 'application/json',
+        'mcp-session-id': sessionId,
+      },
+      payload: { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+    })
+    // Streamable HTTP answers a POST as SSE, so the JSON-RPC body arrives as a
+    // `data:` frame rather than a bare payload.
+    const frame = res.body.split('\n').find(line => line.startsWith('data:'))
+    const parsed = JSON.parse((frame ?? res.body).replace(/^data:\s*/, '')) as {
+      result?: { tools?: { name: string }[] }
+    }
+    return (parsed.result?.tools ?? []).map(tool => tool.name)
+  }
+
+  it('serves a narrow surface on the core endpoint, not the whole registry', async () => {
+    // The point of the whole exercise: the full eager surface is 206 tools and
+    // ~52k tokens of definitions on every turn.
+    const tools = await toolsFor('/api/v1/mcp', built.wildcardKey)
+    expect(tools.length).toBeGreaterThan(0)
+    expect(tools.length).toBeLessThan(30)
+  })
+
+  it('a /readonly endpoint narrows even a WILDCARD key', async () => {
+    // The safety property that makes a /readonly URL a guarantee rather than a
+    // naming convention: the path forces the read-only catalog regardless of
+    // how much authority the presented key carries.
+    const full = await toolsFor('/api/v1/mcp', built.wildcardKey)
+    const readOnly = await toolsFor('/api/v1/mcp/readonly', built.wildcardKey)
+    expect(readOnly.length).toBeLessThan(full.length)
+    for (const name of readOnly) expect(full).toContain(name)
+  })
+
+  it('a toolkit endpoint adds that toolkit on top of core', async () => {
+    const core = await toolsFor('/api/v1/mcp', built.wildcardKey)
+    const withToolkit = await toolsFor('/api/v1/mcp/x/gsc', built.wildcardKey)
+    expect(withToolkit.length).toBeGreaterThan(core.length)
+    // core rides along, or the toolkit's tools have no project to aim at
+    for (const name of core) expect(withToolkit).toContain(name)
+  })
+
+  it('refuses a session opened on a different segment', async () => {
+    // A session id is bound to the endpoint that minted it. Without this, a
+    // session opened on a wide segment could be replayed against a narrow URL
+    // — or worse, a /readonly session id reused to reach a writable surface.
+    const init = await built.app.inject({
+      method: 'POST',
+      url: '/api/v1/mcp/x/gsc',
+      headers: { authorization: `Bearer ${built.wildcardKey}`, accept: MCP_ACCEPT, 'content-type': 'application/json' },
+      payload: INIT,
+    })
+    const sessionId = init.headers['mcp-session-id'] as string
+    expect(typeof sessionId).toBe('string')
+
+    const replayed = await built.app.inject({
+      method: 'POST',
+      url: '/api/v1/mcp/readonly',
+      headers: {
+        authorization: `Bearer ${built.wildcardKey}`,
+        accept: MCP_ACCEPT,
+        'content-type': 'application/json',
+        'mcp-session-id': sessionId,
+      },
+      payload: { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+    })
+    expect(replayed.statusCode).toBe(404)
+  })
+
   it('404s an unknown session id rather than silently opening a new one', async () => {
     // A client whose session was reaped must be told to re-initialize.
     const res = await built.app.inject({

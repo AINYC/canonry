@@ -5,7 +5,7 @@ import { PACKAGE_VERSION } from '../package-version.js'
 import { canonryMcpTools, type CanonryMcpTool } from './tool-registry.js'
 import { withToolErrors } from './results.js'
 import { DynamicToolCatalog, type DynamicCatalogEntry } from './dynamic-catalog.js'
-import { CANONRY_MCP_TOOLKIT_NAMES } from './toolkits.js'
+import { CANONRY_MCP_TOOLKIT_NAMES, type CanonryMcpTier } from './toolkits.js'
 
 export type CanonryMcpScope = 'all' | 'read-only'
 
@@ -13,6 +13,18 @@ export interface CanonryMcpServerOptions {
   clientFactory?: () => ApiClient
   scope?: CanonryMcpScope
   eager?: boolean
+  /**
+   * Restrict this server to a union of tiers.
+   *
+   * This is the segmentation a hosted client needs. The MCP spec is explicit
+   * that a tool set "MUST NOT vary per-connection or as a side effect of other
+   * requests on the connection", and equally explicit that it MAY vary "by the
+   * authorization presented on the request" — so the surface is narrowed when
+   * the connection is opened, never while it is running.
+   *
+   * Undefined means every tier, which is the stdio default and unchanged.
+   */
+  tiers?: readonly CanonryMcpTier[]
 }
 
 export interface CreateCanonryMcpServerResult {
@@ -78,7 +90,7 @@ export function createCanonryMcpServerWithCatalog(options: CanonryMcpServerOptio
   ;(server as unknown as WithValidate).validateToolInput = async (_tool, args) => args
 
   const entries: DynamicCatalogEntry[] = []
-  for (const registryTool of getCanonryMcpTools(scope)) {
+  for (const registryTool of getCanonryMcpTools(scope, options.tiers)) {
     const tool = registryTool as CanonryMcpTool
     const handler = tool.handler as (client: ApiClient, input: unknown) => Promise<unknown>
     const registered = server.registerTool(
@@ -97,7 +109,12 @@ export function createCanonryMcpServerWithCatalog(options: CanonryMcpServerOptio
     entries.push({ tool, registered })
   }
 
-  const catalog = new DynamicToolCatalog(server, entries, scope, { eager: options.eager })
+  // A tier-filtered server IS the narrowed surface, so everything in it is
+  // enabled from the start. Leaving progressive mode on would disable the very
+  // tiers the endpoint exists to serve, since the catalog disables anything
+  // that is not `core` until a toolkit is loaded.
+  const eager = options.eager === true || options.tiers !== undefined
+  const catalog = new DynamicToolCatalog(server, entries, scope, { eager })
   catalog.applyInitialEnablement()
 
   registerMetaTools(server, catalog)
@@ -136,8 +153,14 @@ function registerMetaTools(server: McpServer, catalog: DynamicToolCatalog): void
   )
 }
 
-export function getCanonryMcpTools(scope: CanonryMcpScope = 'all') {
-  return scope === 'read-only'
+export function getCanonryMcpTools(
+  scope: CanonryMcpScope = 'all',
+  tiers?: readonly CanonryMcpTier[],
+) {
+  const byScope = scope === 'read-only'
     ? canonryMcpTools.filter(tool => tool.access === 'read')
     : [...canonryMcpTools]
+  if (!tiers) return byScope
+  const wanted = new Set<CanonryMcpTier>(tiers)
+  return byScope.filter(tool => wanted.has(tool.tier))
 }

@@ -6,6 +6,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 
 import { ApiClient } from './client.js'
 import { createCanonryMcpServer } from './mcp/server.js'
+import { CANONRY_MCP_TOOLKIT_NAMES, type CanonryMcpTier } from './mcp/toolkits.js'
 
 /**
  * MCP over Streamable HTTP.
@@ -32,11 +33,27 @@ import { createCanonryMcpServer } from './mcp/server.js'
 const SESSION_IDLE_MS = 10 * 60 * 1000
 const SWEEP_INTERVAL_MS = 60 * 1000
 
+/**
+ * One endpoint's fixed surface.
+ *
+ * `readOnly` forces the read-only catalog even for a wildcard key, so a
+ * `/readonly` URL is a genuine guarantee rather than a naming convention. It
+ * can only ever narrow: a read-only KEY still gets a read-only catalog on a
+ * non-readonly path.
+ */
+interface Segment {
+  id: string
+  tiers: readonly CanonryMcpTier[]
+  readOnly: boolean
+}
+
 interface McpSession {
   transport: StreamableHTTPServerTransport
   close: () => Promise<void>
   /** The api key id that created this session. A different key may not reuse it. */
   keyId: string
+  /** The endpoint that opened it. A session may not be replayed against a wider segment. */
+  segmentId: string
   lastSeenAt: number
 }
 
@@ -93,26 +110,39 @@ export function registerMcpHttpRoutes(scope: FastifyInstance, opts: McpHttpOptio
     return trimmed.slice(prefix.length).trim() || null
   }
 
-  async function openSession(request: FastifyRequest, keyId: string): Promise<McpSession | null> {
+  async function openSession(
+    request: FastifyRequest,
+    keyId: string,
+    segment: Segment,
+  ): Promise<McpSession | null> {
     const bearer = callerBearer(request)
     if (!bearer) return null
 
-    // Read-only keys get a read-only catalog. Eager, because progressive
-    // discovery does not survive this transport: it announces new tools with a
-    // list-changed notification, and those are dropped when the client never
-    // opens the GET stream.
+    // The surface is narrowed HERE, when the connection opens, by the endpoint
+    // that was dialled and the credential that was presented. Never at runtime:
+    // the MCP spec states a tool set "MUST NOT vary per-connection or as a side
+    // effect of other requests on the connection", and equally that it MAY vary
+    // "by the authorization presented on the request".
+    //
+    // Progressive discovery (canonry_load_toolkit) stays the stdio default and
+    // is deliberately NOT used here. Not because the notification cannot be
+    // delivered — it can, if it carries relatedRequestId — but because the
+    // hosts do not act on it: ChatGPT freezes the tool list at admin approval
+    // so a runtime-loaded tool is never callable, Claude delivers the
+    // notification and ignores it, and Gemini Enterprise requires an admin to
+    // re-import actions by hand.
     const scopes = request.principal?.scopes ?? request.apiKey?.scopes ?? []
     const client = new ApiClient(opts.selfApiUrl, bearer, { skipProbe: true })
     const server = createCanonryMcpServer({
-      scope: isReadOnlyKey(scopes) ? 'read-only' : 'all',
-      eager: true,
+      scope: segment.readOnly || isReadOnlyKey(scopes) ? 'read-only' : 'all',
+      tiers: segment.tiers,
       clientFactory: () => client,
     })
 
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => crypto.randomUUID(),
       onsessioninitialized: (id: string) => {
-        sessions.set(id, { transport, close, keyId, lastSeenAt: now() })
+        sessions.set(id, { transport, close, keyId, segmentId: segment.id, lastSeenAt: now() })
       },
     })
 
@@ -127,10 +157,14 @@ export function registerMcpHttpRoutes(scope: FastifyInstance, opts: McpHttpOptio
     }
 
     await server.connect(transport)
-    return { transport, close, keyId, lastSeenAt: now() }
+    return { transport, close, keyId, segmentId: segment.id, lastSeenAt: now() }
   }
 
-  async function handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  async function handle(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    segment: Segment,
+  ): Promise<void> {
     const keyId = request.principal?.id ?? request.apiKey?.id
     if (!keyId) {
       await reply.status(401).send({ error: { code: 'AUTH_REQUIRED', message: 'Authentication required.' } })
@@ -144,7 +178,7 @@ export function registerMcpHttpRoutes(scope: FastifyInstance, opts: McpHttpOptio
       // A session belongs to the credential that opened it. Without this a
       // leaked session id would let any authenticated caller ride another
       // caller's server — including its tool scope.
-      if (existing.keyId !== keyId) {
+      if (existing.keyId !== keyId || existing.segmentId !== segment.id) {
         await reply.status(404).send({ error: { code: 'NOT_FOUND', message: 'Unknown MCP session.' } })
         return
       }
@@ -160,7 +194,7 @@ export function registerMcpHttpRoutes(scope: FastifyInstance, opts: McpHttpOptio
       return
     }
 
-    const opened = await openSession(request, keyId)
+    const opened = await openSession(request, keyId, segment)
     if (!opened) {
       await reply.status(401).send({ error: { code: 'AUTH_REQUIRED', message: 'Authentication required.' } })
       return
@@ -174,7 +208,27 @@ export function registerMcpHttpRoutes(scope: FastifyInstance, opts: McpHttpOptio
   // request carrying this same bearer, so the read-only, ads and project gates
   // all re-apply per operation.
   const config = { transportEnvelope: true } as const
-  scope.post('/mcp', { config }, handle)
-  scope.get('/mcp', { config }, handle)
-  scope.delete('/mcp', { config }, handle)
+
+  function mount(pathname: string, segment: Segment): void {
+    // POST carries requests, GET opens the optional SSE stream, DELETE ends the
+    // session. All three are the same handler over the same segment.
+    const run = (request: FastifyRequest, reply: FastifyReply) => handle(request, reply, segment)
+    scope.post(pathname, { config }, run)
+    scope.get(pathname, { config }, run)
+    scope.delete(pathname, { config }, run)
+  }
+
+  // The directory, resolved by URL. Each endpoint is a fixed surface: stable
+  // across the whole connection, so it is a stable snapshot for a host that
+  // freezes the tool list at approval, and a short readable list for the admin
+  // who has to approve it.
+  mount('/mcp', { id: 'core', tiers: ['core'], readOnly: false })
+  mount('/mcp/readonly', { id: 'core:ro', tiers: ['core'], readOnly: true })
+  for (const toolkit of CANONRY_MCP_TOOLKIT_NAMES) {
+    // `core` rides along with every toolkit: it carries project lookup and
+    // search, without which a toolkit's tools have nothing to aim at.
+    const tiers: readonly CanonryMcpTier[] = ['core', toolkit]
+    mount(`/mcp/x/${toolkit}`, { id: toolkit, tiers, readOnly: false })
+    mount(`/mcp/x/${toolkit}/readonly`, { id: `${toolkit}:ro`, tiers, readOnly: true })
+  }
 }
