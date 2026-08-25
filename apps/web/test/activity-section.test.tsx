@@ -228,11 +228,11 @@ test('renders five-channel breakdown with disjoint Organic, Social, Direct, Know
   renderActivitySection()
 
   await waitFor(() => {
-    expect(screen.getByText('Channel breakdown')).toBeTruthy()
+    expect(screen.getByText('Sessions by channel')).toBeTruthy()
   })
 
   // Scope queries to the breakdown card so column headers in unrelated tables don't collide.
-  const card = screen.getByText('Channel breakdown').closest('div.surface-card') as HTMLElement
+  const card = screen.getByText('Sessions by channel').closest('div.surface-card') as HTMLElement
   expect(card).toBeTruthy()
   const breakdown = within(card)
 
@@ -240,9 +240,9 @@ test('renders five-channel breakdown with disjoint Organic, Social, Direct, Know
   expect(breakdown.getByText('Organic')).toBeTruthy()
   expect(breakdown.getByText('Social')).toBeTruthy()
   expect(breakdown.getByText('Direct')).toBeTruthy()
-  expect(breakdown.getByText(/Known AI referrers/)).toBeTruthy()
+  expect(breakdown.getByText(/Visitors from AI/)).toBeTruthy()
   expect(breakdown.getByText('Other channels')).toBeTruthy()
-  expect(breakdown.getByText(/lower bound/i)).toBeTruthy()
+  expect(breakdown.getByText(/at least/i)).toBeTruthy()
 
   // Direct cell shows the share from API (25%)
   expect(breakdown.getByText('25%')).toBeTruthy()
@@ -255,7 +255,7 @@ test('renders five-channel breakdown with disjoint Organic, Social, Direct, Know
   // The misleading old framing is gone: panel title "Attributable AI visits" must not appear
   expect(screen.queryByText('Attributable AI visits')).toBeNull()
 
-  expect(screen.getByText('Known AI referrers by landing page')).toBeTruthy()
+  expect(screen.getByText('Pages AI visitors landed on')).toBeTruthy()
   const row = screen.getAllByText('/pricing')
     .map((cell) => cell.closest('tr') as HTMLElement | null)
     .find((candidate): candidate is HTMLElement => Boolean(candidate && within(candidate).queryByText('chatgpt.com')))
@@ -346,14 +346,14 @@ test('social table collapses to top 25 with show-all toggle and surfaces Other-s
   renderActivitySection()
 
   await waitFor(() => {
-    expect(screen.getByText('Source / medium')).toBeTruthy()
+    expect(screen.getByText('Social sources')).toBeTruthy()
   })
 
   // Top-N + Other notice: 30 sources, top 6 plotted, 24 collapsed into Other
   expect(screen.getByText(/Showing top 6 sources · 24 more grouped as Other/)).toBeTruthy()
 
-  // Source / medium table starts collapsed at the default limit of 25
-  const breakdownCard = screen.getByText('Source / medium').closest('div.surface-card') as HTMLElement
+  // Social sources table starts collapsed at the default limit of 25
+  const breakdownCard = screen.getByText('Social sources').closest('div.surface-card') as HTMLElement
   expect(breakdownCard).toBeTruthy()
   const breakdown = within(breakdownCard)
   expect(breakdown.getByText('Top 25 of 30')).toBeTruthy()
