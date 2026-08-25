@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { ConversionTrackingContract } from '@ainyc/canonry-contracts'
 
 import {
+  CONVERSION_INTEGRITY_PURPOSE,
   CONVERSION_TO_CHECK_BLOCKED,
   CONVERSION_TO_CHECK_HELP,
   ConversionIntegritySection,
@@ -468,4 +469,17 @@ describe('ConversionIntegritySection', () => {
     expect(screen.queryByRole('button', { name: 'Select conversion' })).toBeNull()
   })
 
+
+  test('explains what the feature is before anything is connected', () => {
+    // Onboarding is the one state where instruction IS the content: a reader who
+    // does not know what this does cannot decide whether to connect two Google
+    // accounts to it. Every other state keeps prose in a tooltip.
+    render(<ConversionIntegritySection onPrimaryAction={() => {}} />)
+    expect(screen.getByText(CONVERSION_INTEGRITY_PURPOSE)).toBeTruthy()
+  })
+
+  test('drops the purpose copy once a connection settles', () => {
+    render(<ConversionIntegritySection workspace={workspace()} />)
+    expect(screen.queryByText(CONVERSION_INTEGRITY_PURPOSE)).toBeNull()
+  })
 })
