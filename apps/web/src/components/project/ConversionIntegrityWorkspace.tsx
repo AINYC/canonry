@@ -175,6 +175,21 @@ function googleAdsConnectionVm(
   }
 }
 
+/**
+ * The identifying values of a settled Tag Manager selection, in the order an
+ * operator recognises them: the container first, then the account it lives
+ * under, then the draft workspace when one is pinned.
+ */
+export function gtmSelectionSummary(
+  containerId: string,
+  accountId: string,
+  workspaceId: string | null,
+): string {
+  const parts = [`Container ${containerId}`, `account ${accountId}`]
+  if (workspaceId) parts.push(`workspace ${workspaceId}`)
+  return parts.join(' · ')
+}
+
 function gtmConnectionVm(
   status: GtmConnectionStatusDto | undefined,
   snapshot: SnapshotEvidenceVm,
@@ -210,7 +225,12 @@ function gtmConnectionVm(
   }
   return {
     state: status.status,
-    selection: selection.workspaceId ? 'Selected account, container, and draft workspace' : 'Selected account and container',
+    // Name the selection, do not describe its shape. "Selected account,
+    // container, and draft workspace" told an operator which FIELDS were filled
+    // in, never which container they are looking at, so two projects pointed at
+    // different containers read identically. The status DTO carries ids and no
+    // display names, so the ids are the identity.
+    selection: gtmSelectionSummary(selection.containerId, selection.accountId, selection.workspaceId),
     ...snapshot,
     evidence: status.status === 'stale'
       ? 'The selected container needs a fresh static configuration observation.'

@@ -109,6 +109,8 @@ import type {
   GoogleAdsAccessibleCustomersResponse,
   GoogleAdsConnectionStatusDto,
   GoogleAdsCustomerSelectionRequest,
+  GoogleAdsMetricsWindow,
+  GoogleAdsPerformanceDto,
   GoogleAdsStoredSnapshotPage,
   GoogleAdsStoredSnapshotReadEnvelope,
   GoogleMarketingDisconnectResponse,
@@ -334,6 +336,7 @@ import {
   getApiV1ProjectsByNameGoogleAdsCustomers,
   putApiV1ProjectsByNameGoogleAdsSelection,
   postApiV1ProjectsByNameGoogleAdsSync,
+  getApiV1ProjectsByNameGoogleAdsPerformance,
   getApiV1ProjectsByNameGoogleAdsSnapshots,
   getApiV1ProjectsByNameGoogleAdsSnapshotsBySnapshotId,
   deleteApiV1ProjectsByNameGoogleAdsConnection,
@@ -2405,6 +2408,19 @@ export class ApiClient {
       postApiV1ProjectsByNameGoogleAdsSync({
         client: this.heyClient,
         path: { name: project },
+      }),
+    )
+  }
+
+  async getGoogleAdsPerformance(
+    project: string,
+    query?: { window?: GoogleAdsMetricsWindow },
+  ): Promise<GoogleAdsPerformanceDto> {
+    return this.invoke<GoogleAdsPerformanceDto>(() =>
+      getApiV1ProjectsByNameGoogleAdsPerformance({
+        client: this.heyClient,
+        path: { name: project },
+        ...(query?.window ? { query: { window: query.window } } : {}),
       }),
     )
   }

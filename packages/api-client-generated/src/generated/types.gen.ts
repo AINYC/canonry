@@ -2671,6 +2671,89 @@ export type GoogleAdsCustomerSelectionRequest = {
     customerId: string;
 };
 
+export type GoogleAdsPerformanceDto = {
+    window: '7d' | '14d' | '28d';
+    startDate: string;
+    endDate: string;
+    days: number;
+    totals: {
+        impressions: number;
+        clicks: number;
+        costMicros: number;
+        conversions: number;
+        conversionValueMicros: number | null;
+        ctr: number | null;
+        cpcMicros: number | null;
+        conversionRate: number | null;
+        costPerConversionMicros: number | null;
+    };
+    daily: Array<{
+        date: string;
+        origin: 'provider' | 'filled';
+        impressions: number;
+        clicks: number;
+        costMicros: number;
+        conversions: number;
+        ctr: number | null;
+    }>;
+    campaigns: Array<{
+        campaignId: string;
+        name: string | null;
+        status: 'enabled' | 'paused' | 'removed' | 'unknown';
+        totals: {
+            impressions: number;
+            clicks: number;
+            costMicros: number;
+            conversions: number;
+            conversionValueMicros: number | null;
+            ctr: number | null;
+            cpcMicros: number | null;
+            conversionRate: number | null;
+            costPerConversionMicros: number | null;
+        };
+    }>;
+    comparison: {
+        days: number;
+        prior: {
+            startDate: string;
+            endDate: string;
+            days: number;
+            totals: {
+                impressions: number;
+                clicks: number;
+                costMicros: number;
+                conversions: number;
+                conversionValueMicros: number | null;
+                ctr: number | null;
+                cpcMicros: number | null;
+                conversionRate: number | null;
+                costPerConversionMicros: number | null;
+            };
+        };
+        change: {
+            impressions: number | null;
+            clicks: number | null;
+            costMicros: number | null;
+            conversions: number | null;
+            ctr: number | null;
+            conversionRate: number | null;
+        };
+    } | null;
+    comparisonUnavailableReason: 'insufficient-history' | 'no-snapshot';
+    source: {
+        snapshotId: string;
+        capturedAt: string;
+        customerId: string;
+        currencyCode: string | null;
+        timeZone: string | null;
+        asOfDate: string;
+        openDate: string | null;
+        truncated: boolean;
+        campaignsQueried: number;
+        campaignsInInventory: number;
+    } | null;
+};
+
 export type GoogleAdsStoredSnapshotPage = {
     snapshots: Array<{
         id: string;
@@ -16277,6 +16360,45 @@ export type PostApiV1ProjectsByNameGoogleAdsSyncResponses = {
 };
 
 export type PostApiV1ProjectsByNameGoogleAdsSyncResponse = PostApiV1ProjectsByNameGoogleAdsSyncResponses[keyof PostApiV1ProjectsByNameGoogleAdsSyncResponses];
+
+export type GetApiV1ProjectsByNameGoogleAdsPerformanceData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: {
+        /**
+         * Reporting window over closed days: 7d, 14d, or 28d. Defaults to 14d.
+         */
+        window?: '7d' | '14d' | '28d';
+    };
+    url: '/api/v1/projects/{name}/google-ads/performance';
+};
+
+export type GetApiV1ProjectsByNameGoogleAdsPerformanceErrors = {
+    /**
+     * Invalid window.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Project not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameGoogleAdsPerformanceError = GetApiV1ProjectsByNameGoogleAdsPerformanceErrors[keyof GetApiV1ProjectsByNameGoogleAdsPerformanceErrors];
+
+export type GetApiV1ProjectsByNameGoogleAdsPerformanceResponses = {
+    /**
+     * Google Ads performance returned.
+     */
+    200: GoogleAdsPerformanceDto;
+};
+
+export type GetApiV1ProjectsByNameGoogleAdsPerformanceResponse = GetApiV1ProjectsByNameGoogleAdsPerformanceResponses[keyof GetApiV1ProjectsByNameGoogleAdsPerformanceResponses];
 
 export type GetApiV1ProjectsByNameGoogleAdsSnapshotsData = {
     body?: never;

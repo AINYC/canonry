@@ -293,6 +293,13 @@ const googleMarketingSnapshotCursorParameter: OpenApiParameter = {
   schema: stringSchema,
 }
 
+const googleAdsMetricsWindowParameter: OpenApiParameter = {
+  name: 'window',
+  in: 'query',
+  description: 'Reporting window over closed days: 7d, 14d, or 28d. Defaults to 14d.',
+  schema: { type: 'string', enum: ['7d', '14d', '28d'] },
+}
+
 const limitQueryParameter: OpenApiParameter = {
   name: 'limit',
   in: 'query',
@@ -3039,6 +3046,18 @@ const routeCatalog: OpenApiOperation[] = [
       400: errorResponse('Google Ads is not connected.'),
       403: errorResponse('Live-read and write authority are required.'),
       501: errorResponse('Google Ads sync is not configured.'),
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/projects/{name}/google-ads/performance',
+    summary: 'Read computed Google Ads performance from the stored snapshot',
+    tags: ['google-ads'],
+    parameters: [nameParameter, googleAdsMetricsWindowParameter],
+    responses: {
+      200: jsonResponse('Google Ads performance returned.', 'GoogleAdsPerformanceDto'),
+      400: errorResponse('Invalid window.'),
+      404: errorResponse('Project not found.'),
     },
   },
   {

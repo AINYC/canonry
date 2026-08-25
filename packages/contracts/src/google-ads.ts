@@ -3,13 +3,13 @@ import { z } from 'zod'
 const opaqueIdSchema = z.string().trim().min(1)
 const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/i)
 
-function isCalendarDate(value: string): boolean {
+export function isCalendarDate(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
   const parsed = new Date(`${value}T00:00:00.000Z`)
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value
 }
 
-const calendarDateSchema = z.string().refine(isCalendarDate, {
+export const calendarDateSchema = z.string().refine(isCalendarDate, {
   message: 'Expected a calendar date as YYYY-MM-DD.',
 })
 
@@ -477,3 +477,131 @@ export const googleAdsRawSnapshotDtoSchema = z.object({
   }
 })
 export type GoogleAdsRawSnapshotDto = z.infer<typeof googleAdsRawSnapshotDtoSchema>
+
+/**
+ * Windows the stored 31-day metrics snapshot can actually serve.
+ *
+ * A snapshot holds GOOGLE_ADS_CAMPAIGN_METRICS_MAX_DAYS (31) days, of which at
+ * most 30 are closed. A period-over-period comparison needs 2N closed days, so
+ * 7d and 14d can be compared and 28d cannot. Offering 30d/90d here would
+ * promise a comparison the stored data can never satisfy.
+ */
+export const googleAdsMetricsWindowSchema = z.enum(['7d', '14d', '28d'])
+export type GoogleAdsMetricsWindow = z.infer<typeof googleAdsMetricsWindowSchema>
+
+/**
+ * Every money field is INTEGER MICROS of the account currency. Micros become a
+ * formatted currency string only at a render edge (web component, CLI human
+ * output) so nothing downstream re-divides or re-rounds.
+ *
+ * Every ratio is a RAW float and is never rounded server-side; renderers choose
+ * display precision. A ratio whose denominator is zero is null, never 0, because
+ * an undefined 0/0 is not the same fact as a measured zero.
+ */
+export const googleAdsMetricTotalsSchema = z.object({
+  impressions: z.number().int().nonnegative(),
+  clicks: z.number().int().nonnegative(),
+  costMicros: z.number().int().nonnegative(),
+  /** FLOAT: Google reports fractional conversions, so 0.5 is a real value. */
+  conversions: z.number().nonnegative(),
+  /** Null when no row in scope reported a value. */
+  conversionValueMicros: z.number().int().nonnegative().nullable(),
+  /** clicks / impressions. Null when impressions === 0. */
+  ctr: z.number().nullable(),
+  /** Math.round(costMicros / clicks). Null when clicks === 0. */
+  cpcMicros: z.number().int().nonnegative().nullable(),
+  /** conversions / clicks. Null when clicks === 0. */
+  conversionRate: z.number().nullable(),
+  /** Math.round(costMicros / conversions). Null when conversions === 0. */
+  costPerConversionMicros: z.number().int().nonnegative().nullable(),
+})
+export type GoogleAdsMetricTotals = z.infer<typeof googleAdsMetricTotalsSchema>
+
+/**
+ * One calendar day. `origin` distinguishes a day the provider returned from a
+ * day densified into the series. On Google Ads a missing day means zero
+ * delivery, so a filled day carries measured zeros, not unknowns.
+ */
+export const googleAdsMetricsDailyPointSchema = z.object({
+  date: calendarDateSchema,
+  origin: z.enum(['provider', 'filled']),
+  impressions: z.number().int().nonnegative(),
+  clicks: z.number().int().nonnegative(),
+  costMicros: z.number().int().nonnegative(),
+  conversions: z.number().nonnegative(),
+  ctr: z.number().nullable(),
+})
+export type GoogleAdsMetricsDailyPoint = z.infer<typeof googleAdsMetricsDailyPointSchema>
+
+export const googleAdsCampaignPerformanceSchema = z.object({
+  campaignId: opaqueIdSchema,
+  /** Null when the metrics snapshot names a campaign the inventory snapshot does not. */
+  name: z.string().nullable(),
+  status: googleAdsCampaignStatusSchema,
+  totals: googleAdsMetricTotalsSchema,
+})
+export type GoogleAdsCampaignPerformance = z.infer<typeof googleAdsCampaignPerformanceSchema>
+
+/**
+ * Provenance for the figures, so a reader can tell what produced them.
+ *
+ * `openDate` is the capture day. Snapshots are taken mid-day, so that day is
+ * PARTIAL and is excluded from every window: including it renders a fabricated
+ * decline on the right edge of every chart. It is derived from the payload's own
+ * fetchedAt, never from a server clock, so a stale snapshot does not silently
+ * shift the cutoff.
+ */
+export const googleAdsPerformanceSourceSchema = z.object({
+  snapshotId: opaqueIdSchema,
+  capturedAt: z.string(),
+  customerId: opaqueIdSchema,
+  currencyCode: z.string().nullable(),
+  timeZone: z.string().nullable(),
+  /** Newest CLOSED day. Every window ends here. */
+  asOfDate: calendarDateSchema,
+  openDate: calendarDateSchema.nullable(),
+  /** True when the provider row cap was hit, so totals are a subset sum. */
+  truncated: z.boolean(),
+  campaignsQueried: z.number().int().nonnegative(),
+  campaignsInInventory: z.number().int().nonnegative(),
+})
+export type GoogleAdsPerformanceSource = z.infer<typeof googleAdsPerformanceSourceSchema>
+
+const googleAdsPerformancePeriodSchema = z.object({
+  startDate: calendarDateSchema,
+  endDate: calendarDateSchema,
+  days: z.number().int().positive(),
+  totals: googleAdsMetricTotalsSchema,
+})
+
+/**
+ * Prior-equal-period comparison. Null (not zero) when the stored window cannot
+ * cover 2N closed days, with `unavailableReason` saying which constraint bit.
+ */
+export const googleAdsPerformanceComparisonSchema = z.object({
+  days: z.number().int().positive(),
+  prior: googleAdsPerformancePeriodSchema,
+  change: z.object({
+    impressions: z.number().nullable(),
+    clicks: z.number().nullable(),
+    costMicros: z.number().nullable(),
+    conversions: z.number().nullable(),
+    ctr: z.number().nullable(),
+    conversionRate: z.number().nullable(),
+  }),
+})
+export type GoogleAdsPerformanceComparison = z.infer<typeof googleAdsPerformanceComparisonSchema>
+
+export const googleAdsPerformanceDtoSchema = z.object({
+  window: googleAdsMetricsWindowSchema,
+  startDate: calendarDateSchema,
+  endDate: calendarDateSchema,
+  days: z.number().int().positive(),
+  totals: googleAdsMetricTotalsSchema,
+  daily: z.array(googleAdsMetricsDailyPointSchema),
+  campaigns: z.array(googleAdsCampaignPerformanceSchema),
+  comparison: googleAdsPerformanceComparisonSchema.nullable(),
+  comparisonUnavailableReason: z.enum(['insufficient-history', 'no-snapshot']).nullable(),
+  source: googleAdsPerformanceSourceSchema.nullable(),
+})
+export type GoogleAdsPerformanceDto = z.infer<typeof googleAdsPerformanceDtoSchema>

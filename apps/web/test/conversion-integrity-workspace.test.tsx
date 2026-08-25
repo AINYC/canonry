@@ -2,7 +2,7 @@ import { afterEach, describe, expect, onTestFinished, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
-import { ConversionIntegrityWorkspace } from '../src/components/project/ConversionIntegrityWorkspace.js'
+import { ConversionIntegrityWorkspace, gtmSelectionSummary } from '../src/components/project/ConversionIntegrityWorkspace.js'
 import { getRunTrackerState, resetRunTracker } from '../src/lib/run-tracker-store.js'
 import { jsonResponse, mockFetch, pathOf } from './mock-fetch.js'
 
@@ -299,7 +299,10 @@ describe('ConversionIntegrityWorkspace', () => {
 
     expect(screen.getByText('Payment confirmed')).toBeTruthy()
     expect(screen.getByText('Example Hotel')).toBeTruthy()
-    expect(screen.getByText('Selected account and container')).toBeTruthy()
+    // The selection names the container it points at, not the fields that
+    // happen to be filled in. "Selected account and container" read the same
+    // for every project on the instance.
+    expect(screen.getByText('Container GTM-TEST123 · account account_example')).toBeTruthy()
     expect(screen.getByText('Static API evidence does not prove that a browser tag fired or that Google Ads recorded a conversion.')).toBeTruthy()
     expect(requested).toEqual(expect.arrayContaining([
       expect.stringMatching(/^\/api\/v1\/projects\/example\/google-ads\/status/),
@@ -1126,5 +1129,14 @@ describe('ConversionIntegrityWorkspace', () => {
     expect(screen.queryByText('No conversion declared')).toBeNull()
 
     queryClient.clear()
+  })
+})
+
+describe('gtmSelectionSummary', () => {
+  test('names the container, its account, and a pinned draft workspace', () => {
+    expect(gtmSelectionSummary('GTM-TEST123', 'account_example', null))
+      .toBe('Container GTM-TEST123 · account account_example')
+    expect(gtmSelectionSummary('GTM-TEST123', 'account_example', 'workspace_7'))
+      .toBe('Container GTM-TEST123 · account account_example · workspace workspace_7')
   })
 })

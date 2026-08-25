@@ -1,3 +1,4 @@
+import { googleAdsMetricsWindowSchema, type GoogleAdsMetricsWindow } from '@ainyc/canonry-contracts'
 import type { CliCommandSpec } from '../cli-dispatch.js'
 import {
   getString,
@@ -17,6 +18,7 @@ import {
   conversionTrackingUpdate,
   googleAdsCustomers,
   googleAdsDisconnect,
+  googleAdsPerformance,
   googleAdsSelect,
   googleAdsSnapshot,
   googleAdsSnapshots,
@@ -52,6 +54,27 @@ function snapshotLimit(
     })
   }
   return limit
+}
+
+/**
+ * Only the windows the STORED snapshot can serve are accepted. A 30d or 90d
+ * option would promise a period the 31-day snapshot cannot cover, and the parser
+ * refusing it locally is a clearer answer than a 400 from the API.
+ */
+function performanceWindow(
+  input: Parameters<CliCommandSpec['run']>[0],
+  usage: string,
+): GoogleAdsMetricsWindow | undefined {
+  const raw = getString(input.values, 'window')
+  if (raw === undefined) return undefined
+  const parsed = googleAdsMetricsWindowSchema.safeParse(raw)
+  if (!parsed.success) {
+    throw usageError(`Error: --window must be one of 7d, 14d, 28d\nUsage: ${usage}`, {
+      message: '--window must be one of 7d, 14d, 28d',
+      details: { command: 'google-ads.performance', usage, option: 'window', value: raw },
+    })
+  }
+  return parsed.data
 }
 
 /**
@@ -109,6 +132,20 @@ export function createGoogleMarketingCliCommands(
       run: async (input) => {
         const usage = 'canonry google-ads sync <project> [--format json]'
         await googleAdsSync(createClient(), requireProject(input, 'google-ads.sync', usage), { format: input.format })
+      },
+    },
+    {
+      path: ['google-ads', 'performance'],
+      usage: 'canonry google-ads performance <project> [--window 7d|14d|28d] [--format json]',
+      options: { window: stringOption() },
+      run: async (input) => {
+        const usage = 'canonry google-ads performance <project> [--window 7d|14d|28d] [--format json]'
+        const project = requireProject(input, 'google-ads.performance', usage)
+        const window = performanceWindow(input, usage)
+        await googleAdsPerformance(createClient(), project, {
+          ...(window ? { window } : {}),
+          format: input.format,
+        })
       },
     },
     {

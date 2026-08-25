@@ -3,6 +3,8 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { ConversionTrackingContract } from '@ainyc/canonry-contracts'
 
 import {
+  CONVERSION_TO_CHECK_BLOCKED,
+  CONVERSION_TO_CHECK_HELP,
   ConversionIntegritySection,
   conversionIntegrityPrimaryAction,
   type ConversionIntegrityWorkspaceVm,
@@ -252,9 +254,9 @@ describe('ConversionIntegritySection', () => {
     // The rows ARE the instructions. A "Complete setup" heading over three
     // labelled rows with buttons on them restated what the rows already said.
     expect(screen.queryByRole('heading', { name: 'Complete setup' })).toBeNull()
-    expect(screen.getByText('Google Ads account')).toBeTruthy()
-    expect(screen.getByText('Tag Manager container')).toBeTruthy()
-    expect(screen.getByText('Conversion to check')).toBeTruthy()
+    expect(screen.getByText('Google Ads')).toBeTruthy()
+    expect(screen.getByText('Tag Manager')).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Conversion to check' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Connect Google Ads' })).toBeTruthy()
     expect(screen.queryByText('Setup needed')).toBeNull()
     expect(screen.queryByText('No conversion declared')).toBeNull()
@@ -266,7 +268,41 @@ describe('ConversionIntegritySection', () => {
     expect(action).toHaveBeenCalledWith('connect-google-ads')
   })
 
-  test('advances the focused setup path through Tag Manager and conversion declaration', () => {
+  test('leads with the recurring action and collapses both settled connections into one status line', () => {
+    // The complaint this answers: two full-width rows of permanently-Ready
+    // state sat ON TOP of the only thing an operator comes back for.
+    render(
+      <ConversionIntegritySection
+        workspace={workspace({ contract: null, assessment: null })}
+        onPrimaryAction={vi.fn()}
+        onChangeGoogleAdsSelection={vi.fn()}
+        onChangeGtmSelection={vi.fn()}
+      />,
+    )
+
+    const conversionHeading = screen.getByRole('heading', { name: 'Conversion to check' })
+    const connectionItems = screen.getAllByRole('listitem')
+    expect(connectionItems).toHaveLength(2)
+    // One line, not two stacked rows: both connections are children of the SAME list.
+    expect(connectionItems[0]!.parentElement).toBe(connectionItems[1]!.parentElement)
+    // And that line comes after the action, not before it.
+    expect(conversionHeading.compareDocumentPosition(connectionItems[0]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    // No 1/2/3 numbering, and no step sequence implied by it.
+    expect(screen.queryByText('1')).toBeNull()
+    expect(screen.queryByText('2')).toBeNull()
+    expect(screen.queryByText('3')).toBeNull()
+    expect(document.querySelector('[aria-current="step"]')).toBeNull()
+
+    // The gate that IS real survives: both ready, so the action is offered.
+    expect(screen.getAllByText('Ready')).toHaveLength(2)
+    expect(screen.getByRole('button', { name: 'Declare conversion' })).toBeTruthy()
+    expect(screen.queryByText(CONVERSION_TO_CHECK_BLOCKED)).toBeNull()
+    // The explanation lives on the tooltip, not in the layout.
+    expect(screen.getByRole('button', { name: CONVERSION_TO_CHECK_HELP })).toBeTruthy()
+  })
+
+  test('keeps both Change affordances reachable from the compact status line', () => {
     const action = vi.fn()
     const changeGoogleAdsSelection = vi.fn()
     const changeGtmSelection = vi.fn()
@@ -287,11 +323,14 @@ describe('ConversionIntegritySection', () => {
       />,
     )
 
+    // A settled connection states what it is connected TO, inline.
     expect(screen.getByText('Example Hotel').closest('li')?.textContent).toContain('Ready')
-    expect(screen.getByRole('button', { name: 'Connect Google Tag Manager' }).closest('li')?.getAttribute('aria-current')).toBe('step')
+    expect(screen.getByRole('button', { name: 'Connect Google Tag Manager' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Change Google Ads account' }))
     expect(changeGoogleAdsSelection).toHaveBeenCalledTimes(1)
+    // Half-connected: the conversion action stays gated and says so once.
     expect(screen.queryByRole('button', { name: 'Declare conversion' })).toBeNull()
+    expect(screen.getByText(CONVERSION_TO_CHECK_BLOCKED)).toBeTruthy()
 
     rerender(
       <ConversionIntegritySection
@@ -303,7 +342,6 @@ describe('ConversionIntegritySection', () => {
     )
 
     expect(screen.getAllByText('Ready')).toHaveLength(2)
-    expect(screen.getByRole('button', { name: 'Declare conversion' }).closest('li')?.getAttribute('aria-current')).toBe('step')
     fireEvent.click(screen.getByRole('button', { name: 'Change Tag Manager container' }))
     expect(changeGtmSelection).toHaveBeenCalledTimes(1)
   })

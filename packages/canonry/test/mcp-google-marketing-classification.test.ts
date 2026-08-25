@@ -11,6 +11,7 @@ const googleMarketingOperations = {
     'GET /api/v1/projects/{name}/gtm/accounts/{accountId}/containers/{containerId}/workspaces',
     'POST /api/v1/projects/{name}/google-ads/sync',
     'POST /api/v1/projects/{name}/gtm/sync',
+    'GET /api/v1/projects/{name}/google-ads/performance',
     'GET /api/v1/projects/{name}/google-ads/snapshots',
     'GET /api/v1/projects/{name}/google-ads/snapshots/{snapshotId}',
     'GET /api/v1/projects/{name}/gtm/snapshots',
