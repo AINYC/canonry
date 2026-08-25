@@ -4,6 +4,7 @@ import type { DatabaseClient } from '@ainyc/canonry-db'
 import fs from 'node:fs'
 import { AppError, runtimeStateMissing, describeError } from '@ainyc/canonry-contracts'
 import { authPlugin } from './auth.js'
+import { createCredentialChecker, type CredentialChecker } from './user-session.js'
 import { resolveOAuthAccessToken } from './oauth.js'
 import { projectRoutes } from './projects.js'
 import type { ProjectRoutesOptions } from './projects.js'
@@ -114,6 +115,12 @@ export interface ApiRoutesOptions {
    * leaves OAuth off entirely.
    */
   oauthResourceUrl?: string
+  /**
+   * Shared credential checker. When the host also mounts the OAuth consent
+   * page it MUST pass the same instance both places, or each sign-in door gets
+   * its own full brute-force budget.
+   */
+  credentials?: CredentialChecker
   openApiInfo?: OpenApiInfo
   /** Skip auth for testing */
   skipAuth?: boolean
@@ -471,6 +478,14 @@ export async function apiRoutes(app: FastifyInstance, opts: ApiRoutesOptions) {
     await api.register(userSessionRoutes, {
       cookie: opts.userSessionCookie,
       trustProxyConfigured: opts.trustProxyConfigured ?? false,
+      // ONE checker for the whole app. Passed in when the caller supplies it —
+      // canonry does, so /auth/login and the OAuth consent page count against
+      // the same budgets — and built here otherwise so an embedder that never
+      // mounts OAuth still gets the limits.
+      credentials: opts.credentials ?? createCredentialChecker({
+        db: opts.db,
+        trustProxyConfigured: opts.trustProxyConfigured ?? false,
+      }),
     })
     await api.register(userRoutes)
 

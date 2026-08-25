@@ -342,6 +342,14 @@ class LoginAttemptLimiter {
 }
 
 export interface UserSessionRoutesOptions {
+  /**
+   * The shared credential checker. Optional only so the plugin signature stays
+   * valid; when the host also mounts the OAuth consent page it MUST pass the
+   * same instance to both, or each sign-in door gets its own full brute-force
+   * budget — which is exactly the bug this replaced.
+   */
+  credentials?: CredentialChecker
+
   cookie?: UserSessionCookieOptions
   /** See `ApiRoutesOptions.trustProxyConfigured`. */
   trustProxyConfigured?: boolean
@@ -373,6 +381,8 @@ export function createCredentialChecker(opts: {
   db: DatabaseClient
   trustProxyConfigured?: boolean
 }): CredentialChecker {
+  // Per-checker, not module-global: one set of counters per app instance, so
+  // tests and co-hosted apps do not share lockout state.
   const perNameLimiter = new LoginAttemptLimiter(LOGIN_MAX_FAILURES, LOGIN_FAILURE_WINDOW_MS)
   const perCallerLimiter = new LoginAttemptLimiter(LOGIN_MAX_FAILURES_PER_CALLER, LOGIN_FAILURE_WINDOW_MS)
   let verificationsInFlight = 0
@@ -431,10 +441,10 @@ export function createCredentialChecker(opts: {
 
 export async function userSessionRoutes(app: FastifyInstance, opts: UserSessionRoutesOptions = {}) {
   const cookiePath = opts.cookie?.path ?? '/'
-  const perNameLimiter = new LoginAttemptLimiter(LOGIN_MAX_FAILURES, LOGIN_FAILURE_WINDOW_MS)
-  const perCallerLimiter = new LoginAttemptLimiter(LOGIN_MAX_FAILURES_PER_CALLER, LOGIN_FAILURE_WINDOW_MS)
-  let verificationsInFlight = 0
-  const callerVerificationsInFlight = new Map<string, number>()
+  const credentials = opts.credentials ?? createCredentialChecker({
+    db: app.db,
+    trustProxyConfigured: opts.trustProxyConfigured ?? false,
+  })
 
   const setSessionCookie = (request: FastifyRequest, reply: FastifyReply, sessionId: string) => {
     reply.header('set-cookie', serializeUserSessionCookie({
@@ -481,82 +491,21 @@ export async function userSessionRoutes(app: FastifyInstance, opts: UserSessionR
       throw validationError('Enter a name and a password.', { issues: parsed.error.issues })
     }
 
-    const nameKey = normalizeUserName(parsed.data.name)
-    // Null when a proxy is in front and has not been declared trusted: the
-    // address in hand is the proxy's, shared by everyone, so budgeting against
-    // it would let one attacker lock out the whole install. The per-name budget
-    // and the in-flight ceiling still apply in that case.
-    const caller = resolveCallerKey(request, opts.trustProxyConfigured ?? false)
-    const nowMs = Date.now()
-
-    // Three budgets, and they answer three different questions. Per name: is
-    // somebody guessing at ONE account. Per caller: is somebody spending this
-    // server's key derivations, which cycling names would otherwise make free.
-    // In flight: is the threadpool already saturated right now, whoever is
-    // asking. All three are checked BEFORE any derivation is paid for.
-    // Keyed by name AND source: a stranger's failures must never be able to
-    // lock the real owner of the account out of it.
-    const nameFromCaller = `${nameKey}\u0000${caller ?? 'unidentified'}`
-    if (perNameLimiter.isBlocked(nameFromCaller, nowMs)) {
-      throw new AppError(
-        'QUOTA_EXCEEDED',
-        'Too many failed sign-in attempts for this name. Wait a few minutes and try again.',
-        429,
-      )
-    }
-    if (caller !== null && perCallerLimiter.isBlocked(caller, nowMs)) {
-      throw new AppError(
-        'QUOTA_EXCEEDED',
-        'Too many failed sign-in attempts. Wait a few minutes and try again.',
-        429,
-      )
-    }
-    // Per caller first: one identified caller can never be the reason another
-    // is turned away. The global ceiling below only bounds the threadpool.
-    if (caller !== null && (callerVerificationsInFlight.get(caller) ?? 0) >= LOGIN_MAX_IN_FLIGHT_PER_CALLER) {
-      throw new AppError(
-        'QUOTA_EXCEEDED',
-        'A sign-in for this caller is already being checked. Try again in a moment.',
-        429,
-      )
-    }
-    if (verificationsInFlight >= LOGIN_MAX_IN_FLIGHT) {
-      throw new AppError(
-        'QUOTA_EXCEEDED',
-        'The server is busy checking sign-ins. Try again in a moment.',
-        429,
-      )
-    }
-
-    const account = app.db.select().from(users).where(eq(users.nameKey, nameKey)).get()
-    // Verify against a throwaway digest when the name is unknown so a missing
-    // account and a wrong password take the same amount of time to refuse.
-    const storedHash = account?.passwordHash ?? UNKNOWN_ACCOUNT_DIGEST
-    verificationsInFlight++
-    if (caller !== null) {
-      callerVerificationsInFlight.set(caller, (callerVerificationsInFlight.get(caller) ?? 0) + 1)
-    }
-    let passwordMatches: boolean
-    try {
-      passwordMatches = await verifyUserPassword(parsed.data.password, storedHash)
-    } finally {
-      verificationsInFlight--
-      if (caller !== null) {
-        const remaining = (callerVerificationsInFlight.get(caller) ?? 1) - 1
-        if (remaining <= 0) callerVerificationsInFlight.delete(caller)
-        else callerVerificationsInFlight.set(caller, remaining)
+    // The SHARED checker, not a local copy. Extracting the code but leaving
+    // this route running its own limiters gave each door its own full budget —
+    // 10 failures here plus 10 there against the same name, and 8 concurrent
+    // derivations each — which is not what "shared budgets" means. One instance,
+    // one set of counters, both doors.
+    const result = await credentials.verify(request, parsed.data.name, parsed.data.password)
+    if (!result.ok) {
+      if (result.reason === 'rate-limited') {
+        throw new AppError('QUOTA_EXCEEDED', result.message, 429)
       }
-    }
-
-    if (!account || !passwordMatches) {
-      perNameLimiter.recordFailure(nameFromCaller, nowMs)
-      if (caller !== null) perCallerLimiter.recordFailure(caller, nowMs)
-      const err = authRequired(LOGIN_FAILED_MESSAGE)
+      const err = authRequired(result.message)
       return reply.status(err.statusCode).send(err.toJSON())
     }
-
-    perNameLimiter.clear(nameFromCaller)
-    if (caller !== null) perCallerLimiter.clear(caller)
+    // The checker already cleared the limiters on success.
+    const account = result.user
     const now = new Date()
     const sessionId = createUserSession(app.db, account.id, now)
     app.db.update(users).set({ lastLoginAt: now.toISOString() }).where(eq(users.id, account.id)).run()

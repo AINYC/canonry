@@ -2083,6 +2083,13 @@ export async function createServer(opts: {
   // If the proxy does strip the prefix, set CANONRY_BASE_PATH to empty/unset and
   // let the proxy handle path rewriting instead.
   const apiPrefix = basePath ? `${basePath}api/v1` : "/api/v1";
+  // One checker, shared by /auth/login and the OAuth consent page, so the two
+  // sign-in doors carry the same brute-force and threadpool budgets.
+  const credentialChecker = createCredentialChecker({
+    db: opts.db,
+    trustProxyConfigured: trustProxy !== false,
+  })
+
   const googlePublicUrl = resolveGooglePublicUrl(opts.config, basePath);
   // The OAuth issuer is an ORIGIN, never a base path: RFC 9728 inserts the
   // well-known segment between host and path, so the document lives at the
@@ -2500,6 +2507,7 @@ export async function createServer(opts: {
     vercelSyncDeadlineMs: resolveVercelSyncDeadlineMs(process.env),
     // Local-only Aero agent routes. Registered here so they inherit api-routes'
     // auth plugin — bare `registerAgentRoutes(app, ...)` would skip auth.
+    credentials: credentialChecker,
     oauthResourceUrl: publicOrigin
       ? `${publicOrigin}${`${basePath ?? "/"}api/v1/mcp`.replace("//", "/")}`
       : undefined,
@@ -3443,12 +3451,6 @@ export async function createServer(opts: {
   // with no credential must be able to discover where to get one. Registered
   // only when the instance knows its own public origin, since every URL in the
   // metadata documents has to be absolute and externally reachable.
-  // One checker, shared by /auth/login and the OAuth consent page, so the two
-  // sign-in doors carry the same brute-force and threadpool budgets.
-  const credentialChecker = createCredentialChecker({
-    db: opts.db,
-    trustProxyConfigured: trustProxy !== false,
-  })
   if (publicOrigin) {
     registerOAuthRoutes(app, {
       db: opts.db,

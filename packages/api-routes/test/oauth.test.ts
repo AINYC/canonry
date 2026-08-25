@@ -24,6 +24,18 @@ const REDIRECT = 'https://client.example.com/callback'
 const VERIFIER = 'a'.repeat(64)
 const CHALLENGE = crypto.createHash('sha256').update(VERIFIER).digest('base64url')
 
+/**
+ * A same-origin form post, as a browser makes it. Host and Origin are pinned
+ * together because assertCookieWriteOrigin compares them — and a mismatch is
+ * exactly the cross-site session-fixation case it exists to refuse, so the
+ * tests must model a real browser rather than inject's defaults.
+ */
+const FORM_HEADERS = {
+  'content-type': 'application/x-www-form-urlencoded',
+  host: 'canonry.test',
+  origin: 'http://canonry.test',
+} as const
+
 let db: ReturnType<typeof createClient>
 let app: ReturnType<typeof Fastify>
 let tmpDir: string
@@ -93,7 +105,7 @@ async function approve(overrides: Record<string, string> = {}): Promise<string> 
   const res = await app.inject({
     method: 'POST',
     url: `/oauth/authorize/consent?${query}`,
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    headers: FORM_HEADERS,
     payload: new URLSearchParams({ csrf: csrf!, approve: 'yes' }).toString(),
   })
   expect(res.statusCode).toBe(302)
@@ -141,7 +153,7 @@ test('registers a client dynamically and that client can complete the flow', asy
   const approved = await app.inject({
     method: 'POST',
     url: `/oauth/authorize/consent?${params.toString()}`,
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    headers: FORM_HEADERS,
     payload: new URLSearchParams({ csrf, approve: 'yes' }).toString(),
   })
   expect(new URL(approved.headers.location as string).searchParams.get('code')).toBeTruthy()
@@ -227,7 +239,7 @@ test('a loopback redirect matches on any port, per RFC 8252 s7.3', async () => {
   const res = await app.inject({
     method: 'POST',
     url: `/oauth/authorize/consent?${params.toString()}`,
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    headers: FORM_HEADERS,
     payload: new URLSearchParams({ csrf, approve: 'yes' }).toString(),
   })
   expect(new URL(res.headers.location as string).port).toBe('54321')
@@ -281,7 +293,7 @@ test('signing in on the consent page completes the authorization', async () => {
     method: 'POST',
     url,
     payload: 'name=sam&password=correct-horse',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    headers: FORM_HEADERS,
   })
   // Re-enters the GET flow so every validation runs again rather than being
   // duplicated in the POST handler.
@@ -295,7 +307,7 @@ test('a wrong password re-renders the form and issues no code', async () => {
     method: 'POST',
     url: authorizeUrl(),
     payload: 'name=sam&password=wrong',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    headers: FORM_HEADERS,
   })
   expect(res.statusCode).toBe(200)
   // Assert on behaviour, not copy: the message comes from the shared checker
@@ -311,11 +323,11 @@ test('an unknown name is indistinguishable from a wrong password', async () => {
   signedInUserId = null
   const unknown = await app.inject({
     method: 'POST', url: authorizeUrl(), payload: 'name=nobody&password=wrong',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    headers: FORM_HEADERS,
   })
   const wrong = await app.inject({
     method: 'POST', url: authorizeUrl(), payload: 'name=sam&password=wrong',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    headers: FORM_HEADERS,
   })
   expect(unknown.statusCode).toBe(wrong.statusCode)
   expect(unknown.body).toBe(wrong.body)
@@ -332,7 +344,7 @@ test('the token endpoint accepts form-encoded bodies, as every real client sends
       grant_type: 'authorization_code', code, code_verifier: VERIFIER,
       client_id: 'client-1', redirect_uri: REDIRECT,
     }).toString(),
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    headers: FORM_HEADERS,
   })
   expect(res.statusCode).toBe(200)
   expect(res.json().access_token).toBeTruthy()
@@ -373,6 +385,39 @@ test('a confidential client must present its secret', async () => {
   expect(withSecret.statusCode).toBe(200)
 })
 
+test('the consent page cannot be framed', async () => {
+  // It is the only human gate in the flow. Framed, one decoy click posts
+  // approve=yes with the Lax cookie attached and mints a code to an attacker's
+  // callback — RFC 6849 s10.13 puts that defence on the authorization server.
+  const res = await app.inject({ method: 'GET', url: authorizeUrl() })
+  expect(res.headers['content-security-policy']).toContain("frame-ancestors 'none'")
+  expect(res.headers['x-frame-options']).toBe('DENY')
+  expect(res.headers['cache-control']).toBe('no-store')
+})
+
+test('a cross-site form post cannot force a session or approve a grant', async () => {
+  // The urlencoded parser makes these routes CORS-simple, so no preflight
+  // stands between a foreign page and this handler. Origin is the control.
+  const foreign = {
+    'content-type': 'application/x-www-form-urlencoded',
+    host: 'canonry.test',
+    origin: 'https://evil.example.com',
+  }
+  const signIn = await app.inject({
+    method: 'POST', url: authorizeUrl(), headers: foreign,
+    payload: new URLSearchParams({ name: 'sam', password: PASSWORD }).toString(),
+  })
+  expect(signIn.statusCode).toBe(403)
+  expect(signIn.headers['set-cookie']).toBeFalsy()
+
+  const approve = await app.inject({
+    method: 'POST', url: `/oauth/authorize/consent?${authorizeUrl().split('?')[1]}`,
+    headers: foreign,
+    payload: new URLSearchParams({ csrf: 'anything', approve: 'yes' }).toString(),
+  })
+  expect(approve.statusCode).toBe(403)
+})
+
 test('a signed-in person is ASKED, not auto-granted', async () => {
   // The GET used to mint a code off nothing but a session cookie. With
   // SameSite=Lax and open registration, a link was then enough to hand a third
@@ -391,7 +436,7 @@ test('approving returns a code plus state and iss', async () => {
   const res = await app.inject({
     method: 'POST',
     url: `/oauth/authorize/consent?${url.split('?')[1]}`,
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    headers: FORM_HEADERS,
     payload: new URLSearchParams({ csrf, approve: 'yes' }).toString(),
   })
   const loc = new URL(res.headers.location as string)
@@ -408,7 +453,7 @@ test('a forged or missing CSRF token approves nothing', async () => {
     const res = await app.inject({
       method: 'POST',
       url: `/oauth/authorize/consent?${url.split('?')[1]}`,
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      headers: FORM_HEADERS,
       payload: new URLSearchParams({ csrf, approve: 'yes' }).toString(),
     })
     expect(res.statusCode, csrf || '(empty)').toBe(400)
@@ -422,7 +467,7 @@ test('denying redirects with access_denied and issues no code', async () => {
   const res = await app.inject({
     method: 'POST',
     url: `/oauth/authorize/consent?${url.split('?')[1]}`,
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    headers: FORM_HEADERS,
     payload: new URLSearchParams({ csrf, approve: 'no' }).toString(),
   })
   const loc = new URL(res.headers.location as string)

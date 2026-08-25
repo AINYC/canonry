@@ -4,6 +4,7 @@ import { oauthAuthorizationCodes, oauthClients, oauthTokens, type DatabaseClient
 import { and, eq, lt } from 'drizzle-orm'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 
+import { assertCookieWriteOrigin } from './same-origin.js'
 import type { CredentialChecker } from './user-session.js'
 
 /**
@@ -175,7 +176,14 @@ function consentPage(o: {
   userName: string
   csrf: string
 }): string {
-  const consentAction = `${o.action.split('?')[0]}/consent?${o.action.split('?')[1] ?? ''}`
+  // indexOf, not split: a literal '?' inside any value (a state parameter, say)
+  // would otherwise truncate the query, dropping scope or state — failing
+  // closed, but leaving the user stuck on an unrecoverable "could not be
+  // verified" with no way to tell why.
+  const cut = o.action.indexOf('?')
+  const consentAction = cut === -1
+    ? `${o.action}/consent`
+    : `${o.action.slice(0, cut)}/consent${o.action.slice(cut)}`
   return page(`<h1>Allow access?</h1>
  <p class="who"><strong>${escapeHtml(o.clientName)}</strong> wants to access Canonry as
    <strong>${escapeHtml(o.userName)}</strong>.</p>
@@ -188,6 +196,28 @@ function consentPage(o: {
    <button type="submit" name="approve" value="no" class="ghost">Deny</button>
    <button type="submit" name="approve" value="yes">Allow</button>
  </div>`, consentAction)
+}
+
+/**
+ * Send an HTML gate page with the headers that keep it a gate.
+ *
+ * The consent page is the ONLY human step in the whole flow, which makes it
+ * the thing worth framing: served from the real origin, with a genuine consent
+ * token and a same-origin form action, one decoy click on an invisible frame
+ * posts approve=yes with the Lax cookie attached and mints a code to an
+ * attacker's callback. RFC 6749 s10.13 puts that defence on the authorization
+ * server. Deliberately independent of the embed allow-list — an embedded
+ * dashboard must never be able to frame the grant screen.
+ */
+function sendGatePage(reply: FastifyReply, html: string) {
+  return reply
+    .header('content-security-policy',
+      "frame-ancestors 'none'; default-src 'none'; style-src 'unsafe-inline'; form-action 'self'")
+    .header('x-frame-options', 'DENY')
+    .header('referrer-policy', 'no-referrer')
+    .header('cache-control', 'no-store')
+    .type('text/html')
+    .send(html)
 }
 
 function page(inner: string, action: string): string {
@@ -223,24 +253,39 @@ function page(inner: string, action: string): string {
  */
 const CONSENT_SECRET = crypto.randomBytes(32)
 
+/**
+ * Mount the authorization server inside its OWN encapsulated plugin.
+ *
+ * The encapsulation is load-bearing, not tidiness: this registers a
+ * urlencoded content-type parser, and a parser added to the root instance
+ * propagates to every child. That would make every POST on the app
+ * CORS-simple — no preflight — silently removing a de-facto CSRF barrier from
+ * routes that have nothing to do with OAuth. Inside a plugin the parser
+ * reaches only these routes. Paths are unaffected: encapsulation scopes hooks
+ * and decorators, never URLs.
+ */
 export function registerOAuthRoutes(app: FastifyInstance, opts: OAuthRoutesOptions): void {
+  void app.register(async (scope) => {
+    registerOAuthRoutesIn(scope, opts)
+  })
+}
+
+function registerOAuthRoutesIn(app: FastifyInstance, opts: OAuthRoutesOptions): void {
   // RFC 6749 s4.1.3: the token endpoint takes application/x-www-form-urlencoded,
   // and real OAuth clients send exactly that. Fastify parses JSON out of the
   // box and 415s form bodies, so without this every standards-compliant client
   // fails to exchange or refresh — which is every client that matters.
-  if (!app.hasContentTypeParser('application/x-www-form-urlencoded')) {
-    app.addContentTypeParser(
-      'application/x-www-form-urlencoded',
-      { parseAs: 'string' },
-      (_request, body, done) => {
-        try {
-          done(null, Object.fromEntries(new URLSearchParams(body as string)))
-        } catch (error) {
-          done(error as Error, undefined)
-        }
-      },
-    )
-  }
+  app.addContentTypeParser(
+    'application/x-www-form-urlencoded',
+    { parseAs: 'string' },
+    (_request, body, done) => {
+      try {
+        done(null, Object.fromEntries(new URLSearchParams(body as string)))
+      } catch (error) {
+        done(error as Error, undefined)
+      }
+    },
+  )
 
   const { db, issuer } = opts
   const resourcePaths = opts.resourcePaths
@@ -351,7 +396,7 @@ export function registerOAuthRoutes(app: FastifyInstance, opts: OAuthRoutesOptio
       // a bounce to the product's sign-in with a `next` parameter, dead-ends:
       // the dashboard has no /signin route, never reads `next`, and 404s under
       // a base path.
-      return reply.type('text/html').send(signInPage(request.url, null))
+      return sendGatePage(reply, signInPage(request.url, null))
     }
 
     // A SESSION IS NOT CONSENT.
@@ -365,7 +410,7 @@ export function registerOAuthRoutes(app: FastifyInstance, opts: OAuthRoutesOptio
     //
     // So the GET only ever ASKS. The code is minted by the POST below, which
     // carries a CSRF token bound to this session.
-    return reply.type('text/html').send(consentPage({
+    return sendGatePage(reply, consentPage({
       action: request.url,
       clientName: client.name,
       redirectUri,
@@ -376,6 +421,8 @@ export function registerOAuthRoutes(app: FastifyInstance, opts: OAuthRoutesOptio
   })
 
   app.post('/oauth/authorize/consent', async (request: FastifyRequest, reply: FastifyReply) => {
+    // Belt and braces beside the consent token: this is the grant itself.
+    assertCookieWriteOrigin(request)
     const q = request.query as Record<string, string | undefined>
     const body = (request.body ?? {}) as Record<string, string | undefined>
     const user = opts.resolveUser(request)
@@ -502,17 +549,23 @@ export function registerOAuthRoutes(app: FastifyInstance, opts: OAuthRoutesOptio
   })
 
   app.post('/oauth/authorize', async (request: FastifyRequest, reply: FastifyReply) => {
+    // This route writes the real dashboard session cookie, and the urlencoded
+    // parser below makes it a CORS-simple post — no preflight, unlike the
+    // JSON-only /auth/login. Without this check a cross-site form could force a
+    // session (CWE-384). Every other cookie-writing route outside the auth
+    // plugin applies it by hand; this one must too.
+    assertCookieWriteOrigin(request)
     const body = (request.body ?? {}) as Record<string, string | undefined>
     const name = body.name?.trim()
     const password = body.password
     if (!name || !password) {
-      return reply.type('text/html').send(signInPage(request.url, 'Enter a name and password.'))
+      return sendGatePage(reply, signInPage(request.url, 'Enter a name and password.'))
     }
     // The SAME check /auth/login runs, with the same four budgets. Reimplementing
     // it here is what made the dashboard's lockout bypassable through this door.
     const result = await opts.credentials.verify(request, name, password)
     if (!result.ok) {
-      return reply.type('text/html').send(signInPage(request.url, result.message))
+      return sendGatePage(reply, signInPage(request.url, result.message))
     }
     void reply.header('set-cookie', opts.startSession(result.user.id))
     // Re-enter the GET, which now renders the approval page.

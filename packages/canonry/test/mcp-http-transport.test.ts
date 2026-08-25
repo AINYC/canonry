@@ -95,7 +95,7 @@ async function mintAccessToken(
   const approved = await request(built, {
     method: 'POST',
     url: `/oauth/authorize/consent?${params.toString()}`,
-    headers: { cookie: sessionCookie, 'content-type': 'application/x-www-form-urlencoded' },
+    headers: { cookie: sessionCookie, 'content-type': 'application/x-www-form-urlencoded', origin: built.origin },
     payload: new URLSearchParams({ csrf, approve: 'yes' }).toString(),
   })
   const code = new URL(approved.headers.location as string).searchParams.get('code')!
