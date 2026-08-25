@@ -17,6 +17,42 @@ import { createServer } from '../src/server.js'
  * write gate, and that a session belongs to the credential that opened it.
  */
 
+/** Same shape as app.inject, but over the live listener. */
+interface InjectLike {
+  statusCode: number
+  headers: Record<string, string>
+  body: string
+  json: <T = Record<string, unknown>>() => T
+}
+
+async function request(
+  built: { origin: string },
+  opts: { method: string; url: string; headers?: Record<string, string>; payload?: unknown },
+): Promise<InjectLike> {
+  const isForm = opts.headers?.['content-type']?.includes('x-www-form-urlencoded')
+  // `inject` infers a JSON content-type from an object payload; fetch does not,
+  // and Fastify cannot parse a body without one. Default it explicitly.
+  const headers = { ...opts.headers }
+  if (opts.payload !== undefined && typeof opts.payload === 'object' && !headers['content-type']) {
+    headers['content-type'] = 'application/json'
+  }
+  const res = await fetch(`${built.origin}${opts.url}`, {
+    method: opts.method,
+    headers,
+    body: opts.payload === undefined
+      ? undefined
+      : (isForm || typeof opts.payload === 'string' ? String(opts.payload) : JSON.stringify(opts.payload)),
+    redirect: 'manual',
+  })
+  const body = await res.text()
+  return {
+    statusCode: res.status,
+    headers: Object.fromEntries(res.headers.entries()),
+    body,
+    json: <T,>() => JSON.parse(body) as T,
+  }
+}
+
 const INIT = {
   jsonrpc: '2.0',
   id: 1,
@@ -46,13 +82,13 @@ async function mintAccessToken(
     code_challenge_method: 'S256',
     scope: opts.scope ?? 'read',
   })
-  const authorized = await built.app.inject({
+  const authorized = await request(built, {
     method: 'GET',
     url: `/oauth/authorize?${params.toString()}`,
     headers: { cookie: sessionCookie },
   })
   const code = new URL(authorized.headers.location as string).searchParams.get('code')!
-  const token = await built.app.inject({
+  const token = await request(built, {
     method: 'POST',
     url: '/oauth/token',
     payload: {
@@ -67,6 +103,8 @@ async function mintAccessToken(
 }
 
 interface Built {
+  /** Base URL of the live test listener. */
+  origin: string
   app: Awaited<ReturnType<typeof createServer>>
   wildcardKey: string
   readOnlyKey: string
@@ -105,8 +143,23 @@ async function buildServer(): Promise<Built> {
     providers: {},
   }
   const app = await createServer({ config, db, logger: false })
+  // A REAL listener, not app.inject().
+  //
+  // The MCP transport hands the request to @hono/node-server, which arms a
+  // response timeout and force-closes the socket when it fires. light-my-request
+  // fakes the socket with an EventEmitter that has no destroySoon, so every
+  // injected request raised an unhandled TypeError after the test finished —
+  // enough to fail the run with every assertion green.
+  //
+  // Binding a port is also the more faithful test: this transport streams and
+  // holds sessions across requests, which is precisely what an injection
+  // harness models least well.
+  await app.listen({ port: 0, host: '127.0.0.1' })
+  const address = app.server.address()
+  const origin = typeof address === 'object' && address ? `http://127.0.0.1:${address.port}` : ''
   return {
     app,
+    origin,
     wildcardKey,
     readOnlyKey,
     registerClient: (redirectUri: string) => {
@@ -136,7 +189,7 @@ async function buildServer(): Promise<Built> {
 }
 
 function initRequest(built: Built, key: string) {
-  return built.app.inject({
+  return request(built, {
     method: 'POST',
     url: '/api/v1/mcp',
     headers: { authorization: `Bearer ${key}`, accept: MCP_ACCEPT, 'content-type': 'application/json' },
@@ -159,7 +212,7 @@ describe('MCP over OAuth', () => {
     // RFC 9728 s5.1. This header is the entire entry point: a client holding no
     // credential learns from it where the authorization server lives. Without
     // it there is nothing to discover and the connector simply fails.
-    const res = await built.app.inject({
+    const res = await request(built, {
       method: 'POST',
       url: '/api/v1/mcp',
       headers: { accept: MCP_ACCEPT, 'content-type': 'application/json' },
@@ -172,7 +225,7 @@ describe('MCP over OAuth', () => {
   })
 
   it('serves the protected-resource document the challenge points at', async () => {
-    const res = await built.app.inject({ method: 'GET', url: '/.well-known/oauth-protected-resource/api/v1/mcp' })
+    const res = await request(built, { method: 'GET', url: '/.well-known/oauth-protected-resource/api/v1/mcp' })
     expect(res.statusCode).toBe(200)
     expect(res.json().authorization_servers).toEqual(['https://instance.example.com'])
   })
@@ -181,7 +234,7 @@ describe('MCP over OAuth', () => {
     // The link that makes the whole chain work: a hosted client cannot present
     // an api key, so if this fails OAuth is decorative.
     const token = await mintAccessToken(built)
-    const res = await built.app.inject({
+    const res = await request(built, {
       method: 'POST',
       url: '/api/v1/mcp',
       headers: { authorization: `Bearer ${token}`, accept: MCP_ACCEPT, 'content-type': 'application/json' },
@@ -197,7 +250,7 @@ describe('MCP over OAuth', () => {
     // `scope=read` connector handed it full admin — enough to mint a root
     // cnry_* key through POST /api/v1/keys and keep it after revocation.
     const token = await mintAccessToken(built, { role: 'admin', scope: 'read' })
-    const res = await built.app.inject({
+    const res = await request(built, {
       method: 'POST',
       url: '/api/v1/keys',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
@@ -210,14 +263,14 @@ describe('MCP over OAuth', () => {
     // Confinement, checked independently of scope: the token is minted for the
     // MCP resource and must not authenticate the wider REST surface at all.
     const token = await mintAccessToken(built, { role: 'admin', scope: '*' })
-    const rest = await built.app.inject({
+    const rest = await request(built, {
       method: 'GET',
       url: '/api/v1/projects',
       headers: { authorization: `Bearer ${token}` },
     })
     expect(rest.statusCode).toBe(401)
 
-    const mcp = await built.app.inject({
+    const mcp = await request(built, {
       method: 'POST',
       url: '/api/v1/mcp',
       headers: { authorization: `Bearer ${token}`, accept: MCP_ACCEPT, 'content-type': 'application/json' },
@@ -228,8 +281,8 @@ describe('MCP over OAuth', () => {
 
   it('refuses a revoked OAuth token', async () => {
     const token = await mintAccessToken(built)
-    await built.app.inject({ method: 'POST', url: '/oauth/revoke', payload: { token } })
-    const res = await built.app.inject({
+    await request(built, { method: 'POST', url: '/oauth/revoke', payload: { token } })
+    const res = await request(built, {
       method: 'POST',
       url: '/api/v1/mcp',
       headers: { authorization: `Bearer ${token}`, accept: MCP_ACCEPT, 'content-type': 'application/json' },
@@ -253,7 +306,7 @@ describe('MCP over Streamable HTTP', () => {
   it('refuses an unauthenticated caller', async () => {
     // The whole reason this mounts inside the api-routes scope. A route on the
     // root app has no auth hook and would answer this 200.
-    const res = await built.app.inject({
+    const res = await request(built, {
       method: 'POST',
       url: '/api/v1/mcp',
       headers: { accept: MCP_ACCEPT, 'content-type': 'application/json' },
@@ -276,7 +329,7 @@ describe('MCP over Streamable HTTP', () => {
     const sessionId = first.headers['mcp-session-id']
     expect(typeof sessionId).toBe('string')
 
-    const second = await built.app.inject({
+    const second = await request(built, {
       method: 'POST',
       url: '/api/v1/mcp',
       headers: {
@@ -299,7 +352,7 @@ describe('MCP over Streamable HTTP', () => {
     const sessionId = first.headers['mcp-session-id'] as string
     expect(typeof sessionId).toBe('string')
 
-    const stolen = await built.app.inject({
+    const stolen = await request(built, {
       method: 'POST',
       url: '/api/v1/mcp',
       headers: {
@@ -314,14 +367,14 @@ describe('MCP over Streamable HTTP', () => {
   })
 
   async function toolsFor(url: string, key: string): Promise<string[]> {
-    const init = await built.app.inject({
+    const init = await request(built, {
       method: 'POST',
       url,
       headers: { authorization: `Bearer ${key}`, accept: MCP_ACCEPT, 'content-type': 'application/json' },
       payload: INIT,
     })
     const sessionId = init.headers['mcp-session-id'] as string
-    const res = await built.app.inject({
+    const res = await request(built, {
       method: 'POST',
       url,
       headers: {
@@ -371,7 +424,7 @@ describe('MCP over Streamable HTTP', () => {
     // A session id is bound to the endpoint that minted it. Without this, a
     // session opened on a wide segment could be replayed against a narrow URL
     // — or worse, a /readonly session id reused to reach a writable surface.
-    const init = await built.app.inject({
+    const init = await request(built, {
       method: 'POST',
       url: '/api/v1/mcp/x/gsc',
       headers: { authorization: `Bearer ${built.wildcardKey}`, accept: MCP_ACCEPT, 'content-type': 'application/json' },
@@ -380,7 +433,7 @@ describe('MCP over Streamable HTTP', () => {
     const sessionId = init.headers['mcp-session-id'] as string
     expect(typeof sessionId).toBe('string')
 
-    const replayed = await built.app.inject({
+    const replayed = await request(built, {
       method: 'POST',
       url: '/api/v1/mcp/readonly',
       headers: {
@@ -396,7 +449,7 @@ describe('MCP over Streamable HTTP', () => {
 
   it('404s an unknown session id rather than silently opening a new one', async () => {
     // A client whose session was reaped must be told to re-initialize.
-    const res = await built.app.inject({
+    const res = await request(built, {
       method: 'POST',
       url: '/api/v1/mcp',
       headers: {
