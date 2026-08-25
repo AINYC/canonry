@@ -693,9 +693,16 @@ export async function authPlugin(app: FastifyInstance, opts: AuthPluginOptions =
           // wrong here because an admin's role scope is the wildcard `*`, which
           // does not textually contain `read` — intersecting would leave an
           // admin who granted `scope=read` with no authority at all.
-          const effective = roleScopes.includes(WILDCARD_SCOPE)
+          const narrowed = roleScopes.includes(WILDCARD_SCOPE)
             ? (requested.length > 0 ? requested : [READ_ONLY_SCOPE])
             : roleScopes.filter(scope => requested.includes(scope) || requested.includes(WILDCARD_SCOPE))
+          // An EMPTY set is not "no authority" — isReadOnlyKey([]) is false,
+          // because empty means "no read-only marker", so an empty set reads as
+          // NOT read-only and widens the catalog. A grant that intersects
+          // nothing must therefore floor at read, never at nothing: otherwise
+          // the narrowest possible grant to the least privileged account yields
+          // the WIDEST tool surface.
+          const effective = narrowed.length > 0 ? narrowed : [READ_ONLY_SCOPE]
           request.principal = {
             kind: 'user',
             id: account.id,

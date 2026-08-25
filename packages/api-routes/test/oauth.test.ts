@@ -9,6 +9,7 @@ import Fastify from 'fastify'
 import { beforeEach, afterEach, expect, test } from 'vitest'
 
 import { registerOAuthRoutes, resolveOAuthAccessToken } from '../src/oauth.js'
+import { createCredentialChecker } from '../src/user-session.js'
 import { hashUserPassword } from '../src/user-password.js'
 
 /**
@@ -53,6 +54,7 @@ async function build() {
     resourcePaths: [RESOURCE_PATH],
     resolveUser: () => (signedInUserId ? { id: signedInUserId, name: 'Sam' } : null),
     startSession: (id) => { signedInUserId = id; return 'session=set' },
+    credentials: createCredentialChecker({ db }),
   })
   return userId
 }
@@ -76,10 +78,30 @@ function authorizeUrl(overrides: Record<string, string> = {}): string {
   return `/oauth/authorize?${params.toString()}`
 }
 
-async function getCode(): Promise<string> {
-  const res = await app.inject({ method: 'GET', url: authorizeUrl() })
+/**
+ * Walk the real flow: the GET renders an approval page, and only an explicit
+ * POST carrying the CSRF token mints a code. A session is authentication, not
+ * consent, so there is no shortcut here on purpose.
+ */
+async function approve(overrides: Record<string, string> = {}): Promise<string> {
+  const url = authorizeUrl(overrides)
+  const page = await app.inject({ method: 'GET', url })
+  expect(page.statusCode).toBe(200)
+  const csrf = /name="csrf" value="([^"]+)"/.exec(page.body)?.[1]
+  expect(csrf, 'consent form should carry a CSRF token').toBeTruthy()
+  const query = url.split('?')[1]!
+  const res = await app.inject({
+    method: 'POST',
+    url: `/oauth/authorize/consent?${query}`,
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    payload: new URLSearchParams({ csrf: csrf!, approve: 'yes' }).toString(),
+  })
   expect(res.statusCode).toBe(302)
   return new URL(res.headers.location as string).searchParams.get('code')!
+}
+
+async function getCode(): Promise<string> {
+  return approve()
 }
 
 test('advertises a registration endpoint, without which a desktop client stalls', async () => {
@@ -113,9 +135,16 @@ test('registers a client dynamically and that client can complete the flow', asy
     redirect_uri: 'http://127.0.0.1:61234/callback',
     code_challenge: CHALLENGE, code_challenge_method: 'S256',
   })
-  const authorized = await app.inject({ method: 'GET', url: `/oauth/authorize?${params.toString()}` })
-  expect(authorized.statusCode).toBe(302)
-  expect(new URL(authorized.headers.location as string).searchParams.get('code')).toBeTruthy()
+  const page = await app.inject({ method: 'GET', url: `/oauth/authorize?${params.toString()}` })
+  expect(page.statusCode).toBe(200)
+  const csrf = /name="csrf" value="([^"]+)"/.exec(page.body)![1]!
+  const approved = await app.inject({
+    method: 'POST',
+    url: `/oauth/authorize/consent?${params.toString()}`,
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    payload: new URLSearchParams({ csrf, approve: 'yes' }).toString(),
+  })
+  expect(new URL(approved.headers.location as string).searchParams.get('code')).toBeTruthy()
 })
 
 test('registration refuses a redirect it could not safely send a token to', async () => {
@@ -192,8 +221,15 @@ test('a loopback redirect matches on any port, per RFC 8252 s7.3', async () => {
     redirect_uri: 'http://127.0.0.1:54321/callback',
     code_challenge: CHALLENGE, code_challenge_method: 'S256',
   })
-  const res = await app.inject({ method: 'GET', url: `/oauth/authorize?${params.toString()}` })
-  expect(res.statusCode).toBe(302)
+  const page = await app.inject({ method: 'GET', url: `/oauth/authorize?${params.toString()}` })
+  expect(page.statusCode).toBe(200)
+  const csrf = /name="csrf" value="([^"]+)"/.exec(page.body)![1]!
+  const res = await app.inject({
+    method: 'POST',
+    url: `/oauth/authorize/consent?${params.toString()}`,
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    payload: new URLSearchParams({ csrf, approve: 'yes' }).toString(),
+  })
   expect(new URL(res.headers.location as string).port).toBe('54321')
 })
 
@@ -262,7 +298,11 @@ test('a wrong password re-renders the form and issues no code', async () => {
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
   })
   expect(res.statusCode).toBe(200)
-  expect(res.body).toContain('did not match')
+  // Assert on behaviour, not copy: the message comes from the shared checker
+  // both sign-in doors use, so pinning its exact wording here would couple this
+  // test to the dashboard's copy.
+  expect(res.body).toContain('name="password"')
+  expect(res.body).toContain('class="err"')
   expect(res.headers['set-cookie']).toBeFalsy()
 })
 
@@ -333,13 +373,61 @@ test('a confidential client must present its secret', async () => {
   expect(withSecret.statusCode).toBe(200)
 })
 
-test('authorize returns a code plus state and iss', async () => {
+test('a signed-in person is ASKED, not auto-granted', async () => {
+  // The GET used to mint a code off nothing but a session cookie. With
+  // SameSite=Lax and open registration, a link was then enough to hand a third
+  // party a token bound to the operator's account.
   const res = await app.inject({ method: 'GET', url: authorizeUrl() })
-  const url = new URL(res.headers.location as string)
-  expect(url.searchParams.get('code')).toBeTruthy()
-  expect(url.searchParams.get('state')).toBe('xyz')
+  expect(res.statusCode).toBe(200)
+  expect(res.body).toContain('Allow access?')
+  expect(res.body).toContain('name="csrf"')
+  expect(res.headers.location).toBeUndefined()
+})
+
+test('approving returns a code plus state and iss', async () => {
+  const url = authorizeUrl()
+  const page = await app.inject({ method: 'GET', url })
+  const csrf = /name="csrf" value="([^"]+)"/.exec(page.body)![1]!
+  const res = await app.inject({
+    method: 'POST',
+    url: `/oauth/authorize/consent?${url.split('?')[1]}`,
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    payload: new URLSearchParams({ csrf, approve: 'yes' }).toString(),
+  })
+  const loc = new URL(res.headers.location as string)
+  expect(loc.searchParams.get('code')).toBeTruthy()
+  expect(loc.searchParams.get('state')).toBe('xyz')
   // RFC 9207: lets the client detect a mix-up attack.
-  expect(url.searchParams.get('iss')).toBe(ISSUER)
+  expect(loc.searchParams.get('iss')).toBe(ISSUER)
+})
+
+test('a forged or missing CSRF token approves nothing', async () => {
+  const url = authorizeUrl()
+  await app.inject({ method: 'GET', url })
+  for (const csrf of ['', 'forged', 'x'.repeat(43)]) {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/oauth/authorize/consent?${url.split('?')[1]}`,
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      payload: new URLSearchParams({ csrf, approve: 'yes' }).toString(),
+    })
+    expect(res.statusCode, csrf || '(empty)').toBe(400)
+  }
+})
+
+test('denying redirects with access_denied and issues no code', async () => {
+  const url = authorizeUrl()
+  const page = await app.inject({ method: 'GET', url })
+  const csrf = /name="csrf" value="([^"]+)"/.exec(page.body)![1]!
+  const res = await app.inject({
+    method: 'POST',
+    url: `/oauth/authorize/consent?${url.split('?')[1]}`,
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    payload: new URLSearchParams({ csrf, approve: 'no' }).toString(),
+  })
+  const loc = new URL(res.headers.location as string)
+  expect(loc.searchParams.get('error')).toBe('access_denied')
+  expect(loc.searchParams.get('code')).toBeNull()
 })
 
 test('token exchanges a code for an access token and a refresh token', async () => {

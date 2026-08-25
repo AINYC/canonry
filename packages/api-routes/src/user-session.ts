@@ -347,6 +347,88 @@ export interface UserSessionRoutesOptions {
   trustProxyConfigured?: boolean
 }
 
+/**
+ * The credential check, with its four budgets, as ONE thing both sign-in doors
+ * use.
+ *
+ * There are two: POST /auth/login for the dashboard and POST /oauth/authorize
+ * for the OAuth consent page. They were separate implementations, and the
+ * second had none of the budgets — which quietly made the first one's lockout
+ * bypassable by aiming the guessing at the other door, and re-opened the
+ * threadpool exhaustion the in-flight ceiling exists to prevent. Sharing the
+ * implementation is the only thing that keeps them from drifting apart again.
+ */
+export interface CredentialChecker {
+  verify(
+    request: FastifyRequest,
+    name: string,
+    password: string,
+  ): Promise<
+    | { ok: true; user: typeof users.$inferSelect }
+    | { ok: false; reason: 'invalid' | 'rate-limited'; message: string }
+  >
+}
+
+export function createCredentialChecker(opts: {
+  db: DatabaseClient
+  trustProxyConfigured?: boolean
+}): CredentialChecker {
+  const perNameLimiter = new LoginAttemptLimiter(LOGIN_MAX_FAILURES, LOGIN_FAILURE_WINDOW_MS)
+  const perCallerLimiter = new LoginAttemptLimiter(LOGIN_MAX_FAILURES_PER_CALLER, LOGIN_FAILURE_WINDOW_MS)
+  let verificationsInFlight = 0
+  const callerVerificationsInFlight = new Map<string, number>()
+
+  return {
+    async verify(request, name, password) {
+      const nameKey = normalizeUserName(name)
+      const caller = resolveCallerKey(request, opts.trustProxyConfigured ?? false)
+      const nowMs = Date.now()
+      const nameFromCaller = `${nameKey}\u0000${caller ?? 'unidentified'}`
+
+      // All four checked BEFORE any derivation is paid for.
+      if (perNameLimiter.isBlocked(nameFromCaller, nowMs)) {
+        return { ok: false, reason: 'rate-limited', message: 'Too many attempts for this account. Wait a few minutes.' }
+      }
+      if (caller !== null && perCallerLimiter.isBlocked(caller, nowMs)) {
+        return { ok: false, reason: 'rate-limited', message: 'Too many attempts. Wait a few minutes.' }
+      }
+      if (verificationsInFlight >= LOGIN_MAX_IN_FLIGHT) {
+        return { ok: false, reason: 'rate-limited', message: 'The server is busy checking sign-ins. Try again in a moment.' }
+      }
+      if (caller !== null && (callerVerificationsInFlight.get(caller) ?? 0) >= LOGIN_MAX_IN_FLIGHT_PER_CALLER) {
+        return { ok: false, reason: 'rate-limited', message: 'The server is busy checking sign-ins. Try again in a moment.' }
+      }
+
+      const account = opts.db.select().from(users).where(eq(users.nameKey, nameKey)).get()
+      const storedHash = account?.passwordHash ?? UNKNOWN_ACCOUNT_DIGEST
+      verificationsInFlight++
+      if (caller !== null) {
+        callerVerificationsInFlight.set(caller, (callerVerificationsInFlight.get(caller) ?? 0) + 1)
+      }
+      let matches: boolean
+      try {
+        matches = await verifyUserPassword(password, storedHash)
+      } finally {
+        verificationsInFlight--
+        if (caller !== null) {
+          const remaining = (callerVerificationsInFlight.get(caller) ?? 1) - 1
+          if (remaining <= 0) callerVerificationsInFlight.delete(caller)
+          else callerVerificationsInFlight.set(caller, remaining)
+        }
+      }
+
+      if (!account || !matches) {
+        perNameLimiter.recordFailure(nameFromCaller, nowMs)
+        if (caller !== null) perCallerLimiter.recordFailure(caller, nowMs)
+        return { ok: false, reason: 'invalid', message: LOGIN_FAILED_MESSAGE }
+      }
+      perNameLimiter.clear(nameFromCaller)
+      if (caller !== null) perCallerLimiter.clear(caller)
+      return { ok: true, user: account }
+    },
+  }
+}
+
 export async function userSessionRoutes(app: FastifyInstance, opts: UserSessionRoutesOptions = {}) {
   const cookiePath = opts.cookie?.path ?? '/'
   const perNameLimiter = new LoginAttemptLimiter(LOGIN_MAX_FAILURES, LOGIN_FAILURE_WINDOW_MS)

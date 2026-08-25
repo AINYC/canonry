@@ -1,10 +1,10 @@
 import crypto from 'node:crypto'
 
-import { oauthAuthorizationCodes, oauthClients, oauthTokens, users, type DatabaseClient } from '@ainyc/canonry-db'
+import { oauthAuthorizationCodes, oauthClients, oauthTokens, type DatabaseClient } from '@ainyc/canonry-db'
 import { and, eq, lt } from 'drizzle-orm'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 
-import { verifyUserPassword } from './user-password.js'
+import type { CredentialChecker } from './user-session.js'
 
 /**
  * OAuth 2.1 authorization server for the remote MCP surface.
@@ -49,10 +49,15 @@ export interface OAuthRoutesOptions {
   resolveUser: (request: FastifyRequest) => { id: string; name: string } | null
   /**
    * Establish a session for a person who signed in on the consent page, and
-   * return the cookie header to set. Lets the authorize endpoint complete a
-   * sign-in itself rather than bouncing to a route that may not exist.
+   * return the cookie header to set.
    */
   startSession: (userId: string) => string
+  /**
+   * The SAME credential check /auth/login uses, budgets and all. Passed in
+   * rather than reimplemented so the two sign-in doors cannot drift apart —
+   * they already did once, and the second one had no rate limiting at all.
+   */
+  credentials: CredentialChecker
 }
 
 function sha256(value: string): string {
@@ -117,16 +122,30 @@ function isLoopbackHost(hostname: string): boolean {
   return hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]' || hostname === 'localhost'
 }
 
+/** Everything this server will ever grant. Advertised in the metadata document. */
+export const SUPPORTED_SCOPES = ['read', 'offline_access'] as const
+
+/**
+ * Narrow a client's requested scope to what is actually on offer.
+ *
+ * Returns null when the client asked for something unsupported, so the caller
+ * refuses rather than silently downgrading — a client that believes it holds
+ * write and holds read is worse off than one told no.
+ */
+export function resolveRequestedScope(requested: string | undefined): string | null {
+  if (!requested || !requested.trim()) return 'read'
+  const parts = requested.trim().split(/\s+/)
+  const supported = new Set<string>(SUPPORTED_SCOPES)
+  if (parts.some(part => !supported.has(part))) return null
+  // `offline_access` governs refresh tokens, never API authority, so a grant of
+  // it alone still carries read.
+  const apiScopes = parts.filter(part => part !== 'offline_access')
+  return apiScopes.length > 0 ? parts.join(' ') : ['read', ...parts].join(' ')
+}
+
 function badRequest(reply: FastifyReply, error: string, description: string) {
   return reply.status(400).send({ error, error_description: description })
 }
-
-/**
- * A scrypt hash of a value nothing will ever match. Compared against when the
- * account does not exist so the timing is indistinguishable from a wrong
- * password — otherwise the endpoint tells an attacker which names are real.
- */
-const DUMMY_HASH = 'scrypt$16384$8$1$0000000000000000$0000000000000000000000000000000000000000000000000000000000000000'
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (char) => (
@@ -135,28 +154,74 @@ function escapeHtml(value: string): string {
 }
 
 /** Minimal self-contained sign-in. No SPA route, no bundle, no base-path trap. */
-function consentPage(action: string, error: string | null): string {
-  return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Sign in to continue</title>
-<style>
- body{font:16px/1.5 system-ui,sans-serif;background:#10141c;color:#e8eaed;display:grid;place-items:center;min-height:100vh;margin:0}
- form{background:#171c26;padding:2rem;border-radius:12px;width:min(22rem,90vw);display:grid;gap:.75rem}
- h1{font-size:1.1rem;margin:0 0 .5rem}
- label{font-size:.85rem;color:#9aa4b2}
- input{padding:.6rem;border-radius:6px;border:1px solid #2a3140;background:#0d1117;color:inherit;font:inherit}
- button{padding:.6rem;border-radius:6px;border:0;background:#3b82f6;color:#fff;font:inherit;cursor:pointer}
- .err{color:#f87171;font-size:.85rem}
-</style></head>
-<body><form method="post" action="${escapeHtml(action)}">
- <h1>Sign in to continue</h1>
+function signInPage(action: string, error: string | null): string {
+  return page(`<h1>Sign in to continue</h1>
  ${error ? `<p class="err">${escapeHtml(error)}</p>` : ''}
  <label for="name">Name</label><input id="name" name="name" autocomplete="username" autofocus>
  <label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password">
- <button type="submit">Sign in</button>
+ <button type="submit">Sign in</button>`, action)
+}
+
+/**
+ * The approval step. Names the client, where it will send the code, and exactly
+ * what is being granted, so the person approving can see what they are agreeing
+ * to rather than inferring it from a redirect flash.
+ */
+function consentPage(o: {
+  action: string
+  clientName: string
+  redirectUri: string
+  scope: string
+  userName: string
+  csrf: string
+}): string {
+  const consentAction = `${o.action.split('?')[0]}/consent?${o.action.split('?')[1] ?? ''}`
+  return page(`<h1>Allow access?</h1>
+ <p class="who"><strong>${escapeHtml(o.clientName)}</strong> wants to access Canonry as
+   <strong>${escapeHtml(o.userName)}</strong>.</p>
+ <dl>
+   <dt>Permissions</dt><dd>${escapeHtml(o.scope)}</dd>
+   <dt>Redirects to</dt><dd class="uri">${escapeHtml(o.redirectUri)}</dd>
+ </dl>
+ <input type="hidden" name="csrf" value="${escapeHtml(o.csrf)}">
+ <div class="row">
+   <button type="submit" name="approve" value="no" class="ghost">Deny</button>
+   <button type="submit" name="approve" value="yes">Allow</button>
+ </div>`, consentAction)
+}
+
+function page(inner: string, action: string): string {
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Canonry</title>
+<style>
+ body{font:16px/1.5 system-ui,sans-serif;background:#10141c;color:#e8eaed;display:grid;place-items:center;min-height:100vh;margin:0}
+ form{background:#171c26;padding:2rem;border-radius:12px;width:min(26rem,90vw);display:grid;gap:.75rem}
+ h1{font-size:1.1rem;margin:0 0 .5rem}
+ label,dt{font-size:.85rem;color:#9aa4b2}
+ dl{margin:0;display:grid;gap:.5rem}
+ dd{margin:0}
+ .uri{word-break:break-all;font-family:ui-monospace,monospace;font-size:.85rem}
+ input{padding:.6rem;border-radius:6px;border:1px solid #2a3140;background:#0d1117;color:inherit;font:inherit}
+ input[type=hidden]{display:none}
+ button{padding:.6rem 1rem;border-radius:6px;border:0;background:#3b82f6;color:#fff;font:inherit;cursor:pointer}
+ .ghost{background:#2a3140}
+ .row{display:flex;gap:.5rem;justify-content:flex-end}
+ .err{color:#f87171;font-size:.85rem}
+ .who{margin:0}
+</style></head>
+<body><form method="post" action="${escapeHtml(action)}">
+ ${inner}
 </form></body></html>`
 }
+
+/**
+ * Per-process secret for consent tokens. Regenerated on restart, which only
+ * means an approval page open across a restart must be reloaded — cheap, and it
+ * avoids another secret to configure and protect.
+ */
+const CONSENT_SECRET = crypto.randomBytes(32)
 
 export function registerOAuthRoutes(app: FastifyInstance, opts: OAuthRoutesOptions): void {
   // RFC 6749 s4.1.3: the token endpoint takes application/x-www-form-urlencoded,
@@ -186,6 +251,17 @@ export function registerOAuthRoutes(app: FastifyInstance, opts: OAuthRoutesOptio
   const canonicalPath = resourcePaths[0] ?? '/api/v1/mcp'
   const resourceUrl = `${issuer}${canonicalPath}`
 
+  /**
+   * Binds an approval to one person AND the exact parameters shown to them, so
+   * a form posted from another origin cannot approve anything, and one where
+   * the client or scope was swapped after render fails to verify.
+   */
+  function consentToken(userId: string, clientId: string, redirectUri: string, scope: string): string {
+    return crypto.createHmac('sha256', CONSENT_SECRET)
+      .update([userId, clientId, redirectUri, scope].join('\u0000'))
+      .digest('base64url')
+  }
+
   function authorizationServerMetadata() {
     return {
     issuer,
@@ -204,7 +280,7 @@ export function registerOAuthRoutes(app: FastifyInstance, opts: OAuthRoutesOptio
     // S256 only. Advertising `plain` would invite a downgrade attempt.
     code_challenge_methods_supported: ['S256'],
     token_endpoint_auth_methods_supported: ['client_secret_post', 'none'],
-    scopes_supported: ['read', 'offline_access'],
+      scopes_supported: [...SUPPORTED_SCOPES],
     }
   }
 
@@ -260,16 +336,81 @@ export function registerOAuthRoutes(app: FastifyInstance, opts: OAuthRoutesOptio
       return badRequest(reply, 'invalid_target', 'resource does not match this authorization server.')
     }
 
+    // Only scopes this server advertises. Storing q.scope verbatim let a client
+    // ask for `*` — or any unrecognised string, since isReadOnlyKey treats
+    // "contains no write scope" as read-only and an unknown token satisfies
+    // neither — and receive the full write catalog.
+    const grantedScope = resolveRequestedScope(q.scope)
+    if (grantedScope === null) {
+      return badRequest(reply, 'invalid_scope', `Supported scopes: ${SUPPORTED_SCOPES.join(', ')}.`)
+    }
+
     const user = opts.resolveUser(request)
     if (!user) {
-      // Sign in HERE rather than redirecting somewhere else.
-      //
-      // The obvious move is a bounce to the product's sign-in with a `next`
-      // parameter, and it does not work: the dashboard has no /signin route,
-      // it never reads `next`, and under a base path the URL 404s outright. So
-      // the flow would dead-end for exactly the person it exists to serve.
-      // This page posts back to the same URL and the flow resumes inline.
-      return reply.type('text/html').send(consentPage(request.url, null))
+      // Sign in HERE rather than redirecting somewhere else. The obvious move,
+      // a bounce to the product's sign-in with a `next` parameter, dead-ends:
+      // the dashboard has no /signin route, never reads `next`, and 404s under
+      // a base path.
+      return reply.type('text/html').send(signInPage(request.url, null))
+    }
+
+    // A SESSION IS NOT CONSENT.
+    //
+    // Minting the code here, on a GET, off nothing but a cookie, is a
+    // drive-by grant: the session cookie is SameSite=Lax so a browser attaches
+    // it to a top-level navigation, registration is open so an attacker
+    // supplies the client and the redirect and generates the PKCE challenge
+    // himself, and the operator sees a redirect flash. A third party ends up
+    // holding a token bound to that account.
+    //
+    // So the GET only ever ASKS. The code is minted by the POST below, which
+    // carries a CSRF token bound to this session.
+    return reply.type('text/html').send(consentPage({
+      action: request.url,
+      clientName: client.name,
+      redirectUri,
+      scope: grantedScope,
+      userName: user.name,
+      csrf: consentToken(user.id, clientId, redirectUri, grantedScope),
+    }))
+  })
+
+  app.post('/oauth/authorize/consent', async (request: FastifyRequest, reply: FastifyReply) => {
+    const q = request.query as Record<string, string | undefined>
+    const body = (request.body ?? {}) as Record<string, string | undefined>
+    const user = opts.resolveUser(request)
+    if (!user) return badRequest(reply, 'access_denied', 'Not signed in.')
+
+    const clientId = q.client_id
+    const redirectUri = q.redirect_uri
+    const challenge = q.code_challenge
+    if (!clientId || !redirectUri || !challenge) {
+      return badRequest(reply, 'invalid_request', 'Missing authorization parameters.')
+    }
+    const grantedScope = resolveRequestedScope(q.scope)
+    if (grantedScope === null) return badRequest(reply, 'invalid_scope', 'Unsupported scope.')
+
+    const client = db.select().from(oauthClients).where(eq(oauthClients.id, clientId)).get()
+    if (!client || client.revokedAt) return badRequest(reply, 'invalid_client', 'Unknown client.')
+    if (!redirectUriAllowed(client.redirectUris, redirectUri)) {
+      return badRequest(reply, 'invalid_request', 'redirect_uri is not registered for this client.')
+    }
+
+    // The CSRF token binds the approval to THIS person and THESE exact
+    // parameters, so a form posted from elsewhere, or one where the client or
+    // scope was swapped after the page rendered, cannot approve anything.
+    const expected = consentToken(user.id, clientId, redirectUri, grantedScope)
+    const presented = body.csrf ?? ''
+    const a = Buffer.from(expected)
+    const b = Buffer.from(presented)
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      return badRequest(reply, 'access_denied', 'Approval could not be verified. Start again.')
+    }
+    if (body.approve !== 'yes') {
+      const denied = new URL(redirectUri)
+      denied.searchParams.set('error', 'access_denied')
+      if (q.state) denied.searchParams.set('state', q.state)
+      return reply.redirect(denied.toString())
     }
 
     const code = newToken()
@@ -281,7 +422,7 @@ export function registerOAuthRoutes(app: FastifyInstance, opts: OAuthRoutesOptio
       redirectUri,
       codeChallenge: challenge,
       resource: q.resource ?? resourceUrl,
-      scope: q.scope ?? 'read',
+      scope: grantedScope,
       expiresAt: new Date(now.getTime() + CODE_TTL_MS).toISOString(),
       createdAt: now.toISOString(),
     }).run()
@@ -365,22 +506,16 @@ export function registerOAuthRoutes(app: FastifyInstance, opts: OAuthRoutesOptio
     const name = body.name?.trim()
     const password = body.password
     if (!name || !password) {
-      return reply.type('text/html').send(consentPage(request.url, 'Enter a name and password.'))
+      return reply.type('text/html').send(signInPage(request.url, 'Enter a name and password.'))
     }
-    const account = db.select().from(users).where(eq(users.nameKey, name.toLowerCase())).get()
-    // Verify against a real stored hash when the account exists, and against a
-    // throwaway one when it does not, so a missing account and a wrong password
-    // take the same time and the endpoint is not a user-enumeration oracle.
-    const matches = account
-      ? await verifyUserPassword(password, account.passwordHash)
-      : (await verifyUserPassword(password, DUMMY_HASH), false)
-    if (!account || !matches) {
-      return reply.type('text/html').send(consentPage(request.url, 'That name and password did not match.'))
+    // The SAME check /auth/login runs, with the same four budgets. Reimplementing
+    // it here is what made the dashboard's lockout bypassable through this door.
+    const result = await opts.credentials.verify(request, name, password)
+    if (!result.ok) {
+      return reply.type('text/html').send(signInPage(request.url, result.message))
     }
-    const cookie = opts.startSession(account.id)
-    void reply.header('set-cookie', cookie)
-    // Re-enter the GET flow now that a session exists; every validation there
-    // runs again rather than being duplicated here.
+    void reply.header('set-cookie', opts.startSession(result.user.id))
+    // Re-enter the GET, which now renders the approval page.
     return reply.redirect(request.url)
   })
 

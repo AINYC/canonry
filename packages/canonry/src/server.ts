@@ -226,7 +226,7 @@ import { RunCoordinator } from "./run-coordinator.js";
 import { SessionRegistry } from "./agent/session-registry.js";
 import { buildAgentProvidersResponse } from "./agent/providers.js";
 import { registerMcpHttpRoutes, mcpTransportPaths } from "./mcp-http.js";
-import { registerOAuthRoutes, parseCookieHeader, resolveUserSession, createUserSession, serializeUserSessionCookie, USER_SESSION_COOKIE_NAME } from "@ainyc/canonry-api-routes";
+import { registerOAuthRoutes, createCredentialChecker, parseCookieHeader, resolveUserSession, createUserSession, serializeUserSessionCookie, USER_SESSION_COOKIE_NAME } from "@ainyc/canonry-api-routes";
 import { registerAgentRoutes } from "./agent/agent-routes.js";
 import {
   createRecommendationExplainer,
@@ -2507,7 +2507,7 @@ export async function createServer(opts: {
       // MCP over Streamable HTTP. Registered HERE, not on the root app, so it
       // inherits the api-routes auth hook — the root app has none, and a route
       // mounted there would serve MCP unauthenticated.
-      registerMcpHttpRoutes(scope, { selfApiUrl: opts.config.apiUrl, issuer: publicOrigin });
+      registerMcpHttpRoutes(scope, { selfApiUrl: opts.config.apiUrl, issuer: publicOrigin, db: opts.db });
       // Aero kill-switch: don't serve the interactive agent routes when disabled.
       if (!sessionRegistry) return;
       registerAgentRoutes(scope, { db: opts.db, sessionRegistry });
@@ -3443,6 +3443,12 @@ export async function createServer(opts: {
   // with no credential must be able to discover where to get one. Registered
   // only when the instance knows its own public origin, since every URL in the
   // metadata documents has to be absolute and externally reachable.
+  // One checker, shared by /auth/login and the OAuth consent page, so the two
+  // sign-in doors carry the same brute-force and threadpool budgets.
+  const credentialChecker = createCredentialChecker({
+    db: opts.db,
+    trustProxyConfigured: trustProxy !== false,
+  })
   if (publicOrigin) {
     registerOAuthRoutes(app, {
       db: opts.db,
@@ -3457,6 +3463,7 @@ export async function createServer(opts: {
         const resolved = resolveUserSession(opts.db, token);
         return resolved ? { id: resolved.user.id, name: resolved.user.name } : null;
       },
+      credentials: credentialChecker,
       startSession: (userId) => {
         const token = createUserSession(opts.db, userId);
         return serializeUserSessionCookie({

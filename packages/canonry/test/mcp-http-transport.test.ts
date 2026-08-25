@@ -82,12 +82,23 @@ async function mintAccessToken(
     code_challenge_method: 'S256',
     scope: opts.scope ?? 'read',
   })
-  const authorized = await request(built, {
+  // The GET now renders an approval page rather than minting a code: a session
+  // is authentication, not consent. Approving is a separate POST carrying a
+  // CSRF token bound to this person and these exact parameters.
+  const consent = await request(built, {
     method: 'GET',
     url: `/oauth/authorize?${params.toString()}`,
     headers: { cookie: sessionCookie },
   })
-  const code = new URL(authorized.headers.location as string).searchParams.get('code')!
+  const csrf = /name="csrf" value="([^"]+)"/.exec(consent.body)?.[1]
+  if (!csrf) throw new Error(`no consent form returned: ${consent.statusCode} ${consent.body.slice(0, 120)}`)
+  const approved = await request(built, {
+    method: 'POST',
+    url: `/oauth/authorize/consent?${params.toString()}`,
+    headers: { cookie: sessionCookie, 'content-type': 'application/x-www-form-urlencoded' },
+    payload: new URLSearchParams({ csrf, approve: 'yes' }).toString(),
+  })
+  const code = new URL(approved.headers.location as string).searchParams.get('code')!
   const token = await request(built, {
     method: 'POST',
     url: '/oauth/token',
@@ -112,6 +123,8 @@ interface Built {
   registerClient: (redirectUri: string) => void
   /** Create a real signed-in session and return its cookie header. */
   signIn: (role?: 'admin' | 'viewer') => string
+  /** Ephemeral per-session api keys, for asserting they are cleaned up. */
+  sessionKeys: () => { scopes: string[]; revokedAt: string | null }[]
   cleanup: () => Promise<void>
 }
 
@@ -162,6 +175,9 @@ async function buildServer(): Promise<Built> {
     origin,
     wildcardKey,
     readOnlyKey,
+    sessionKeys: () => db.select().from(apiKeys).all()
+      .filter(k => k.name.startsWith('mcp-session:'))
+      .map(k => ({ scopes: k.scopes, revokedAt: k.revokedAt })),
     registerClient: (redirectUri: string) => {
       db.insert(oauthClients).values({
         id: 'test-client',
@@ -262,7 +278,7 @@ describe('MCP over OAuth', () => {
   it('an OAuth token is refused on every route except the MCP transport', async () => {
     // Confinement, checked independently of scope: the token is minted for the
     // MCP resource and must not authenticate the wider REST surface at all.
-    const token = await mintAccessToken(built, { role: 'admin', scope: '*' })
+    const token = await mintAccessToken(built, { role: 'admin', scope: 'read' })
     const rest = await request(built, {
       method: 'GET',
       url: '/api/v1/projects',
@@ -277,6 +293,55 @@ describe('MCP over OAuth', () => {
       payload: INIT,
     })
     expect(mcp.statusCode).toBeLessThan(400)
+  })
+
+  it('mints an ephemeral key for an OAuth session and REVOKES it on close', async () => {
+    // Two defects in one test. The tool call re-enters over HTTP, where an
+    // OAuth token is deliberately refused, so without a session-scoped api key
+    // every tool call fails while initialize and tools/list look healthy.
+    // And a client-initiated DELETE closes the transport directly, bypassing
+    // the close() path — so revoking only there leaked a live credential on
+    // every well-behaved client that ended its own session.
+    const token = await mintAccessToken(built)
+    const init = await request(built, {
+      method: 'POST',
+      url: '/api/v1/mcp',
+      headers: { authorization: `Bearer ${token}`, accept: MCP_ACCEPT, 'content-type': 'application/json' },
+      payload: INIT,
+    })
+    const sessionId = init.headers['mcp-session-id']!
+
+    const live = built.sessionKeys()
+    expect(live.length).toBe(1)
+    expect(live[0]!.revokedAt).toBeNull()
+    // Exactly the authority already resolved for the caller, never more.
+    expect(live[0]!.scopes).toEqual(['read'])
+
+    await request(built, {
+      method: 'DELETE',
+      url: '/api/v1/mcp',
+      headers: { authorization: `Bearer ${token}`, accept: MCP_ACCEPT, 'mcp-session-id': sessionId },
+    })
+
+    const after = built.sessionKeys()
+    expect(after[0]!.revokedAt).not.toBeNull()
+  })
+
+  it('refuses a wildcard scope rather than granting it', async () => {
+    // `*` used to be stored verbatim and, for an admin, became the effective
+    // scope — a client-controlled path to the full write catalog.
+    const cookie = built.signIn('admin')
+    built.registerClient('https://client.example.com/cb')
+    const params = new URLSearchParams({
+      response_type: 'code', client_id: 'test-client',
+      redirect_uri: 'https://client.example.com/cb',
+      code_challenge: 'x'.repeat(43), code_challenge_method: 'S256', scope: '*',
+    })
+    const res = await request(built, {
+      method: 'GET', url: `/oauth/authorize?${params.toString()}`, headers: { cookie },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json<{ error: string }>().error).toBe('invalid_scope')
   })
 
   it('refuses a revoked OAuth token', async () => {

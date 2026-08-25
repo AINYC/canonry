@@ -1,6 +1,9 @@
 import crypto from 'node:crypto'
 
 import { isReadOnlyKey } from '@ainyc/canonry-contracts'
+import { apiKeys, type DatabaseClient } from '@ainyc/canonry-db'
+import { hashApiKey } from '@ainyc/canonry-api-routes'
+import { eq } from 'drizzle-orm'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 
@@ -57,9 +60,39 @@ interface McpSession {
   lastSeenAt: number
 }
 
+/**
+ * Mint a short-lived api key for one MCP session.
+ *
+ * Not a general-purpose key: it is named for the session, scoped to exactly the
+ * authority already resolved for the caller, and revoked on close.
+ */
+function mintSessionKey(db: DatabaseClient, scopes: readonly string[], userId: string): { id: string; raw: string } {
+  const raw = `cnry_${crypto.randomBytes(24).toString('hex')}`
+  const id = crypto.randomUUID()
+  db.insert(apiKeys).values({
+    id,
+    name: `mcp-session:${userId}`,
+    keyHash: hashApiKey(raw),
+    keyPrefix: raw.slice(0, 9),
+    scopes: [...scopes],
+    createdAt: new Date().toISOString(),
+  }).run()
+  return { id, raw }
+}
+
+function revokeSessionKey(db: DatabaseClient, id: string): void {
+  try {
+    db.update(apiKeys).set({ revokedAt: new Date().toISOString() }).where(eq(apiKeys.id, id)).run()
+  } catch {
+    // A revoked-or-gone key is the desired end state either way.
+  }
+}
+
 export interface McpHttpOptions {
   /** Base URL the per-session client calls back on — loopback, not the public host. */
   selfApiUrl: string
+  /** Needed to mint and revoke the per-session key for OAuth callers. */
+  db: DatabaseClient
   /**
    * Public origin this instance is reached on. Used only to point an
    * unauthenticated caller at its RFC 9728 discovery document. Omitted when the
@@ -166,7 +199,26 @@ export function registerMcpHttpRoutes(scope: FastifyInstance, opts: McpHttpOptio
     // notification and ignores it, and Gemini Enterprise requires an admin to
     // re-import actions by hand.
     const scopes = request.principal?.scopes ?? request.apiKey?.scopes ?? []
-    const client = new ApiClient(opts.selfApiUrl, bearer, { skipProbe: true })
+
+    // THE INNER HOP NEEDS A CREDENTIAL THAT WORKS ON REST ROUTES.
+    //
+    // Every tool call re-enters the API over HTTP as an ordinary request. An
+    // OAuth access token is deliberately confined to the transport route and is
+    // refused everywhere else, so handing it to this client made every single
+    // tool call fail with AUTH_INVALID while initialize and tools/list looked
+    // perfectly healthy — the feature was unusable for exactly the hosted
+    // clients it exists to serve.
+    //
+    // So an OAuth caller gets an EPHEMERAL API KEY minted for this session,
+    // carrying the scopes already resolved above (the intersection of the
+    // person's role and what they granted) and nothing more. It is revoked when
+    // the session closes, so it cannot outlive the connection that justified it.
+    // An api-key caller keeps using its own key, unchanged.
+    let sessionKey: { id: string; raw: string } | null = null
+    if (!request.apiKey && request.principal?.kind === 'user') {
+      sessionKey = mintSessionKey(opts.db, scopes, request.principal.id)
+    }
+    const client = new ApiClient(opts.selfApiUrl, sessionKey?.raw ?? bearer, { skipProbe: true })
     const server = createCanonryMcpServer({
       scope: segment.readOnly || isReadOnlyKey(scopes) ? 'read-only' : 'all',
       tiers: segment.tiers,
@@ -183,11 +235,19 @@ export function registerMcpHttpRoutes(scope: FastifyInstance, opts: McpHttpOptio
     async function close(): Promise<void> {
       await transport.close()
       await server.close()
+      // Revoke before anything else can fail: an ephemeral key that outlives
+      // its session is a credential nobody is watching.
+      if (sessionKey) revokeSessionKey(opts.db, sessionKey.id)
     }
 
     transport.onclose = () => {
       const id = transport.sessionId
       if (id) sessions.delete(id)
+      // ALSO revoke here, not only in close(). A client-initiated DELETE closes
+      // the transport directly and fires this, never routing through close() —
+      // so revoking only there leaked a live credential on every well-behaved
+      // client that ended its own session. Revoking twice is harmless.
+      if (sessionKey) revokeSessionKey(opts.db, sessionKey.id)
     }
 
     await server.connect(transport)
