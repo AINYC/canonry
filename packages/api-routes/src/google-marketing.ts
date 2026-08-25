@@ -2108,6 +2108,56 @@ export async function googleMarketingRoutes(app: FastifyInstance, opts: GoogleMa
 
   // --- Conversion-tracking contract + integrity reads ---------------------------
 
+  /**
+   * Options for the declare-a-conversion form.
+   *
+   * Reads the latest STORED snapshots only, so it costs no provider quota and
+   * cannot spend the advertiser's budget. Without this the operator had to copy
+   * two opaque numeric ids out of the Google Ads and Tag Manager consoles by
+   * hand, which fails only after saving and produces a contract that silently
+   * checks the wrong thing on a typo.
+   */
+  app.get<{ Params: { name: string } }>('/projects/:name/conversion-tracking/options', async (request) => {
+    const project = resolveProject(app.db, request.params.name)
+
+    const adsSnapshot = latestGoogleAdsSnapshot(app, project.id)
+    const adsInventory = adsSnapshot?.payload.kind === GoogleAdsSnapshotKinds.inventory
+      ? adsSnapshot.payload.data
+      : null
+
+    const gtmSnapshot = latestGtmSnapshot(app, project.id)
+    const gtmContainer = gtmSnapshot?.payload.kind === GtmSnapshotKinds.container
+      ? gtmSnapshot.payload.data
+      : null
+    // The draft workspace is what the operator is editing; fall back to live.
+    const gtmGraph = (gtmContainer?.draft ?? gtmContainer?.live)?.graph ?? null
+
+    return {
+      googleAds: {
+        customerId: adsSnapshot?.metadata.customerId ?? null,
+        syncedAt: adsSnapshot?.metadata.capturedAt ?? null,
+        conversionActions: (adsInventory?.conversionActions ?? []).map(action => ({
+          id: action.id,
+          name: action.name,
+          detail: action.category,
+          // A removed action is still offered: an existing contract may point
+          // at one, and hiding it would make that contract unexplainable.
+          active: action.status !== 'removed',
+        })),
+      },
+      gtm: {
+        containerId: gtmSnapshot?.metadata.containerId ?? null,
+        syncedAt: gtmSnapshot?.metadata.capturedAt ?? null,
+        tags: (gtmGraph?.tags ?? []).map(tag => ({
+          id: tag.id,
+          name: tag.name,
+          detail: tag.type,
+          active: !tag.paused,
+        })),
+      },
+    }
+  })
+
   app.get<{ Params: { name: string } }>('/projects/:name/conversion-tracking/contracts', async (request) => {
     const project = resolveProject(app.db, request.params.name)
     return app.db.select().from(conversionTrackingContracts)

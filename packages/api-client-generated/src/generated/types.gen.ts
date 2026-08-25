@@ -2671,6 +2671,29 @@ export type GoogleAdsCustomerSelectionRequest = {
     customerId: string;
 };
 
+export type ConversionTrackingOptionsDto = {
+    googleAds: {
+        customerId: string | null;
+        syncedAt: string | null;
+        conversionActions: Array<{
+            id: string;
+            name: string;
+            detail: string;
+            active: boolean;
+        }>;
+    };
+    gtm: {
+        containerId: string | null;
+        syncedAt: string | null;
+        tags: Array<{
+            id: string;
+            name: string;
+            detail: string;
+            active: boolean;
+        }>;
+    };
+};
+
 export type GoogleAdsPerformanceDto = {
     window: '7d' | '14d' | '30d';
     startDate: string;
@@ -16919,6 +16942,36 @@ export type DeleteApiV1ProjectsByNameGtmConnectionResponses = {
 };
 
 export type DeleteApiV1ProjectsByNameGtmConnectionResponse = DeleteApiV1ProjectsByNameGtmConnectionResponses[keyof DeleteApiV1ProjectsByNameGtmConnectionResponses];
+
+export type GetApiV1ProjectsByNameConversionTrackingOptionsData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/conversion-tracking/options';
+};
+
+export type GetApiV1ProjectsByNameConversionTrackingOptionsErrors = {
+    /**
+     * Project not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameConversionTrackingOptionsError = GetApiV1ProjectsByNameConversionTrackingOptionsErrors[keyof GetApiV1ProjectsByNameConversionTrackingOptionsErrors];
+
+export type GetApiV1ProjectsByNameConversionTrackingOptionsResponses = {
+    /**
+     * Conversion tracking options returned.
+     */
+    200: ConversionTrackingOptionsDto;
+};
+
+export type GetApiV1ProjectsByNameConversionTrackingOptionsResponse = GetApiV1ProjectsByNameConversionTrackingOptionsResponses[keyof GetApiV1ProjectsByNameConversionTrackingOptionsResponses];
 
 export type GetApiV1ProjectsByNameConversionTrackingContractsData = {
     body?: never;

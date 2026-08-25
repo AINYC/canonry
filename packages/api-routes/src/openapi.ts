@@ -3244,6 +3244,17 @@ const routeCatalog: OpenApiOperation[] = [
   },
   {
     method: 'get',
+    path: '/api/v1/projects/{name}/conversion-tracking/options',
+    summary: 'Selectable Google Ads conversion actions and GTM tags from stored snapshots',
+    tags: ['conversion-tracking'],
+    parameters: [nameParameter],
+    responses: {
+      200: jsonResponse('Conversion tracking options returned.', 'ConversionTrackingOptionsDto'),
+      404: errorResponse('Project not found.'),
+    },
+  },
+  {
+    method: 'get',
     path: '/api/v1/projects/{name}/conversion-tracking/contracts',
     summary: 'List project conversion tracking contracts',
     tags: ['conversion-tracking'],
