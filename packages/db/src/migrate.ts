@@ -3938,6 +3938,53 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
       `ALTER TABLE traffic_sources ADD COLUMN wordpress_pending_until TEXT`,
     ],
   },
+  {
+    version: 146,
+    name: 'oauth-authorization-server',
+    // OAuth 2.1 for the remote MCP surface. Hosted clients (ChatGPT, Gemini
+    // Enterprise) cannot present an API key, so this is the only way they can
+    // authenticate at all.
+    //
+    // Codes and tokens are stored as SHA-256 digests, the same choice
+    // `user_sessions` makes and for the same reason: both are high-entropy
+    // bearer credentials, so a copied database must record that they existed
+    // without being a way to use them.
+    statements: [
+      `CREATE TABLE IF NOT EXISTS oauth_clients (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        secret_hash TEXT,
+        redirect_uris TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        revoked_at TEXT
+      )`,
+      `CREATE TABLE IF NOT EXISTS oauth_authorization_codes (
+        code_hash TEXT PRIMARY KEY,
+        client_id TEXT NOT NULL REFERENCES oauth_clients(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        redirect_uri TEXT NOT NULL,
+        code_challenge TEXT NOT NULL,
+        resource TEXT,
+        scope TEXT,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_oauth_codes_expires ON oauth_authorization_codes(expires_at)`,
+      `CREATE TABLE IF NOT EXISTS oauth_tokens (
+        token_hash TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        client_id TEXT NOT NULL REFERENCES oauth_clients(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        resource TEXT,
+        scope TEXT,
+        expires_at TEXT NOT NULL,
+        revoked_at TEXT,
+        created_at TEXT NOT NULL
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_oauth_tokens_user ON oauth_tokens(user_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_oauth_tokens_expires ON oauth_tokens(expires_at)`,
+    ],
+  },
 ]
 
 function addRunsMeasurementPlanVersionForeignKey(tx: MigrationDb): void {
