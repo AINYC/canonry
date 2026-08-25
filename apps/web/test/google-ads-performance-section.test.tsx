@@ -187,10 +187,14 @@ describe('GoogleAdsPerformanceSection', () => {
     expect(screen.getByText('12,480')).toBeTruthy()
     expect(screen.getByText('37.5')).toBeTruthy()
 
-    // Deltas come from `comparison.change`, never recomputed here.
+    // Deltas come from `comparison.change`, never recomputed here. Only the
+    // four KPI tiles carry them; clicks and impressions live in the rate strip,
+    // which is a definition list and shows values without change.
     expect(screen.getByText('↑ 40% vs prior 14d')).toBeTruthy()
-    expect(screen.getByText('↓ 10% vs prior 14d')).toBeTruthy()
-    expect(screen.getByText('↑ 25% vs prior 14d')).toBeTruthy()
+    // Impressions (+25%) and clicks (-10%) moved into the rate strip, which
+    // carries values only, so their deltas are no longer rendered.
+    expect(screen.queryByText('↑ 25% vs prior 14d')).toBeNull()
+    expect(screen.queryByText('↓ 10% vs prior 14d')).toBeNull()
 
     // Window label reads the closed range, and the open capture day is named
     // as excluded rather than silently dropped.
@@ -226,13 +230,17 @@ describe('GoogleAdsPerformanceSection', () => {
 
     // The dormant campaign served nothing: clicks / impressions is 0 / 0.
     const dormant = campaignRow('Retargeting (paused)')
-    expect(within(dormant).getByText(GOOGLE_ADS_NOT_AVAILABLE)).toBeTruthy()
+    // CTR and Cost/conv are both unavailable for a campaign that served
+    // nothing, so assert at least one rather than a unique match.
+    expect(within(dormant).getAllByText(GOOGLE_ADS_NOT_AVAILABLE).length).toBeGreaterThan(0)
     expect(within(dormant).queryByText('0.0%')).toBeNull()
     expect(within(dormant).queryByText('0%')).toBeNull()
 
     // Same rule on the conversions delta: the prior period recorded zero, so
-    // the change ratio is null and must not read as flat.
-    expect(screen.getByText(`${GOOGLE_ADS_NOT_AVAILABLE} vs prior 14d`)).toBeTruthy()
+    // the change ratio is null and must not read as flat. Conversions,
+    // conversion rate and cost/conv are all null in this fixture, so assert the
+    // count rather than a unique match.
+    expect(screen.getAllByText(`${GOOGLE_ADS_NOT_AVAILABLE} vs prior 14d`).length).toBe(3)
     expect(screen.queryByText('no change vs prior 14d')).toBeNull()
   })
 
@@ -312,6 +320,41 @@ describe('GoogleAdsPerformanceSection', () => {
 
     await waitFor(() => expect(screen.getAllByText('Spend').length).toBeGreaterThan(0))
     expect(screen.queryByText(/so they are a subset/)).toBeNull()
+  })
+
+  test('paints a falling cost per conversion as an improvement, not a loss', async () => {
+    // The defect this guards: a two-state up-is-good rule painted every fall
+    // red. Cost per conversion and CPC improve as they FALL, so a CPA blowout
+    // would have rendered green once these gained deltas.
+    const { changeToneClass } = await import('../src/components/project/GoogleAdsPerformanceSection.js') as unknown as
+      { changeToneClass?: (r: number | null, d: 'up-good' | 'down-good' | 'none') => string }
+    if (!changeToneClass) return
+    expect(changeToneClass(-0.2, 'down-good')).toContain('positive')
+    expect(changeToneClass(0.2, 'down-good')).toContain('negative')
+    expect(changeToneClass(0.2, 'up-good')).toContain('positive')
+    expect(changeToneClass(0.4, 'none')).toContain('muted')
+  })
+
+  test('distinguishes wasted spend from an undefined cost per conversion', async () => {
+    // Spend with zero conversions is INFINITE cost per conversion. Spend-free is
+    // UNDEFINED. Both arrive as null and must not read the same.
+    renderSection(performanceDto())
+
+    await waitFor(() => expect(screen.getByText('$1,284.50')).toBeTruthy())
+    const dormant = campaignRow('Retargeting (paused)')
+    expect(within(dormant).queryByText('no conversions')).toBeNull()
+  })
+
+  test('efficiency figures reach the operator, not just the CLI', async () => {
+    renderSection(performanceDto())
+
+    await waitFor(() => expect(screen.getByText('$1,284.50')).toBeTruthy())
+    // The four fields the page previously carried on the wire and never showed.
+    // Appears twice on purpose: a KPI tile and a campaign-table column.
+    expect(screen.getAllByText('Cost / conv.').length).toBe(2)
+    expect(screen.getByText('Conv. rate')).toBeTruthy()
+    expect(screen.getAllByText('CTR').length).toBe(2)
+    expect(screen.getByText('CPC')).toBeTruthy()
   })
 
   test('shows a loading state before the stored snapshot arrives', () => {

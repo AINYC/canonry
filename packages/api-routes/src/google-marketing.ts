@@ -1079,7 +1079,12 @@ function googleAdsCampaignPerformance(
     byCampaign.set(row.campaignId, sums)
   }
   return [...byCampaign.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
+    // Spend descending: the biggest spender is the row an operator looks for
+    // first, and campaignId order is meaningless to a human. Sorted here rather
+    // than in the component so the CLI, which iterates DTO order, matches the
+    // dashboard. campaignId breaks ties so the order stays stable across reads.
+    .sort(([leftId, leftSums], [rightId, rightSums]) =>
+      rightSums.costMicros - leftSums.costMicros || leftId.localeCompare(rightId))
     .map(([campaignId, sums]): GoogleAdsCampaignPerformance => {
       const label = labels.get(campaignId)
       return {

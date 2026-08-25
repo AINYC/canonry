@@ -58,6 +58,18 @@ const COUNT_FORMAT = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0
 const CONVERSION_FORMAT = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 })
 const PERCENT_FORMAT = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 })
 
+/**
+ * Micros as money, tolerant of null.
+ *
+ * `cpcMicros` and `costPerConversionMicros` are nullable by contract, and
+ * formatMicros is not null-tolerant, so calling it directly would print a real
+ * figure for a period that had no clicks or no conversions.
+ */
+export function formatGoogleAdsMicros(micros: number | null, currency: string): string {
+  if (micros === null || !Number.isFinite(micros)) return GOOGLE_ADS_NOT_AVAILABLE
+  return formatMicros(micros, currency)
+}
+
 /** A raw ratio (0.0731) as a display percentage. Never rounded before this point. */
 export function formatGoogleAdsRatio(ratio: number | null): string {
   if (ratio === null || !Number.isFinite(ratio)) return GOOGLE_ADS_NOT_AVAILABLE
@@ -98,13 +110,31 @@ function campaignStatusLabel(status: GoogleAdsCampaignStatus): string {
  * conversions are better. More spend is neither: without a return figure beside
  * it, a green "spend up 40%" would be an assertion the data does not support.
  */
-function changeToneClass(ratio: number | null, directional: boolean): string {
-  if (!directional || ratio === null || !Number.isFinite(ratio) || ratio === 0) return 'text-muted'
-  return ratio > 0 ? 'text-positive' : 'text-negative'
+/**
+ * Which way is GOOD for this metric.
+ *
+ * 'none' is not a fallback, it is a claim the data cannot support: spend rising
+ * is neither good nor bad without a return figure beside it.
+ *
+ * 'down-good' exists because a boolean cannot express it. Cost per conversion
+ * and cost per click improve as they FALL, so a two-state rule would paint a
+ * CPA blowout green.
+ */
+type ChangeDirection = 'up-good' | 'down-good' | 'none'
+
+function changeToneClass(ratio: number | null, direction: ChangeDirection): string {
+  if (direction === 'none' || ratio === null || !Number.isFinite(ratio) || ratio === 0) return 'text-muted'
+  const improving = direction === 'up-good' ? ratio > 0 : ratio < 0
+  return improving ? 'text-positive' : 'text-negative'
 }
 
 export function GoogleAdsPerformanceSection({ projectName }: { projectName: string }) {
   const [metricsWindow, setMetricsWindow] = useState<GoogleAdsMetricsWindow>('14d')
+  // Which tiles are plotted. Spend and conversions are the default pair; the
+  // last selected series cannot be turned off, or the chart renders empty axes.
+  const [selectedSeries, setSelectedSeries] = useState<ReadonlySet<'costMicros' | 'conversions' | 'clicks' | 'impressions'>>(
+    () => new Set(['costMicros', 'conversions'] as const),
+  )
   const performanceQuery = useQuery({
     ...getApiV1ProjectsByNameGoogleAdsPerformanceOptions({
       client: heyClient,
@@ -219,37 +249,55 @@ export function GoogleAdsPerformanceSection({ projectName }: { projectName: stri
     source.campaignsInInventory > 0 && source.campaignsQueried < source.campaignsInInventory
       ? { queried: source.campaignsQueried, inInventory: source.campaignsInInventory }
       : null
+  // Spend with zero conversions is INFINITE cost per conversion (pure waste).
+  // Spend with no data is UNDEFINED. Both arrive as null, so they must not read
+  // the same: the first is the single worst state on this page.
+  const wastedSpend = totals.costMicros > 0 && totals.conversions === 0
+
   const tiles: {
     key: string
     label: string
     value: string
     change: number | null
-    directional: boolean
+    direction: ChangeDirection
+    /** null = not chartable: no matching per-day field on `daily`. */
+    seriesKey: 'costMicros' | 'conversions' | 'clicks' | 'impressions' | null
   }[] = [
-    { key: 'spend', label: 'Spend', value: formatMicros(totals.costMicros, currency), change: comparison?.change.costMicros ?? null, directional: false },
-    { key: 'clicks', label: 'Clicks', value: COUNT_FORMAT.format(totals.clicks), change: comparison?.change.clicks ?? null, directional: true },
-    { key: 'impressions', label: 'Impressions', value: COUNT_FORMAT.format(totals.impressions), change: comparison?.change.impressions ?? null, directional: true },
-    { key: 'conversions', label: 'Conversions', value: CONVERSION_FORMAT.format(totals.conversions), change: comparison?.change.conversions ?? null, directional: true },
+    { key: 'spend', label: 'Spend', value: formatMicros(totals.costMicros, currency), change: comparison?.change.costMicros ?? null, direction: 'none', seriesKey: 'costMicros' },
+    { key: 'conversions', label: 'Conversions', value: CONVERSION_FORMAT.format(totals.conversions), change: comparison?.change.conversions ?? null, direction: 'up-good', seriesKey: 'conversions' },
+    {
+      key: 'cost-per-conversion',
+      label: 'Cost / conv.',
+      value: wastedSpend ? 'no conversions' : formatGoogleAdsMicros(totals.costPerConversionMicros, currency),
+      // The DTO carries no cost-per-conversion change yet, so no delta is shown
+      // rather than one derived here: derived metrics belong in the API.
+      change: null,
+      direction: 'down-good',
+      seriesKey: null,
+    },
+    { key: 'conversion-rate', label: 'Conv. rate', value: formatGoogleAdsRatio(totals.conversionRate), change: comparison?.change.conversionRate ?? null, direction: 'up-good', seriesKey: null },
   ]
 
-  const chartSeries: TrendChartSeries[] = [
-    {
-      dataKey: 'costMicros',
-      label: 'Spend',
-      color: CHART_SERIES_COLORS[1],
-      axisId: 'spend',
-      // Micros stay integers all the way to the axis; the formatter is the
-      // single render edge that turns them into money.
-      formatValue: (value: number) => formatMicros(value, currency),
-    },
-    {
-      dataKey: 'conversions',
-      label: 'Conversions',
-      color: CHART_SERIES_COLORS[0],
-      axisId: 'conversions',
-      formatValue: (value: number) => CONVERSION_FORMAT.format(value),
-    },
+  // The volume figures the tiles displaced. A flat definition strip, not a
+  // second rank of bordered tiles: eight boxes is a wall, and the ask was density.
+  const rateStrip: { key: string; label: string; value: string }[] = [
+    { key: 'clicks', label: 'Clicks', value: COUNT_FORMAT.format(totals.clicks) },
+    { key: 'impressions', label: 'Impressions', value: COUNT_FORMAT.format(totals.impressions) },
+    { key: 'ctr', label: 'CTR', value: formatGoogleAdsRatio(totals.ctr) },
+    { key: 'cpc', label: 'CPC', value: formatGoogleAdsMicros(totals.cpcMicros, currency) },
   ]
+
+  const SERIES_META: Record<'costMicros' | 'conversions' | 'clicks' | 'impressions', { label: string; color: string; axisId: string; formatValue: (v: number) => string }> = {
+    // Micros stay integers all the way to the axis; the formatter is the single
+    // render edge that turns them into money.
+    costMicros: { label: 'Spend', color: CHART_SERIES_COLORS[1]!, axisId: 'spend', formatValue: (v) => formatMicros(v, currency) },
+    conversions: { label: 'Conversions', color: CHART_SERIES_COLORS[0]!, axisId: 'conversions', formatValue: (v) => CONVERSION_FORMAT.format(v) },
+    clicks: { label: 'Clicks', color: CHART_SERIES_COLORS[2]!, axisId: 'conversions', formatValue: (v) => COUNT_FORMAT.format(v) },
+    impressions: { label: 'Impressions', color: CHART_SERIES_COLORS[3]!, axisId: 'impressions', formatValue: (v) => COUNT_FORMAT.format(v) },
+  }
+
+  const chartSeries: TrendChartSeries[] = [...selectedSeries]
+    .map((key) => ({ dataKey: key, ...SERIES_META[key] }))
 
   return (
     <section className="page-section" aria-labelledby="google-ads-performance-title">
@@ -275,18 +323,69 @@ export function GoogleAdsPerformanceSection({ projectName }: { projectName: stri
       ) : null}
 
       <div className="mt-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
-        {tiles.map((tile) => (
-          <div key={tile.key} className="rounded-md border border-subtle bg-surface-subtle px-3 py-2">
-            <span className="block text-xs text-secondary">{tile.label}</span>
-            <span className="mt-0.5 block text-lg tabular-nums text-strong">{tile.value}</span>
-            {comparison ? (
-              <span className={`block text-[11px] tabular-nums ${changeToneClass(tile.change, tile.directional)}`}>
-                {formatGoogleAdsChange(tile.change, comparison.days)}
+        {tiles.map((tile) => {
+          const selected = tile.seriesKey !== null && selectedSeries.has(tile.seriesKey)
+          // Locked when it is the only plotted series: turning it off would
+          // leave the chart with no data and empty axes.
+          const locked = selected && selectedSeries.size === 1
+          const body = (
+            <>
+              <span className="flex items-center gap-1.5 text-xs text-secondary">
+                {tile.seriesKey ? (
+                  <span
+                    aria-hidden="true"
+                    className="size-1.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: selected ? SERIES_META[tile.seriesKey].color : 'var(--color-mono-600)' }}
+                  />
+                ) : null}
+                {tile.label}
               </span>
-            ) : null}
+              <span className="mt-0.5 block text-lg tabular-nums text-strong">{tile.value}</span>
+              {comparison ? (
+                <span className={`block text-[11px] tabular-nums ${changeToneClass(tile.change, tile.direction)}`}>
+                  {formatGoogleAdsChange(tile.change, comparison.days)}
+                </span>
+              ) : (
+                // A fixed third slot so switching window does not reflow the grid.
+                <span className="block text-[11px] text-muted">no prior {metricsWindow} period stored</span>
+              )}
+            </>
+          )
+          if (tile.seriesKey === null) {
+            return (
+              <div key={tile.key} className="rounded-md border border-subtle bg-surface-subtle px-3 py-2">{body}</div>
+            )
+          }
+          return (
+            <button
+              key={tile.key}
+              type="button"
+              aria-pressed={selected}
+              disabled={locked}
+              onClick={() => setSelectedSeries((current) => {
+                const next = new Set(current)
+                if (next.has(tile.seriesKey!)) next.delete(tile.seriesKey!)
+                else next.add(tile.seriesKey!)
+                return next.size === 0 ? current : next
+              })}
+              className={`rounded-md border px-3 py-2 text-left transition-colors ${
+                selected ? 'border-strong bg-surface-active' : 'border-subtle bg-surface-subtle hover:bg-surface-hover'
+              } ${locked ? 'cursor-default' : ''}`}
+            >
+              {body}
+            </button>
+          )
+        })}
+      </div>
+
+      <dl className="mt-2 flex flex-wrap gap-x-6 gap-y-1 rounded-md border border-subtle bg-surface-subtle px-3 py-2">
+        {rateStrip.map((item) => (
+          <div key={item.key} className="flex items-baseline gap-1.5">
+            <dt className="text-xs text-secondary">{item.label}</dt>
+            <dd className="text-sm tabular-nums text-strong">{item.value}</dd>
           </div>
         ))}
-      </div>
+      </dl>
 
       <div className="mt-4">
         <MultiAxisTrendChart
@@ -328,12 +427,13 @@ export function GoogleAdsPerformanceSection({ projectName }: { projectName: stri
                 <th className="text-right">Spend</th>
                 <th className="text-right">Conversions</th>
                 <th className="text-right">CTR</th>
+                <th className="text-right">Cost / conv.</th>
               </tr>
             </thead>
             <tbody>
               {campaigns.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="text-secondary">No campaign delivered in this window.</td>
+                  <td colSpan={8} className="text-secondary">No campaign delivered in this window.</td>
                 </tr>
               ) : campaigns.map((campaign) => (
                 <tr key={campaign.campaignId}>
@@ -346,6 +446,18 @@ export function GoogleAdsPerformanceSection({ projectName }: { projectName: stri
                   <td className="text-right tabular-nums text-strong">{formatMicros(campaign.totals.costMicros, currency)}</td>
                   <td className="text-right tabular-nums text-secondary">{CONVERSION_FORMAT.format(campaign.totals.conversions)}</td>
                   <td className="text-right tabular-nums text-secondary">{formatGoogleAdsRatio(campaign.totals.ctr)}</td>
+                  <td className="text-right tabular-nums">
+                    {campaign.totals.costMicros > 0 && campaign.totals.conversions === 0 ? (
+                      // Spend with no conversions is the waste case, and the row
+                      // that most deserves attention. Rendering it as a bare
+                      // "not available" makes it the quietest row on the page.
+                      <ToneBadge tone="caution">no conversions</ToneBadge>
+                    ) : (
+                      <span className="text-secondary">
+                        {formatGoogleAdsMicros(campaign.totals.costPerConversionMicros, currency)}
+                      </span>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
