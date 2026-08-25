@@ -9846,6 +9846,7 @@ export type TrafficEventsResponse = {
             aiUserFetchHits: number;
             aiReferralHits: number;
             aiReferralLandedHits: number;
+            crawlerContentHits: number;
         }>;
     };
     totals: {

@@ -588,6 +588,13 @@ export const trafficSeriesPointSchema = z.object({
    * series to chart under any label that says sessions or visits.
    */
   aiReferralLandedHits: z.number().int().nonnegative(),
+  /**
+   * The part of `crawlerHits` that is a real content page, excluding robots,
+   * sitemaps and assets. `crawlerHits` keeps its full-count contract; this is
+   * the series to chart under any label that says "pages crawled", because a
+   * sitemap re-fetch is not a page an engine read.
+   */
+  crawlerContentHits: z.number().int().nonnegative(),
 })
 export type TrafficSeriesPoint = z.infer<typeof trafficSeriesPointSchema>
 

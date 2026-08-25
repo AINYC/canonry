@@ -5032,6 +5032,7 @@ describe('GET /traffic/events', () => {
         aiUserFetchHits: 0,
         aiReferralHits: 0,
         aiReferralLandedHits: 0,
+        crawlerContentHits: 7,
       })
       expect(body.series.points[45].crawlerHits).toBe(11)
       expect(body.series.points.reduce((sum: number, point: { crawlerHits: number }) => sum + point.crawlerHits, 0))
@@ -5160,6 +5161,44 @@ describe('crawler-hit content/infra segmentation', () => {
     } finally { await h.close() }
   })
 
+  /**
+   * The daily series is what the Activity chart draws. `crawlerHits` is the full
+   * count, so a day of sitemap re-fetches inflates it; `crawlerContentHits` is
+   * the part that is a real page. Charting the former under "pages crawled"
+   * reports infrastructure as reading, which is the whole reason this field
+   * exists, so assert the two DISAGREE here rather than that either is non-zero.
+   */
+  it('splits content from infrastructure per day in the series, not just in the totals', async () => {
+    const { h } = await mixedPathHarness()
+    try {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: '/api/v1/projects/test-project/traffic/events?sinceMinutes=1440&granularity=day',
+      })
+      expect(res.statusCode).toBe(200)
+      const body = JSON.parse(res.payload)
+
+      const sum = (key: string) => body.series.points
+        .reduce((acc: number, pt: Record<string, number>) => acc + pt[key], 0)
+
+      const total = EXPECTED_SEGMENTS.content + EXPECTED_SEGMENTS.sitemap
+        + EXPECTED_SEGMENTS.robots + EXPECTED_SEGMENTS.asset + EXPECTED_SEGMENTS.other
+      expect(sum('crawlerHits')).toBe(total)
+      expect(sum('crawlerContentHits')).toBe(EXPECTED_SEGMENTS.content)
+      // The point of the field: the two must not be the same number here.
+      expect(sum('crawlerContentHits')).toBeLessThan(sum('crawlerHits'))
+
+      // The series must agree with the totals object on the same request.
+      expect(sum('crawlerHits')).toBe(body.totals.crawlerHits)
+      expect(sum('crawlerContentHits')).toBe(body.totals.crawlerContentHits)
+
+      // Every point carries the key, including zero-filled days, and never exceeds its own total.
+      for (const pt of body.series.points) {
+        expect(typeof pt.crawlerContentHits).toBe('number')
+        expect(pt.crawlerContentHits).toBeLessThanOrEqual(pt.crawlerHits)
+      }
+    } finally { await h.close() }
+  })
   it('reads 0 content crawls for an all-infrastructure source', async () => {
     const baseTime = new Date(Date.now() - 60 * 60_000)
     baseTime.setMinutes(0, 0, 0)

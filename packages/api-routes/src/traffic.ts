@@ -664,7 +664,7 @@ function assertCloudflareIngestUrlOutsideWorkerRoute(
 }
 
 function emptyTrafficSeriesPoint(bucket: string): TrafficSeriesPoint {
-  return { bucket, crawlerHits: 0, aiUserFetchHits: 0, aiReferralHits: 0, aiReferralLandedHits: 0 }
+  return { bucket, crawlerHits: 0, aiUserFetchHits: 0, aiReferralHits: 0, aiReferralLandedHits: 0, crawlerContentHits: 0 }
 }
 
 function completeTrafficSeries(
@@ -4479,17 +4479,31 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
       const crawlerSeriesBucket = granularity === TrafficSeriesGranularities.day
         ? sql<string>`substr(${crawlerEventsHourly.tsHour}, 1, 10)`
         : crawlerEventsHourly.tsHour
+      // Group by path as well as bucket so each bucket can be segmented the same
+      // way the totals are. Distinct normalized paths per window is small, so the
+      // extra grouping key is cheap, and it is the only way to get a per-day
+      // content count: the classification is per path, not per hit.
       const crawlerSeries = app.db
         .select({
           bucket: crawlerSeriesBucket,
+          pathNormalized: crawlerEventsHourly.pathNormalized,
           hits: sql<number>`COALESCE(SUM(${crawlerEventsHourly.hits}), 0)`,
         })
         .from(crawlerEventsHourly)
         .where(crawlerWhere)
-        .groupBy(crawlerSeriesBucket)
+        .groupBy(crawlerSeriesBucket, crawlerEventsHourly.pathNormalized)
         .all()
+      const crawlerPathsByBucket = new Map<string, Array<{ pathNormalized: string; hits: number }>>()
       for (const row of crawlerSeries) {
-        trafficSeriesPoint(seriesByBucket, row.bucket).crawlerHits = Number(row.hits)
+        const bucket = String(row.bucket)
+        const point = trafficSeriesPoint(seriesByBucket, bucket)
+        point.crawlerHits += Number(row.hits)
+        let paths = crawlerPathsByBucket.get(bucket)
+        if (!paths) { paths = []; crawlerPathsByBucket.set(bucket, paths) }
+        paths.push({ pathNormalized: row.pathNormalized, hits: Number(row.hits) })
+      }
+      for (const [bucket, paths] of crawlerPathsByBucket) {
+        trafficSeriesPoint(seriesByBucket, bucket).crawlerContentHits = segmentCrawlerHits(paths).content
       }
 
       const rows = app.db
