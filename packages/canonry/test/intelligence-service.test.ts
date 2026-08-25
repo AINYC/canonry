@@ -394,6 +394,10 @@ describe('IntelligenceService', () => {
       const run1 = seedRun(db, projectId, 'completed', '2024-01-01T00:00:00Z')
       seedSnapshot(db, run1, k1, 'gemini', 'not-cited')
       seedSnapshot(db, run1, k2, 'gemini', 'cited', { citedDomains: ['example.com'] })
+      // openai is ASKED about k2 and says no. A pickup means "this provider
+      // started citing", which is only claimable against a measured no — an
+      // absent row would mean openai errored, not that it declined.
+      seedSnapshot(db, run1, k2, 'openai', 'not-cited')
       seedSnapshot(db, run1, k3, 'gemini', 'not-cited')
       seedSnapshot(db, run1, k4, 'gemini', 'not-cited')
       seedSnapshot(db, run1, k5, 'gemini', 'not-cited', {
@@ -405,6 +409,7 @@ describe('IntelligenceService', () => {
       const run2 = seedRun(db, projectId, 'completed', '2024-02-01T00:00:00Z')
       seedSnapshot(db, run2, k1, 'gemini', 'not-cited')
       seedSnapshot(db, run2, k2, 'gemini', 'cited', { citedDomains: ['example.com'] })
+      seedSnapshot(db, run2, k2, 'openai', 'not-cited')
       seedSnapshot(db, run2, k3, 'gemini', 'not-cited')
       seedSnapshot(db, run2, k4, 'gemini', 'not-cited')
       seedSnapshot(db, run2, k5, 'gemini', 'not-cited', {
@@ -1107,6 +1112,82 @@ describe('IntelligenceService', () => {
       expect(result).not.toBeNull()
       expect(result!.regressions).toHaveLength(1)
       expect(result!.regressions[0]!.previousRunId).toBe(day1)
+    })
+  })
+
+  // Regression suite: a provider call that throws writes NO snapshot row, so
+  // a `status='partial'` sweep has per-pair holes. The run-level snapshot
+  // guard passes it (the run has SOME rows), and the detectors then read
+  // every hole as "was not cited". Measured before the fix on a site where
+  // nothing had changed: 6 false insights.
+  describe('a partial baseline does not invent transitions', () => {
+    it('reports nothing when the only difference is a provider that errored last sweep', () => {
+      const { db } = createTempDb('intel-partial-')
+      const projectId = seedProject(db)
+      const qs = ['q1', 'q2', 'q3'].map(q => seedQuery(db, projectId, q))
+
+      // Sweep 1 (partial): gemini answered and cited all three.
+      // openai errored on every query, so it wrote no rows at all.
+      const partial = seedRun(db, projectId, 'partial', '2026-01-01T00:00:00Z')
+      for (const q of qs) {
+        seedSnapshot(db, partial, q, 'gemini', 'cited', { citedDomains: ['example.com'] })
+      }
+
+      // Sweep 2 (clean): both providers answer, both cite all three. The site
+      // did not change between the sweeps — only the sampling did.
+      const clean = seedRun(db, projectId, 'completed', '2026-01-02T00:00:00Z')
+      for (const q of qs) {
+        seedSnapshot(db, clean, q, 'gemini', 'cited', { citedDomains: ['example.com'] })
+        seedSnapshot(db, clean, q, 'openai', 'cited', { citedDomains: ['example.com'] })
+      }
+
+      const result = new IntelligenceService(db).analyzeAndPersist(clean, projectId)
+
+      expect(result).not.toBeNull()
+      // Pre-fix: 3 gains + 3 provider-pickups = 6 insights, all false.
+      expect(result!.gains).toHaveLength(0)
+      expect(result!.providerPickups).toHaveLength(0)
+      expect(result!.firstCitations).toHaveLength(0)
+      expect(result!.insights).toHaveLength(0)
+      expect(db.select().from(insights).all()).toHaveLength(0)
+    })
+
+    it('still reports the real movement in the same partial sweep', () => {
+      // Symmetry check: suppressing holes must not suppress evidence. Same
+      // shape as above, except gemini genuinely lost q1 and genuinely gained
+      // q3 — both measured on both sides, so both must survive.
+      const { db } = createTempDb('intel-partial-real-')
+      const projectId = seedProject(db)
+      const [q1, q2, q3] = ['q1', 'q2', 'q3'].map(q => seedQuery(db, projectId, q))
+
+      const partial = seedRun(db, projectId, 'partial', '2026-01-01T00:00:00Z')
+      seedSnapshot(db, partial, q1!, 'gemini', 'cited', { citedDomains: ['example.com'] })
+      seedSnapshot(db, partial, q2!, 'gemini', 'cited', { citedDomains: ['example.com'] })
+      seedSnapshot(db, partial, q3!, 'gemini', 'not-cited')
+      // openai errored across the board — no rows.
+
+      const clean = seedRun(db, projectId, 'completed', '2026-01-02T00:00:00Z')
+      seedSnapshot(db, clean, q1!, 'gemini', 'not-cited')                                   // real LOSS
+      seedSnapshot(db, clean, q2!, 'gemini', 'cited', { citedDomains: ['example.com'] })     // unchanged
+      seedSnapshot(db, clean, q3!, 'gemini', 'cited', { citedDomains: ['example.com'] })     // real GAIN
+      for (const q of [q1, q2, q3]) {
+        seedSnapshot(db, clean, q!, 'openai', 'cited', { citedDomains: ['example.com'] })    // unmeasured before
+      }
+
+      const result = new IntelligenceService(db).analyzeAndPersist(clean, projectId)
+
+      expect(result!.regressions).toHaveLength(1)
+      expect(result!.regressions[0]!.query).toBe('q1')
+      expect(result!.gains).toHaveLength(1)
+      expect(result!.gains[0]!.query).toBe('q3')
+      expect(result!.gains[0]!.provider).toBe('gemini')
+      // q3 was uncited by every provider the baseline measured, so its first
+      // citation is real evidence, not a hole. The claim is query-level and
+      // emits one row per provider citing it now, so q3 yields two rows.
+      expect(new Set(result!.firstCitations.map(f => f.query))).toEqual(new Set(['q3']))
+      expect(result!.firstCitations).toHaveLength(2)
+      // openai's three citations are all unmeasured-before: no claim either way.
+      expect(result!.providerPickups).toHaveLength(0)
     })
   })
 

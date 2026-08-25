@@ -14,6 +14,7 @@ Pure analysis library for computing intelligence insights from run data. Takes r
 | `src/health.ts` | Computes overall and per-provider citation health metrics |
 | `src/causes.ts` | Root cause analysis for regressions (competitor displacement, etc.) |
 | `src/insights.ts` | Transforms raw analysis into user-facing insight objects |
+| `src/observation-coverage.ts` | `observedKeys(run, keyOf)` — what a run actually measured, so a missing snapshot row is never read as "not cited". See "Absence is not a negative observation" below. |
 | `src/insight-severity.ts` | `classifyRegressionSeverity({ gscImpressions, recurrenceCount })` — pure tiering rule. Caller supplies the signals (lookups happen in `IntelligenceService`); rule lives here so the dashboard, CLI, and Aero classify identically. |
 | `src/insight-grouping.ts` | `groupInsights<T>(insights, keyFn?)` — generic dedup over `(query, provider, type)`. Consumed by report renderer + any future CLI/dashboard list view to collapse repeat alerts. |
 | `src/next-steps.ts` | `mapOpportunitiesToNextSteps()` — auto-fills `recommendedNextSteps` from scored content opportunities when the upstream insight-driven builder produced none. Pure mapper consumed by both `api-routes/report.ts` and `canonry/report-renderer.ts`. |
@@ -39,6 +40,31 @@ const result: AnalysisResult = analyzeRuns(currentRun, previousRun)
 - **No I/O**: This package never touches the database, network, or filesystem. Callers provide `RunData`, receive `AnalysisResult`.
 - **Deterministic**: Same inputs always produce the same outputs. No randomness, no timestamps.
 - **Consumed by**: `IntelligenceService` in `packages/canonry/` which handles DB reads/writes.
+
+### Absence is not a negative observation (Critical)
+
+`RunData.snapshots` records what a run OBSERVED, not what is true. A provider
+call that throws writes no snapshot row at all — that is what `status='partial'`
+means — so a sweep can be missing whole (query × provider) pairs. **A missing
+row must never be read as "not cited".**
+
+Any detector that claims a TRANSITION ("started being cited", "dropped off")
+has to confirm the relevant side observed the thing before claiming it moved.
+Use `observedKeys(run, keyOf)` from `observation-coverage.ts`, keyed the same
+way that detector keys its cited set. Which side depends on which direction the
+claim runs: a GAIN or pickup is claimed from absence in the baseline, so the
+baseline must have observed it; a LOSS is claimed from absence in the current
+run, so the current run must have.
+
+Measured against a baseline sweep where one provider errored, skipping this
+produced 6 false insights for a site where nothing had changed.
+
+`detectRegressions` and `detectPersistentGaps` are correct by construction —
+the first iterates the current run's rows and requires a prior CITED
+observation, the second breaks a streak on any run missing the query.
+`packages/intelligence/test/observation-coverage.test.ts` covers every detector
+in both directions: the hole is suppressed AND the real transition still fires.
+Add a new detector to that suite.
 
 ## See Also
 

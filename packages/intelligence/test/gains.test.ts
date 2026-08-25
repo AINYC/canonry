@@ -108,7 +108,13 @@ describe('detectGains', () => {
     expect(detectGains(curr, prev)).toEqual([])
   })
 
-  it('detects gain for a query new in current run (not in previous)', () => {
+  it('does not report a gain for a query the previous run never measured', () => {
+    // A gain is a TRANSITION, so it needs a baseline reading to have moved
+    // from. A query absent from the previous run has none — and at the data
+    // level "newly tracked" and "the provider errored on it" are the same
+    // thing, so claiming a gain here is claiming one for every hole a
+    // `partial` sweep leaves. The citation is still visible in coverage; it
+    // is only the change-feed claim that is withheld.
     const prev = makeRun({
       runId: 'run_001',
       snapshots: [
@@ -119,6 +125,24 @@ describe('detectGains', () => {
       runId: 'run_002',
       snapshots: [
         { query: 'existing', provider: 'chatgpt', cited: true },
+        { query: 'brand-new', provider: 'chatgpt', cited: true, citationUrl: 'https://a.com/new' },
+      ],
+    })
+
+    expect(detectGains(curr, prev)).toHaveLength(0)
+  })
+
+  it('reports the gain once the query has a measured baseline', () => {
+    // The same query, one sweep later: now it has a reading on both sides.
+    const prev = makeRun({
+      runId: 'run_002',
+      snapshots: [
+        { query: 'brand-new', provider: 'chatgpt', cited: false },
+      ],
+    })
+    const curr = makeRun({
+      runId: 'run_003',
+      snapshots: [
         { query: 'brand-new', provider: 'chatgpt', cited: true, citationUrl: 'https://a.com/new' },
       ],
     })
