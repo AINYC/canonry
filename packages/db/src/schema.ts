@@ -495,6 +495,15 @@ export const oauthClients = sqliteTable('oauth_clients', {
   secretHash: text('secret_hash'),
   /** Exact-match allowlist. A redirect_uri not in here is refused. */
   redirectUris: text('redirect_uris', { mode: 'json' }).$type<string[]>().notNull().default([]),
+  /**
+   * How this client came to exist.
+   *
+   * `dynamic` means it registered ITSELF over the open RFC 7591 endpoint and
+   * chose its own display name — so that name is a claim, not a fact, and the
+   * consent page must say so. A client calling itself "Canonry Dashboard"
+   * otherwise reads as first-party on the one screen where trust is decided.
+   */
+  registration: text('registration').$type<'operator' | 'dynamic'>().notNull().default('operator'),
   createdAt: text('created_at').notNull(),
   revokedAt: text('revoked_at'),
 })

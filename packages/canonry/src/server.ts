@@ -226,7 +226,7 @@ import { RunCoordinator } from "./run-coordinator.js";
 import { SessionRegistry } from "./agent/session-registry.js";
 import { buildAgentProvidersResponse } from "./agent/providers.js";
 import { registerMcpHttpRoutes, mcpTransportPaths } from "./mcp-http.js";
-import { registerOAuthRoutes, createCredentialChecker, parseCookieHeader, resolveUserSession, createUserSession, serializeUserSessionCookie, USER_SESSION_COOKIE_NAME } from "@ainyc/canonry-api-routes";
+import { registerOAuthRoutes, registerOAuthAdminRoutes, createCredentialChecker, parseCookieHeader, resolveUserSession, createUserSession, serializeUserSessionCookie, USER_SESSION_COOKIE_NAME } from "@ainyc/canonry-api-routes";
 import { registerAgentRoutes } from "./agent/agent-routes.js";
 import {
   createRecommendationExplainer,
@@ -2516,6 +2516,9 @@ export async function createServer(opts: {
       // inherits the api-routes auth hook — the root app has none, and a route
       // mounted there would serve MCP unauthenticated.
       registerMcpHttpRoutes(scope, { selfApiUrl: opts.config.apiUrl, issuer: publicOrigin, db: opts.db });
+      // Operator-only OAuth routes: inside the authenticated scope, behind the
+      // api-key auth and the admin gate, while /oauth/* stays public.
+      registerOAuthAdminRoutes(scope, { db: opts.db });
       // Aero kill-switch: don't serve the interactive agent routes when disabled.
       if (!sessionRegistry) return;
       registerAgentRoutes(scope, { db: opts.db, sessionRegistry });

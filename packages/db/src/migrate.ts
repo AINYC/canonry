@@ -3985,6 +3985,18 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
       `CREATE INDEX IF NOT EXISTS idx_oauth_tokens_expires ON oauth_tokens(expires_at)`,
     ],
   },
+  {
+    version: 147,
+    name: 'oauth-client-provenance',
+    // A self-registered client picks its own display name, and that name is the
+    // trust anchor on the consent screen. Recording HOW a client was created is
+    // what lets that screen distinguish a claim from a fact. Existing rows
+    // default to 'operator', which is correct: before this, the only way to
+    // create one was by hand.
+    statements: [
+      `ALTER TABLE oauth_clients ADD COLUMN registration TEXT NOT NULL DEFAULT 'operator'`,
+    ],
+  },
 ]
 
 function addRunsMeasurementPlanVersionForeignKey(tx: MigrationDb): void {

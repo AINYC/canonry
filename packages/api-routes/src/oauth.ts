@@ -1,9 +1,11 @@
 import crypto from 'node:crypto'
 
 import { oauthAuthorizationCodes, oauthClients, oauthTokens, type DatabaseClient } from '@ainyc/canonry-db'
-import { and, eq, lt } from 'drizzle-orm'
+import { and, eq, isNull, lt } from 'drizzle-orm'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 
+import { requireAdminSession } from './auth.js'
+import { notFound } from '@ainyc/canonry-contracts'
 import { assertCookieWriteOrigin } from './same-origin.js'
 import type { CredentialChecker } from './user-session.js'
 
@@ -171,6 +173,7 @@ function signInPage(action: string, error: string | null): string {
 function consentPage(o: {
   action: string
   clientName: string
+  selfRegistered: boolean
   redirectUri: string
   scope: string
   userName: string
@@ -187,6 +190,10 @@ function consentPage(o: {
   return page(`<h1>Allow access?</h1>
  <p class="who"><strong>${escapeHtml(o.clientName)}</strong> wants to access Canonry as
    <strong>${escapeHtml(o.userName)}</strong>.</p>
+ ${o.selfRegistered
+   ? `<p class="warn">This application chose its own name and has not been verified by anyone.
+      Check the address below before allowing it.</p>`
+   : ''}
  <dl>
    <dt>Permissions</dt><dd>${escapeHtml(o.scope)}</dd>
    <dt>Redirects to</dt><dd class="uri">${escapeHtml(o.redirectUri)}</dd>
@@ -240,6 +247,7 @@ function page(inner: string, action: string): string {
  .row{display:flex;gap:.5rem;justify-content:flex-end}
  .err{color:#f87171;font-size:.85rem}
  .who{margin:0}
+ .warn{margin:0;padding:.6rem;border-radius:6px;background:#3a2a12;color:#fbbf24;font-size:.85rem}
 </style></head>
 <body><form method="post" action="${escapeHtml(action)}">
  ${inner}
@@ -413,6 +421,7 @@ function registerOAuthRoutesIn(app: FastifyInstance, opts: OAuthRoutesOptions): 
     return sendGatePage(reply, consentPage({
       action: request.url,
       clientName: client.name,
+      selfRegistered: client.registration === 'dynamic',
       redirectUri,
       scope: grantedScope,
       userName: user.name,
@@ -499,7 +508,35 @@ function registerOAuthRoutesIn(app: FastifyInstance, opts: OAuthRoutesOptions): 
    * Public clients only. A secret is never issued here, because a client that
    * registered itself over an open endpoint has no way to keep one.
    */
+  /**
+   * Registration is open because desktop clients have no other way in, but open
+   * plus unbounded is a free way to fill a table and to farm plausible-looking
+   * client names for the consent screen. One bucket per caller, and a global
+   * ceiling so an attacker spreading across addresses still cannot run the
+   * table away.
+   */
+  const registrations = new Map<string, number[]>()
+  let registrationsThisWindow: number[] = []
+  const REGISTER_WINDOW_MS = 60 * 60 * 1000
+  const REGISTER_MAX_PER_CALLER = 10
+  const REGISTER_MAX_TOTAL = 200
+
   app.post('/oauth/register', async (request: FastifyRequest, reply: FastifyReply) => {
+    const nowMs = Date.now()
+    const cutoff = nowMs - REGISTER_WINDOW_MS
+    const caller = request.ip || 'unidentified'
+    registrationsThisWindow = registrationsThisWindow.filter(t => t > cutoff)
+    const mine = (registrations.get(caller) ?? []).filter(t => t > cutoff)
+    if (mine.length >= REGISTER_MAX_PER_CALLER || registrationsThisWindow.length >= REGISTER_MAX_TOTAL) {
+      return reply.status(429).send({
+        error: 'temporarily_unavailable',
+        error_description: 'Too many client registrations. Try again later.',
+      })
+    }
+    mine.push(nowMs)
+    registrations.set(caller, mine)
+    registrationsThisWindow.push(nowMs)
+
     const body = (request.body ?? {}) as { redirect_uris?: unknown; client_name?: unknown }
     const uris = Array.isArray(body.redirect_uris)
       ? body.redirect_uris.filter((u): u is string => typeof u === 'string')
@@ -535,6 +572,7 @@ function registerOAuthRoutesIn(app: FastifyInstance, opts: OAuthRoutesOptions): 
         : 'Dynamically registered client',
       secretHash: null,
       redirectUris: uris,
+      registration: 'dynamic',
       createdAt: now,
     }).run()
 
@@ -678,6 +716,15 @@ function registerOAuthRoutesIn(app: FastifyInstance, opts: OAuthRoutesOptions): 
     return badRequest(reply, 'unsupported_grant_type', 'Supported grants: authorization_code, refresh_token.')
   })
 
+  /**
+   * Operator surface. Until this existed, nothing in production ever set
+   * oauth_clients.revoked_at — a client, once registered, was permanent, and a
+   * grant could not be withdrawn without editing the database by hand. An open
+   * registration endpoint with no way to revoke is only half a feature.
+   *
+   * Mounted under the API prefix so it inherits the api-key auth and the admin
+   * gate. The OAuth protocol endpoints stay public; this is not one of them.
+   */
   app.post('/oauth/revoke', async (request: FastifyRequest, reply: FastifyReply) => {
     const body = (request.body ?? {}) as Record<string, string | undefined>
     if (body.token) {
@@ -708,4 +755,58 @@ export function resolveOAuthAccessToken(
   if (Date.parse(row.expiresAt) <= now.getTime()) return null
   if (row.resource && row.resource !== expectedResource) return null
   return { userId: row.userId, clientId: row.clientId, scope: row.scope }
+}
+
+/**
+ * Operator-only OAuth routes, mounted separately from the protocol endpoints.
+ *
+ * They live INSIDE the authenticated API scope while /oauth/* stays public, so
+ * they are registered by the host at that point rather than from
+ * registerOAuthRoutes — which mounts at the root and, in a Fastify app, runs
+ * after the API plugin has already been built.
+ */
+export function registerOAuthAdminRoutes(app: FastifyInstance, opts: { db: DatabaseClient }): void {
+  const { db } = opts
+  app.get('/oauth/clients', async (request: FastifyRequest) => {
+    requireAdminSession(request)
+    const now = new Date().toISOString()
+    const clients = db.select().from(oauthClients).all()
+    const tokens = db.select().from(oauthTokens).all()
+    return {
+      clients: clients.map(client => ({
+        id: client.id,
+        name: client.name,
+        // Surfaced, not inferred: an operator deciding whether to revoke
+        // should see that a client named itself.
+        registration: client.registration,
+        redirectUris: client.redirectUris,
+        createdAt: client.createdAt,
+        revokedAt: client.revokedAt,
+        activeGrants: tokens.filter(t =>
+          t.clientId === client.id
+          && t.kind === 'refresh'
+          && !t.revokedAt
+          && t.expiresAt > now).length,
+      })),
+    }
+  })
+
+  app.delete('/oauth/clients/:id', async (request: FastifyRequest, reply: FastifyReply) => {
+    requireAdminSession(request)
+    const { id } = request.params as { id: string }
+    const client = db.select().from(oauthClients).where(eq(oauthClients.id, id)).get()
+    if (!client) {
+      const error = notFound('OAuth client', id)
+      return reply.status(error.statusCode).send(error.toJSON())
+    }
+    const now = new Date().toISOString()
+    // Revoke the client AND every token it holds. Marking only the client
+    // would leave live access tokens working until they expired, which is
+    // not what anyone means by revoking a client.
+    db.update(oauthClients).set({ revokedAt: now }).where(eq(oauthClients.id, id)).run()
+    db.update(oauthTokens).set({ revokedAt: now })
+      .where(and(eq(oauthTokens.clientId, id), isNull(oauthTokens.revokedAt))).run()
+    db.delete(oauthAuthorizationCodes).where(eq(oauthAuthorizationCodes.clientId, id)).run()
+    return { id, revokedAt: now }
+  })
 }

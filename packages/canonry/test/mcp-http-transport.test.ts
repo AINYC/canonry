@@ -327,6 +327,47 @@ describe('MCP over OAuth', () => {
     expect(after[0]!.revokedAt).not.toBeNull()
   })
 
+  it('an operator can list clients and revoking one kills its live tokens', async () => {
+    // Before this existed, nothing in production ever set revoked_at: a client
+    // was permanent once registered and a grant could not be withdrawn without
+    // editing the database by hand.
+    const token = await mintAccessToken(built)
+    const adminKey = built.wildcardKey
+
+    const listed = await request(built, {
+      method: 'GET', url: '/api/v1/oauth/clients',
+      headers: { authorization: `Bearer ${adminKey}` },
+    })
+    expect(listed.statusCode).toBe(200)
+    const clients = listed.json<{ clients: { id: string; activeGrants: number; registration: string }[] }>().clients
+    const mine = clients.find(c => c.id === 'test-client')
+    expect(mine?.activeGrants).toBe(1)
+    expect(mine?.registration).toBe('operator')
+
+    // The token works right up until revocation.
+    const before = await request(built, {
+      method: 'POST', url: '/api/v1/mcp',
+      headers: { authorization: `Bearer ${token}`, accept: MCP_ACCEPT, 'content-type': 'application/json' },
+      payload: INIT,
+    })
+    expect(before.statusCode).toBeLessThan(400)
+
+    const revoked = await request(built, {
+      method: 'DELETE', url: '/api/v1/oauth/clients/test-client',
+      headers: { authorization: `Bearer ${adminKey}` },
+    })
+    expect(revoked.statusCode).toBe(200)
+
+    // Revoking the client must kill its outstanding tokens too — marking only
+    // the client would leave live access tokens working until they expired.
+    const after = await request(built, {
+      method: 'POST', url: '/api/v1/mcp',
+      headers: { authorization: `Bearer ${token}`, accept: MCP_ACCEPT, 'content-type': 'application/json' },
+      payload: INIT,
+    })
+    expect(after.statusCode).toBe(401)
+  })
+
   it('refuses a wildcard scope rather than granting it', async () => {
     // `*` used to be stored verbatim and, for an admin, became the effective
     // scope — a client-controlled path to the full write catalog.

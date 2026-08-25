@@ -99,7 +99,7 @@ declare module 'fastify' {
   }
 }
 
-export { registerOAuthRoutes, resolveOAuthAccessToken } from './oauth.js'
+export { registerOAuthRoutes, registerOAuthAdminRoutes, resolveOAuthAccessToken } from './oauth.js'
 export { hashApiKey } from './auth.js'
 export type { OAuthRoutesOptions } from './oauth.js'
 export type { CredentialChecker } from './user-session.js'

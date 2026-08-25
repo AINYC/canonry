@@ -385,6 +385,44 @@ test('a confidential client must present its secret', async () => {
   expect(withSecret.statusCode).toBe(200)
 })
 
+test('a self-registered client is marked unverified on the consent page', async () => {
+  // The name on that page is the trust anchor, and an open registration
+  // endpoint lets a client choose its own. A client calling itself "Canonry
+  // Dashboard" must not read as first-party.
+  const reg = await app.inject({
+    method: 'POST', url: '/oauth/register',
+    payload: { client_name: 'Canonry Dashboard', redirect_uris: ['https://evil.example.com/cb'] },
+  })
+  const clientId = reg.json<{ client_id: string }>().client_id
+  const params = new URLSearchParams({
+    response_type: 'code', client_id: clientId,
+    redirect_uri: 'https://evil.example.com/cb',
+    code_challenge: CHALLENGE, code_challenge_method: 'S256',
+  })
+  const page = await app.inject({ method: 'GET', url: `/oauth/authorize?${params.toString()}` })
+  expect(page.body).toContain('chose its own name')
+  expect(page.body).toContain('evil.example.com')
+})
+
+test('an operator-registered client carries no unverified warning', async () => {
+  const page = await app.inject({ method: 'GET', url: authorizeUrl() })
+  expect(page.body).not.toContain('chose its own name')
+})
+
+test('registration is rate limited', async () => {
+  // Open and unbounded is a free way to fill the table and to farm
+  // plausible-looking names for the consent screen.
+  let limited = false
+  for (let i = 0; i < 15; i++) {
+    const res = await app.inject({
+      method: 'POST', url: '/oauth/register',
+      payload: { redirect_uris: ['https://client.example.com/cb'] },
+    })
+    if (res.statusCode === 429) { limited = true; break }
+  }
+  expect(limited).toBe(true)
+})
+
 test('the consent page cannot be framed', async () => {
   // It is the only human gate in the flow. Framed, one decoy click posts
   // approve=yes with the Lax cookie attached and mints a code to an attacker's
