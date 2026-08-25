@@ -186,6 +186,29 @@ export function registerOAuthRoutes(app: FastifyInstance, opts: OAuthRoutesOptio
   const canonicalPath = resourcePaths[0] ?? '/api/v1/mcp'
   const resourceUrl = `${issuer}${canonicalPath}`
 
+  function authorizationServerMetadata() {
+    return {
+    issuer,
+    authorization_endpoint: `${issuer}/oauth/authorize`,
+    token_endpoint: `${issuer}/oauth/token`,
+    revocation_endpoint: `${issuer}/oauth/revoke`,
+    // RFC 7591. The current MCP revision calls DCR deprecated and prefers
+    // pre-registered clients or CIMD — but a desktop client has no way to be
+    // pre-registered: its UI takes a URL and nothing else, so there is nowhere
+    // for a human to type a client_id. Codex proved it, walking discovery
+    // correctly and then stopping dead because there was no registration
+    // endpoint. Deprecated in the spec is not the same as unused by clients.
+    registration_endpoint: `${issuer}/oauth/register`,
+    response_types_supported: ['code'],
+    grant_types_supported: ['authorization_code', 'refresh_token'],
+    // S256 only. Advertising `plain` would invite a downgrade attempt.
+    code_challenge_methods_supported: ['S256'],
+    token_endpoint_auth_methods_supported: ['client_secret_post', 'none'],
+    scopes_supported: ['read', 'offline_access'],
+    }
+  }
+
+
   /**
    * RFC 9728. The one document the spec makes mandatory, and the entry point
    * for the whole flow: a 401 from the resource names it, the client fetches
@@ -195,6 +218,13 @@ export function registerOAuthRoutes(app: FastifyInstance, opts: OAuthRoutesOptio
    * for a resource at /api/v1/mcp lives at
    * /.well-known/oauth-protected-resource/api/v1/mcp, not under the resource.
    */
+  // Codex probes `/.well-known/oauth-authorization-server<resourcePath>` BEFORE
+  // the bare root form, so serve both. Harmless duplication, and a client that
+  // only tries the path-inserted shape would otherwise never find the server.
+  for (const path of resourcePaths) {
+    app.get(`/.well-known/oauth-authorization-server${path}`, async () => authorizationServerMetadata())
+  }
+
   for (const path of resourcePaths) {
     app.get(`/.well-known/oauth-protected-resource${path}`, async () => ({
       // Every segment points at the same audience, so one grant works on all
@@ -206,18 +236,7 @@ export function registerOAuthRoutes(app: FastifyInstance, opts: OAuthRoutesOptio
   }
 
   /** RFC 8414. */
-  app.get('/.well-known/oauth-authorization-server', async () => ({
-    issuer,
-    authorization_endpoint: `${issuer}/oauth/authorize`,
-    token_endpoint: `${issuer}/oauth/token`,
-    revocation_endpoint: `${issuer}/oauth/revoke`,
-    response_types_supported: ['code'],
-    grant_types_supported: ['authorization_code', 'refresh_token'],
-    // S256 only. Advertising `plain` would invite a downgrade attempt.
-    code_challenge_methods_supported: ['S256'],
-    token_endpoint_auth_methods_supported: ['client_secret_post', 'none'],
-    scopes_supported: ['read', 'offline_access'],
-  }))
+  app.get('/.well-known/oauth-authorization-server', async () => authorizationServerMetadata())
 
   app.get('/oauth/authorize', async (request: FastifyRequest, reply: FastifyReply) => {
     const q = request.query as Record<string, string | undefined>
@@ -273,6 +292,72 @@ export function registerOAuthRoutes(app: FastifyInstance, opts: OAuthRoutesOptio
     // RFC 9207: naming the issuer lets the client detect a mix-up attack.
     target.searchParams.set('iss', issuer)
     return reply.redirect(target.toString())
+  })
+
+  /**
+   * RFC 7591 Dynamic Client Registration.
+   *
+   * Open by necessity, not by preference: a desktop client has no field for a
+   * client_id, so without this it can discover the authorization server and
+   * then do nothing — which is exactly what happened. The MCP spec deprecates
+   * DCR; real clients still require it.
+   *
+   * What keeps an open registration endpoint safe is that registering buys
+   * NOTHING on its own. A client with no user behind it cannot reach a single
+   * tool: every token still requires a person to sign in and approve, and the
+   * authority it carries is theirs, bounded by the scope they grant. Registration
+   * mints an identifier, never access.
+   *
+   * Public clients only. A secret is never issued here, because a client that
+   * registered itself over an open endpoint has no way to keep one.
+   */
+  app.post('/oauth/register', async (request: FastifyRequest, reply: FastifyReply) => {
+    const body = (request.body ?? {}) as { redirect_uris?: unknown; client_name?: unknown }
+    const uris = Array.isArray(body.redirect_uris)
+      ? body.redirect_uris.filter((u): u is string => typeof u === 'string')
+      : []
+    if (uris.length === 0) {
+      return reply.status(400).send({ error: 'invalid_redirect_uri', error_description: 'redirect_uris is required.' })
+    }
+    // Refuse anything we could not safely redirect to later. Loopback covers
+    // native apps; https covers hosted ones. Plain http elsewhere would be a
+    // token-leaking redirect.
+    for (const uri of uris) {
+      let parsed: URL
+      try {
+        parsed = new URL(uri)
+      } catch {
+        return reply.status(400).send({ error: 'invalid_redirect_uri', error_description: `Not a URL: ${uri}` })
+      }
+      const loopback = isLoopbackHost(parsed.hostname)
+      if (!loopback && parsed.protocol !== 'https:') {
+        return reply.status(400).send({
+          error: 'invalid_redirect_uri',
+          error_description: 'redirect_uris must be https, or http on a loopback host.',
+        })
+      }
+    }
+
+    const clientId = `dcr_${crypto.randomBytes(16).toString('hex')}`
+    const now = new Date().toISOString()
+    db.insert(oauthClients).values({
+      id: clientId,
+      name: typeof body.client_name === 'string' && body.client_name.trim()
+        ? body.client_name.trim().slice(0, 200)
+        : 'Dynamically registered client',
+      secretHash: null,
+      redirectUris: uris,
+      createdAt: now,
+    }).run()
+
+    return reply.status(201).send({
+      client_id: clientId,
+      client_id_issued_at: Math.floor(Date.parse(now) / 1000),
+      redirect_uris: uris,
+      grant_types: ['authorization_code', 'refresh_token'],
+      response_types: ['code'],
+      token_endpoint_auth_method: 'none',
+    })
   })
 
   app.post('/oauth/authorize', async (request: FastifyRequest, reply: FastifyReply) => {

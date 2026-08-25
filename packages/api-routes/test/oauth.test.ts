@@ -82,6 +82,66 @@ async function getCode(): Promise<string> {
   return new URL(res.headers.location as string).searchParams.get('code')!
 }
 
+test('advertises a registration endpoint, without which a desktop client stalls', async () => {
+  // Codex walks discovery correctly and then stops: its UI has no client_id
+  // field, so DCR is the only way it can obtain credentials.
+  const res = await app.inject({ method: 'GET', url: '/.well-known/oauth-authorization-server' })
+  expect(res.json().registration_endpoint).toBe(`${ISSUER}/oauth/register`)
+})
+
+test('serves authorization-server metadata at the path-inserted location too', async () => {
+  // Probed BEFORE the bare root form by at least one real client.
+  const res = await app.inject({ method: 'GET', url: `/.well-known/oauth-authorization-server${RESOURCE_PATH}` })
+  expect(res.statusCode).toBe(200)
+  expect(res.json().issuer).toBe(ISSUER)
+})
+
+test('registers a client dynamically and that client can complete the flow', async () => {
+  const reg = await app.inject({
+    method: 'POST',
+    url: '/oauth/register',
+    payload: { client_name: 'Desktop', redirect_uris: ['http://127.0.0.1:0/callback'] },
+  })
+  expect(reg.statusCode).toBe(201)
+  const clientId = reg.json().client_id as string
+  // Public client: no secret is ever issued over an open endpoint.
+  expect(reg.json().client_secret).toBeUndefined()
+  expect(reg.json().token_endpoint_auth_method).toBe('none')
+
+  const params = new URLSearchParams({
+    response_type: 'code', client_id: clientId,
+    redirect_uri: 'http://127.0.0.1:61234/callback',
+    code_challenge: CHALLENGE, code_challenge_method: 'S256',
+  })
+  const authorized = await app.inject({ method: 'GET', url: `/oauth/authorize?${params.toString()}` })
+  expect(authorized.statusCode).toBe(302)
+  expect(new URL(authorized.headers.location as string).searchParams.get('code')).toBeTruthy()
+})
+
+test('registration refuses a redirect it could not safely send a token to', async () => {
+  for (const uri of ['http://evil.example.com/cb', 'ftp://x/cb', 'not-a-url']) {
+    const res = await app.inject({ method: 'POST', url: '/oauth/register', payload: { redirect_uris: [uri] } })
+    expect(res.statusCode, uri).toBe(400)
+  }
+  const empty = await app.inject({ method: 'POST', url: '/oauth/register', payload: {} })
+  expect(empty.statusCode).toBe(400)
+})
+
+test('registering alone grants no access at all', async () => {
+  // What makes an open registration endpoint safe: it mints an identifier, not
+  // authority. Nothing is reachable until a person signs in and approves.
+  const reg = await app.inject({
+    method: 'POST', url: '/oauth/register',
+    payload: { redirect_uris: ['https://client.example.com/cb'] },
+  })
+  const clientId = reg.json().client_id as string
+  const token = await app.inject({
+    method: 'POST', url: '/oauth/token',
+    payload: { grant_type: 'authorization_code', code: 'made-up', code_verifier: VERIFIER, client_id: clientId, redirect_uri: 'https://client.example.com/cb' },
+  })
+  expect(token.statusCode).toBe(400)
+})
+
 test('publishes protected-resource metadata at the RFC 9728 inserted path', async () => {
   // The well-known segment goes BETWEEN host and path. Serving it under the
   // resource instead is the mistake that makes discovery silently unreachable.
