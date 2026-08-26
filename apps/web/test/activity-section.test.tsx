@@ -700,3 +700,56 @@ test('the traffic range picker survives a disconnected GA4', async () => {
   await screen.findByText(/Connect Google Analytics 4/i)
   expect(screen.queryByRole('group', { name: /Traffic time period/i })).toBeNull()
 })
+
+/**
+ * Regression: this panel took the whole Activity page down in production with
+ * "Cannot read properties of undefined (reading 'toLocaleString')".
+ *
+ * Cause was version skew, not bad data. A deploy put this client in front of an
+ * API that predates `crawlerContentHits` / `measured` on the series, and the
+ * Last 24h strip dereferenced a field the schema says is required. The schema is
+ * a promise about the code, not about the server that happens to be running.
+ *
+ * The fixture is deliberately an OLD-SHAPE payload: the four fields the API used
+ * to return, and nothing else.
+ */
+test('AI traffic history survives an API older than the client', async () => {
+  const restoreFetch = mockFetch((url) => {
+    if (url.split('?')[0]!.endsWith('/ga/ai-referral-daily')) return jsonResponse({ days: [], sources: [], totalSessions: 0, totalPaidSessions: 0, totalOrganicSessions: 0 })
+    if (url.split('?')[0]!.endsWith('/projects/test-project/traffic/events')) {
+      return jsonResponse({
+        events: [],
+        eventRows: { total: 0, returned: 0, truncated: false },
+        totals: { crawlerHits: 30, aiUserFetchHits: 7, aiReferralHits: 5, aiReferralLandedHits: 4 },
+        series: {
+          granularity: 'day',
+          // No crawlerContentHits. No measured. No trends. No coverageStart.
+          points: [
+            { bucket: '2026-08-01', crawlerHits: 20, aiUserFetchHits: 3, aiReferralHits: 3, aiReferralLandedHits: 2 },
+            { bucket: '2026-08-02', crawlerHits: 10, aiUserFetchHits: 4, aiReferralHits: 2, aiReferralLandedHits: 2 },
+          ],
+        },
+      })
+    }
+    throw new Error(`unexpected fetch: ${url}`)
+  })
+  onTestFinished(restoreFetch)
+
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(
+    <QueryClientProvider client={queryClient}>
+      <AiTrafficHistoryPanel projectName="test-project" sinceMinutes={43200} />
+    </QueryClientProvider>,
+  )
+
+  // It must RENDER, not throw. The crawler tile degrades to 0 because the old
+  // API cannot answer it; the fields that do exist still read correctly.
+  expect(await screen.findByText('Last 24h')).toBeTruthy()
+  const tileFor = (label: string) =>
+    screen.getByText(label).closest('div.rounded-lg') as HTMLElement
+  expect(within(tileFor('AI page fetches')).getByText('7')).toBeTruthy()
+  expect(within(tileFor('AI visitors')).getByText('4')).toBeTruthy()
+
+  // A missing `measured` must not paint the whole range as unmeasured.
+  expect(screen.queryByText('not measured')).toBeNull()
+})

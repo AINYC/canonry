@@ -47,13 +47,24 @@ function compact(n: number): string {
   return n >= 10_000 ? `${(n / 1000).toFixed(1)}k` : n.toLocaleString()
 }
 
+/**
+ * Every numeric field is optional on the wire even though the schema requires
+ * it. A deploy can put a newer client in front of an older API for minutes, and
+ * this panel crashed exactly that way: the running API had no
+ * `crawlerContentHits` on the series and `.toLocaleString()` on undefined took
+ * the whole page down. A chart missing a series is a degraded chart; a chart
+ * that throws is a blank page.
+ */
 interface Point {
   bucket: string
-  measured: boolean
-  crawlerContentHits: number
-  aiUserFetchHits: number
-  aiReferralLandedHits: number
+  measured?: boolean
+  crawlerContentHits?: number
+  aiUserFetchHits?: number
+  aiReferralLandedHits?: number
 }
+
+/** Coerce a wire number that an older API may not send at all. */
+const num = (v: number | undefined): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
 
 interface Trend { start: number; end: number; startIndex: number; endIndex: number }
 
@@ -126,8 +137,11 @@ export function AiTrafficHistoryPanel({
   // The stretch before recording began. Charted as a band rather than left to
   // read as a flat zero, which is what an unmeasured day looks like otherwise.
   const unmeasured = useMemo(() => {
-    if (points.length === 0 || points[0]!.measured) return null
-    const lastUnmeasured = points.findIndex((pt) => pt.measured) - 1
+    // An API that predates `measured` sends undefined; treat that as measured,
+    // otherwise the whole chart paints as a "not measured" band.
+    const isMeasured = (pt: Point) => pt.measured !== false
+    if (points.length === 0 || isMeasured(points[0]!)) return null
+    const lastUnmeasured = points.findIndex(isMeasured) - 1
     if (lastUnmeasured < 0) return { from: points[0]!.bucket, to: points[points.length - 1]!.bucket }
     return { from: points[0]!.bucket, to: points[lastUnmeasured]!.bucket }
   }, [points])
@@ -149,9 +163,9 @@ export function AiTrafficHistoryPanel({
 
   const totals = useMemo(() => points.reduce(
     (acc, p) => ({
-      crawlers: acc.crawlers + p.crawlerContentHits,
-      fetches: acc.fetches + p.aiUserFetchHits,
-      visits: acc.visits + p.aiReferralLandedHits,
+      crawlers: acc.crawlers + num(p.crawlerContentHits),
+      fetches: acc.fetches + num(p.aiUserFetchHits),
+      visits: acc.visits + num(p.aiReferralLandedHits),
     }),
     { crawlers: 0, fetches: 0, visits: 0 },
   ), [points])
@@ -222,11 +236,11 @@ export function AiTrafficHistoryPanel({
         <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1 pb-3 mb-4 border-b border-default text-xs text-muted">
           <span className="text-secondary font-semibold">Last 24h</span>
           <span><span className="text-heading font-semibold tabular-nums mr-1">
-            {points[points.length - 1]!.crawlerContentHits.toLocaleString()}</span>pages crawled</span>
+            {num(points[points.length - 1]!.crawlerContentHits).toLocaleString()}</span>pages crawled</span>
           <span><span className="text-heading font-semibold tabular-nums mr-1">
-            {points[points.length - 1]!.aiUserFetchHits.toLocaleString()}</span>page fetches</span>
+            {num(points[points.length - 1]!.aiUserFetchHits).toLocaleString()}</span>page fetches</span>
           <span><span className="text-heading font-semibold tabular-nums mr-1">
-            {points[points.length - 1]!.aiReferralLandedHits.toLocaleString()}</span>visits, server</span>
+            {num(points[points.length - 1]!.aiReferralLandedHits).toLocaleString()}</span>visits, server</span>
           <span><span className="text-heading font-semibold tabular-nums mr-1">
             {gaByDate.get(points[points.length - 1]!.bucket)?.toLocaleString() ?? '—'}</span>visits, GA4</span>
         </div>
