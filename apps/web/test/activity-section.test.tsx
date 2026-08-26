@@ -565,8 +565,14 @@ test('top time picker reloads every GA surface and replaces all Social data', as
  * Mounted standalone here, with no GA4 fetch stubbed at all, which is the
  * strongest form of that claim: the panel cannot be reading GA4 state.
  */
-test('AI traffic history renders from server data with no GA4 involved', async () => {
+test('AI traffic history renders server data even when the GA4 overlay fails', async () => {
   const restoreFetch = mockFetch((url) => {
+    // The GA4 overlay is decoration on a server-fed chart. If it 500s the panel
+    // must still render every server number, because server-side traffic needs
+    // no GA4 at all and this panel is the only place it is charted.
+    if (url.split('?')[0]!.endsWith('/ga/ai-referral-daily')) {
+      return new Response('nope', { status: 500 })
+    }
     if (url.split('?')[0]!.endsWith('/projects/test-project/traffic/events')) {
       return jsonResponse({
         events: [],
@@ -596,12 +602,19 @@ test('AI traffic history renders from server data with no GA4 involved', async (
 
   // The tiles must read the HONEST fields: content crawls (12), not the 30 that
   // counts robots and sitemaps; landed visits (4), not the 5 that counts
-  // redirect hops. Asserting the inflated numbers are ABSENT is the point.
-  expect(screen.getByText('12')).toBeTruthy()
-  expect(screen.getByText('7')).toBeTruthy()
-  expect(screen.getByText('4')).toBeTruthy()
+  // redirect hops. Scoped per tile, because the Last 24h strip repeats these
+  // same figures for the newest day and an unscoped query is ambiguous.
+  const tileFor = (label: string) =>
+    screen.getByText(label).closest('div.rounded-lg') as HTMLElement
+  expect(within(tileFor('AI crawlers')).getByText('12')).toBeTruthy()
+  expect(within(tileFor('AI page fetches')).getByText('7')).toBeTruthy()
+  expect(within(tileFor('AI visitors')).getByText('4')).toBeTruthy()
+  // The inflated figures must appear nowhere: not in a tile, not in the strip.
   expect(screen.queryByText('30')).toBeNull()
   expect(screen.queryByText('5')).toBeNull()
+
+  // The source toggle exists and does not require GA4 to have loaded.
+  expect(screen.getByRole('group', { name: /Visit measurement source/i })).toBeTruthy()
 })
 
 /**

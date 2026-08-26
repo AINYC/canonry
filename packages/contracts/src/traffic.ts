@@ -1,3 +1,4 @@
+import { linearTrendSchema } from './statistics.js'
 import { z } from 'zod'
 import { runStatusSchema } from './run.js'
 import type { TrafficCrawlerSegments, TrafficPathClass } from './traffic-path.js'
@@ -676,6 +677,19 @@ export const trafficEventsResponseSchema = z.object({
   series: z.object({
     granularity: trafficSeriesGranularitySchema,
     points: z.array(trafficSeriesPointSchema),
+    /**
+     * Least-squares fit per charted metric, over the densified points.
+     *
+     * Fitted HERE rather than in a chart component: a regression computed in the
+     * UI is invisible to the CLI and to any other consumer, which is the
+     * UI/CLI parity rule. `null` for a metric with fewer than two observations,
+     * so a caller renders "no trend" instead of a fabricated flat line.
+     */
+    trends: z.object({
+      crawlerContentHits: linearTrendSchema.nullable(),
+      aiUserFetchHits: linearTrendSchema.nullable(),
+      aiReferralLandedHits: linearTrendSchema.nullable(),
+    }),
   }),
   totals: z.object({
     /** Total classified-crawler hits across the window. UNCHANGED contract. */

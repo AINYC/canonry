@@ -45,6 +45,7 @@ import {
   trafficConnectVercelRequestSchema,
   trafficResetRequestSchema,
   classifyTrafficPath,
+  linearTrend,
   TrafficPathClasses,
   segmentCrawlerHits,
   sumInfraHits,
@@ -4726,10 +4727,21 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
     const response: TrafficEventsResponse = {
       windowStart: sinceIso,
       windowEnd: untilIso,
-      series: {
-        granularity,
-        points: completeTrafficSeries(since, until, granularity, seriesByBucket),
-      },
+      series: (() => {
+        const points = completeTrafficSeries(since, until, granularity, seriesByBucket)
+        // Fitted server-side so the CLI and every other consumer get the same
+        // line the chart draws (the UI/CLI parity rule). Points are densified,
+        // so a quiet day is a real 0 in the fit rather than a gap.
+        return {
+          granularity,
+          points,
+          trends: {
+            crawlerContentHits: linearTrend(points.map((pt) => pt.crawlerContentHits)),
+            aiUserFetchHits: linearTrend(points.map((pt) => pt.aiUserFetchHits)),
+            aiReferralLandedHits: linearTrend(points.map((pt) => pt.aiReferralLandedHits)),
+          },
+        }
+      })(),
       totals: {
         crawlerHits: crawlerTotal,
         crawlerContentHits: crawlerSegments.content,

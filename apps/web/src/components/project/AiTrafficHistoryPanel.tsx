@@ -30,10 +30,17 @@ import {
 import { InfoTooltip } from '../shared/InfoTooltip.js'
 import { Card } from '../ui/card.js'
 import { useServerTrafficEvents } from '../../queries/server-traffic.js'
+import { getApiV1ProjectsByNameGaAiReferralDailyOptions } from '@ainyc/canonry-api-client/react-query'
+import { useQuery } from '@tanstack/react-query'
+import { heyClient } from '../../api.js'
+import type { GA4AiReferralDailyDto } from '../../api.js'
 
 const CRAWLER_COLOR = CHART_SERIES_COLORS[0]
 const FETCH_COLOR = CHART_SERIES_COLORS[1]
 const VISIT_COLOR = CHART_SERIES_COLORS[2]
+const GA4_COLOR = CHART_SERIES_COLORS[3]
+
+type VisitSource = 'both' | 'server' | 'ga4'
 
 function compact(n: number): string {
   return n >= 10_000 ? `${(n / 1000).toFixed(1)}k` : n.toLocaleString()
@@ -44,6 +51,24 @@ interface Point {
   crawlerContentHits: number
   aiUserFetchHits: number
   aiReferralLandedHits: number
+}
+
+interface Trend { start: number; end: number; startIndex: number; endIndex: number }
+
+/**
+ * Two endpoints of a server-fitted line, expanded to a per-point series so
+ * Recharts can draw it. The fit itself is NOT computed here: a regression in a
+ * chart component is invisible to the CLI and breaks UI/CLI parity.
+ */
+function trendSeries(trend: Trend | null | undefined, length: number): (number | null)[] {
+  if (!trend || length < 2) return Array<number | null>(length).fill(null)
+  const span = trend.endIndex - trend.startIndex
+  if (span <= 0) return Array<number | null>(length).fill(null)
+  const perStep = (trend.end - trend.start) / span
+  return Array.from({ length }, (_, i) =>
+    i < trend.startIndex || i > trend.endIndex
+      ? null
+      : trend.start + (i - trend.startIndex) * perStep)
 }
 
 function Tile({ label, value, caption, tooltip }: {
@@ -72,12 +97,44 @@ export function AiTrafficHistoryPanel({
   sinceMinutes: number
 }) {
   const [showFetches, setShowFetches] = useState(true)
+  const [showTrend, setShowTrend] = useState(true)
+  const [visitSource, setVisitSource] = useState<VisitSource>('both')
   const events = useServerTrafficEvents(projectName, { sinceMinutes, granularity: 'day' })
+  const gaDaily = useQuery({
+    ...getApiV1ProjectsByNameGaAiReferralDailyOptions({
+      client: heyClient,
+      path: { name: projectName },
+      query: { window: sinceMinutes >= 90 * 24 * 60 ? '90d' : sinceMinutes >= 30 * 24 * 60 ? '30d' : '7d' },
+    }),
+    enabled: Boolean(projectName),
+  })
 
   const points: Point[] = useMemo(() => {
     const raw = (events.data as { series?: { points?: Point[] } } | undefined)?.series?.points
     return raw ?? []
   }, [events.data])
+
+  // GA4 days with no referrals are ABSENT, not zero, so a missing day is null
+  // rather than 0: the line breaks instead of implying a measured zero.
+  const gaByDate = useMemo(() => {
+    const dto = gaDaily.data as GA4AiReferralDailyDto | undefined
+    return new Map((dto?.days ?? []).map((d) => [d.date, d.sessions]))
+  }, [gaDaily.data])
+
+  const trends = (events.data as { series?: { trends?: Record<string, Trend | null> } } | undefined)?.series?.trends
+
+  const chartRows = useMemo(() => {
+    const crawlTrend = trendSeries(trends?.crawlerContentHits, points.length)
+    const fetchTrend = trendSeries(trends?.aiUserFetchHits, points.length)
+    const visitTrend = trendSeries(trends?.aiReferralLandedHits, points.length)
+    return points.map((pt, i) => ({
+      ...pt,
+      ga4Visits: gaByDate.get(pt.bucket) ?? null,
+      crawlTrend: crawlTrend[i],
+      fetchTrend: fetchTrend[i],
+      visitTrend: visitTrend[i],
+    }))
+  }, [points, gaByDate, trends])
 
   const totals = useMemo(() => points.reduce(
     (acc, p) => ({
@@ -148,6 +205,22 @@ export function AiTrafficHistoryPanel({
         />
       </div>
 
+      {/* Last 24h: answers "what happened today" without reading a 90-day chart.
+          The newest bucket, so it is the same lane as the charts below. */}
+      {points.length > 0 && (
+        <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1 pb-3 mb-4 border-b border-default text-xs text-muted">
+          <span className="text-secondary font-semibold">Last 24h</span>
+          <span><span className="text-heading font-semibold tabular-nums mr-1">
+            {points[points.length - 1]!.crawlerContentHits.toLocaleString()}</span>pages crawled</span>
+          <span><span className="text-heading font-semibold tabular-nums mr-1">
+            {points[points.length - 1]!.aiUserFetchHits.toLocaleString()}</span>page fetches</span>
+          <span><span className="text-heading font-semibold tabular-nums mr-1">
+            {points[points.length - 1]!.aiReferralLandedHits.toLocaleString()}</span>visits, server</span>
+          <span><span className="text-heading font-semibold tabular-nums mr-1">
+            {gaByDate.get(points[points.length - 1]!.bucket)?.toLocaleString() ?? '—'}</span>visits, GA4</span>
+        </div>
+      )}
+
       <div className="mb-2 flex items-center justify-between gap-3">
         {/* Tooltip is a SIBLING of the heading: nesting an interactive button
             inside <h3> changes the heading's accessible name. */}
@@ -155,6 +228,7 @@ export function AiTrafficHistoryPanel({
           <h3 className="text-sm font-semibold text-heading">Machines reading your site</h3>
           <InfoTooltip text="Crawlers index pages for later. Page fetches happen while an engine is answering someone. Both are machines, not people." />
         </div>
+        <div className="flex items-center gap-4">
         <label className="flex items-center gap-1.5 text-xs text-secondary cursor-pointer">
           <input
             type="checkbox"
@@ -164,9 +238,19 @@ export function AiTrafficHistoryPanel({
           />
           Page fetches
         </label>
+        <label className="flex items-center gap-1.5 text-xs text-secondary cursor-pointer">
+          <input
+            type="checkbox"
+            checked={showTrend}
+            onChange={(e) => setShowTrend(e.target.checked)}
+            className="accent-current"
+          />
+          Trend line
+        </label>
+        </div>
       </div>
       <ResponsiveContainer width="100%" height={180}>
-        <ComposedChart data={points} margin={{ top: 4, right: 8, left: -18, bottom: 0 }}>
+        <ComposedChart data={chartRows} margin={{ top: 4, right: 8, left: -18, bottom: 0 }}>
           <CartesianGrid stroke={CHART_GRID_STROKE} vertical={false} />
           <XAxis dataKey="bucket" tick={CHART_AXIS_TICK} stroke={CHART_AXIS_STROKE}
                  tickFormatter={formatChartDateTick} minTickGap={28} />
@@ -181,15 +265,38 @@ export function AiTrafficHistoryPanel({
             <Area type="monotone" dataKey="aiUserFetchHits" name="Page fetches"
                   stroke={FETCH_COLOR} fill={FETCH_COLOR} fillOpacity={0.18} strokeWidth={1.6} />
           )}
+          {showTrend && (
+            <Line type="linear" dataKey="crawlTrend" name="Pages crawled trend" dot={false}
+                  stroke={CRAWLER_COLOR} strokeWidth={1.4} strokeDasharray="5 4" connectNulls />
+          )}
+          {showTrend && showFetches && (
+            <Line type="linear" dataKey="fetchTrend" name="Page fetches trend" dot={false}
+                  stroke={FETCH_COLOR} strokeWidth={1.3} strokeDasharray="5 4" connectNulls />
+          )}
         </ComposedChart>
       </ResponsiveContainer>
 
-      <div className="flex items-center gap-1.5 mt-5 mb-2">
-        <h3 className="text-sm font-semibold text-heading">People arriving from AI</h3>
-        <InfoTooltip text="Visits your own server answered, counted from server logs rather than a browser tag. A visit answered with a redirect is not counted, because the person had not arrived yet." />
+      <div className="flex items-center justify-between gap-3 mt-5 mb-2">
+        <div className="flex items-center gap-1.5">
+          <h3 className="text-sm font-semibold text-heading">People arriving from AI</h3>
+          <InfoTooltip text="Two independent counts of the same thing. Server reads your own logs and misses nothing a browser blocks, but cannot see a page served from cache. GA4 needs the browser to run a tag. They rarely match, and neither is the correction of the other." />
+        </div>
+        <div className="segmented" role="group" aria-label="Visit measurement source">
+          {(['both', 'server', 'ga4'] as VisitSource[]).map((src) => (
+            <button
+              key={src}
+              type="button"
+              aria-pressed={visitSource === src}
+              className={`segmented-option ${visitSource === src ? 'segmented-option-active' : ''}`}
+              onClick={() => setVisitSource(src)}
+            >
+              {src === 'ga4' ? 'GA4' : src === 'both' ? 'Both' : 'Server'}
+            </button>
+          ))}
+        </div>
       </div>
       <ResponsiveContainer width="100%" height={150}>
-        <ComposedChart data={points} margin={{ top: 4, right: 8, left: -18, bottom: 0 }}>
+        <ComposedChart data={chartRows} margin={{ top: 4, right: 8, left: -18, bottom: 0 }}>
           <CartesianGrid stroke={CHART_GRID_STROKE} vertical={false} />
           <XAxis dataKey="bucket" tick={CHART_AXIS_TICK} stroke={CHART_AXIS_STROKE}
                  tickFormatter={formatChartDateTick} minTickGap={28} />
@@ -198,8 +305,18 @@ export function AiTrafficHistoryPanel({
                            labelStyle={CHART_TOOLTIP_STYLE.labelStyle}
                            itemStyle={CHART_TOOLTIP_STYLE.itemStyle}
                            labelFormatter={formatChartDateLabel} />
-          <Line type="monotone" dataKey="aiReferralLandedHits" name="Visits, server"
-                stroke={VISIT_COLOR} strokeWidth={2} dot={false} />
+          {visitSource !== 'ga4' && (
+            <Line type="monotone" dataKey="aiReferralLandedHits" name="Visits, server"
+                  stroke={VISIT_COLOR} strokeWidth={2} dot={false} />
+          )}
+          {visitSource !== 'server' && (
+            <Line type="monotone" dataKey="ga4Visits" name="Visits, GA4" connectNulls={false}
+                  stroke={GA4_COLOR} strokeWidth={1.8} strokeDasharray="5 3" dot={false} />
+          )}
+          {showTrend && visitSource !== 'ga4' && (
+            <Line type="linear" dataKey="visitTrend" name="Visits trend" dot={false}
+                  stroke={VISIT_COLOR} strokeWidth={1.3} strokeDasharray="5 4" connectNulls />
+          )}
         </ComposedChart>
       </ResponsiveContainer>
     </Card>
