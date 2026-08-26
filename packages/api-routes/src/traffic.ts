@@ -666,7 +666,7 @@ function assertCloudflareIngestUrlOutsideWorkerRoute(
 }
 
 function emptyTrafficSeriesPoint(bucket: string): TrafficSeriesPoint {
-  return { bucket, crawlerHits: 0, aiUserFetchHits: 0, aiReferralHits: 0, aiReferralLandedHits: 0, crawlerContentHits: 0 }
+  return { bucket, crawlerHits: 0, aiUserFetchHits: 0, aiReferralHits: 0, aiReferralLandedHits: 0, crawlerContentHits: 0, measured: true }
 }
 
 function completeTrafficSeries(
@@ -4729,16 +4729,44 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
       windowEnd: untilIso,
       series: (() => {
         const points = completeTrafficSeries(since, until, granularity, seriesByBucket)
+        // Earliest observation across EVERY lane and EVERY source for the
+        // project. Deliberately not window-bound: the question is when
+        // recording began, which does not change with the range being viewed.
+        const firsts = [
+          app.db.select({ v: sql<string>`MIN(${crawlerEventsHourly.tsHour})` })
+            .from(crawlerEventsHourly).where(eq(crawlerEventsHourly.projectId, project.id)).get()?.v,
+          app.db.select({ v: sql<string>`MIN(${aiUserFetchEventsHourly.tsHour})` })
+            .from(aiUserFetchEventsHourly).where(eq(aiUserFetchEventsHourly.projectId, project.id)).get()?.v,
+          app.db.select({ v: sql<string>`MIN(${aiReferralEventsHourly.tsHour})` })
+            .from(aiReferralEventsHourly).where(eq(aiReferralEventsHourly.projectId, project.id)).get()?.v,
+        ].filter((v): v is string => typeof v === 'string' && v.length > 0)
+        const coverageStart = firsts.length ? firsts.slice().sort()[0]! : null
+        // A bucket before coverage reads 0 because nothing was recording, not
+        // because nothing happened. Compare on the bucket's own granularity so
+        // the day coverage began is measured, not half-measured.
+        const coverageKey = coverageStart === null
+          ? null
+          : (granularity === TrafficSeriesGranularities.day ? coverageStart.slice(0, 10) : coverageStart.slice(0, 13))
+        for (const pt of points) {
+          pt.measured = coverageKey === null
+            ? false
+            : (granularity === TrafficSeriesGranularities.day ? pt.bucket.slice(0, 10) : pt.bucket.slice(0, 13)) >= coverageKey
+        }
         // Fitted server-side so the CLI and every other consumer get the same
         // line the chart draws (the UI/CLI parity rule). Points are densified,
         // so a quiet day is a real 0 in the fit rather than a gap.
         return {
           granularity,
           points,
+          coverageStart,
+          // Unmeasured buckets are passed as null, NOT as their stored 0. They
+          // are the absence of a reading, and linearTrend skips nulls while
+          // keeping surviving points at their true index, so the line is fitted
+          // only over the period that was actually recorded.
           trends: {
-            crawlerContentHits: linearTrend(points.map((pt) => pt.crawlerContentHits)),
-            aiUserFetchHits: linearTrend(points.map((pt) => pt.aiUserFetchHits)),
-            aiReferralLandedHits: linearTrend(points.map((pt) => pt.aiReferralLandedHits)),
+            crawlerContentHits: linearTrend(points.map((pt) => (pt.measured ? pt.crawlerContentHits : null))),
+            aiUserFetchHits: linearTrend(points.map((pt) => (pt.measured ? pt.aiUserFetchHits : null))),
+            aiReferralLandedHits: linearTrend(points.map((pt) => (pt.measured ? pt.aiReferralLandedHits : null))),
           },
         }
       })(),

@@ -5033,6 +5033,7 @@ describe('GET /traffic/events', () => {
         aiReferralHits: 0,
         aiReferralLandedHits: 0,
         crawlerContentHits: 7,
+        measured: true,
       })
       expect(body.series.points[45].crawlerHits).toBe(11)
       expect(body.series.points.reduce((sum: number, point: { crawlerHits: number }) => sum + point.crawlerHits, 0))
@@ -5217,6 +5218,49 @@ describe('crawler-hit content/infra segmentation', () => {
    * while writing the test above: the data looked missing when the window was
    * simply wrong. Fail loudly instead.
    */
+  /**
+   * A window that reaches back before recording began must say so. Those
+   * buckets read 0 because nothing was being recorded, not because nothing
+   * happened, and a chart that draws them as a measured zero invents a quiet
+   * period. Operator ruling: coverageStart is the EARLIEST observed event,
+   * earliest across all of the project's sources.
+   */
+  it('marks buckets before the first observation as unmeasured', async () => {
+    const { h } = await mixedPathHarness()
+    try {
+      const res = await h.app.inject({
+        method: 'GET',
+        // 30 days back, well before this harness's minutes-old fixture.
+        url: `/api/v1/projects/test-project/traffic/events?since=${encodeURIComponent(new Date(Date.now() - 30 * 24 * 60 * 60_000).toISOString())}&granularity=day`,
+      })
+      expect(res.statusCode).toBe(200)
+      const body = JSON.parse(res.payload)
+
+      expect(typeof body.series.coverageStart).toBe('string')
+      const points = body.series.points as Array<{ bucket: string; measured: boolean; crawlerHits: number }>
+
+      // Both states must be present, or the test proves nothing.
+      expect(points.some((pt) => !pt.measured)).toBe(true)
+      expect(points.some((pt) => pt.measured)).toBe(true)
+
+      const coverageDay = String(body.series.coverageStart).slice(0, 10)
+      for (const pt of points) {
+        expect(pt.measured).toBe(pt.bucket.slice(0, 10) >= coverageDay)
+        // An unmeasured bucket must never carry hits: that would mean we
+        // recorded something before we claim recording began.
+        if (!pt.measured) expect(pt.crawlerHits).toBe(0)
+      }
+
+      // The fit must not run across the unmeasured lead-in. This fixture is a
+      // single measured day, so the honest answer is NO trend. Had the flat
+      // zero prefix been fed to the fit it would have returned a confident
+      // downward slope from nothing, which is exactly the failure being pinned.
+      const measuredDays = points.filter((pt) => pt.measured).length
+      expect(measuredDays).toBeLessThan(2)
+      expect(body.series.trends.crawlerContentHits).toBeNull()
+    } finally { await h.close() }
+  })
+
   it('rejects sinceMinutes rather than silently answering for 24 hours', async () => {
     const { h } = await mixedPathHarness()
     try {

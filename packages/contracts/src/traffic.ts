@@ -596,6 +596,14 @@ export const trafficSeriesPointSchema = z.object({
    * sitemap re-fetch is not a page an engine read.
    */
   crawlerContentHits: z.number().int().nonnegative(),
+  /**
+   * False for a bucket that predates any observation for this project, i.e.
+   * before `series.coverageStart`. Such a bucket reads 0 because nothing was
+   * being recorded, NOT because nothing happened, and a chart must not draw
+   * those as a measured zero. Derived here rather than in a component so the
+   * CLI draws the same distinction.
+   */
+  measured: z.boolean(),
 })
 export type TrafficSeriesPoint = z.infer<typeof trafficSeriesPointSchema>
 
@@ -685,6 +693,15 @@ export const trafficEventsResponseSchema = z.object({
      * UI/CLI parity rule. `null` for a metric with fewer than two observations,
      * so a caller renders "no trend" instead of a fabricated flat line.
      */
+    /**
+     * Earliest event ever observed for this project, across ALL of its traffic
+     * sources, or null when nothing has been recorded. Buckets before it were
+     * not measured. Earliest-across-sources is deliberate: the band answers
+     * "before this we have nothing", and if any source has data we do not have
+     * nothing. The cost is that a source connected much later hides its own
+     * early gap, which is the better error than marking real data unmeasured.
+     */
+    coverageStart: z.string().nullable(),
     trends: z.object({
       crawlerContentHits: linearTrendSchema.nullable(),
       aiUserFetchHits: linearTrendSchema.nullable(),

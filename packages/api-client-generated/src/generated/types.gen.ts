@@ -9847,7 +9847,9 @@ export type TrafficEventsResponse = {
             aiReferralHits: number;
             aiReferralLandedHits: number;
             crawlerContentHits: number;
+            measured: boolean;
         }>;
+        coverageStart: string | null;
         trends: {
             crawlerContentHits: {
                 slope: number;

@@ -23,6 +23,7 @@ import {
   CHART_AXIS_STROKE,
   CHART_GRID_STROKE,
   CHART_TOOLTIP_STYLE,
+  ReferenceArea,
   CHART_SERIES_COLORS,
   formatChartDateLabel,
   formatChartDateTick,
@@ -48,6 +49,7 @@ function compact(n: number): string {
 
 interface Point {
   bucket: string
+  measured: boolean
   crawlerContentHits: number
   aiUserFetchHits: number
   aiReferralLandedHits: number
@@ -120,6 +122,15 @@ export function AiTrafficHistoryPanel({
     const dto = gaDaily.data as GA4AiReferralDailyDto | undefined
     return new Map((dto?.days ?? []).map((d) => [d.date, d.sessions]))
   }, [gaDaily.data])
+
+  // The stretch before recording began. Charted as a band rather than left to
+  // read as a flat zero, which is what an unmeasured day looks like otherwise.
+  const unmeasured = useMemo(() => {
+    if (points.length === 0 || points[0]!.measured) return null
+    const lastUnmeasured = points.findIndex((pt) => pt.measured) - 1
+    if (lastUnmeasured < 0) return { from: points[0]!.bucket, to: points[points.length - 1]!.bucket }
+    return { from: points[0]!.bucket, to: points[lastUnmeasured]!.bucket }
+  }, [points])
 
   const trends = (events.data as { series?: { trends?: Record<string, Trend | null> } } | undefined)?.series?.trends
 
@@ -259,6 +270,11 @@ export function AiTrafficHistoryPanel({
                            labelStyle={CHART_TOOLTIP_STYLE.labelStyle}
                            itemStyle={CHART_TOOLTIP_STYLE.itemStyle}
                            labelFormatter={formatChartDateLabel} />
+          {unmeasured && (
+            <ReferenceArea x1={unmeasured.from} x2={unmeasured.to} fill="var(--color-overlay-hover)"
+                           fillOpacity={0.5} stroke="none"
+                           label={{ value: 'not measured', position: 'insideTop', fontSize: 10, fill: 'var(--chart-neutral-text-dim, #71717a)' }} />
+          )}
           <Area type="monotone" dataKey="crawlerContentHits" name="Pages crawled"
                 stroke={CRAWLER_COLOR} fill={CRAWLER_COLOR} fillOpacity={0.22} strokeWidth={1.8} />
           {showFetches && (
@@ -305,6 +321,11 @@ export function AiTrafficHistoryPanel({
                            labelStyle={CHART_TOOLTIP_STYLE.labelStyle}
                            itemStyle={CHART_TOOLTIP_STYLE.itemStyle}
                            labelFormatter={formatChartDateLabel} />
+          {unmeasured && (
+            <ReferenceArea x1={unmeasured.from} x2={unmeasured.to} fill="var(--color-overlay-hover)"
+                           fillOpacity={0.5} stroke="none"
+                           label={{ value: 'not measured', position: 'insideTop', fontSize: 10, fill: 'var(--chart-neutral-text-dim, #71717a)' }} />
+          )}
           {visitSource !== 'ga4' && (
             <Line type="monotone" dataKey="aiReferralLandedHits" name="Visits, server"
                   stroke={VISIT_COLOR} strokeWidth={2} dot={false} />
