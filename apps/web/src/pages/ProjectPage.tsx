@@ -30,6 +30,7 @@ import { DiscoverySection } from '../components/project/DiscoverySection.js'
 import { SiteHealthSection } from '../components/project/SiteHealthSection.js'
 import { ProjectHistorySection } from '../components/project/ProjectHistorySection.js'
 import { ConversionIntegrityWorkspace } from '../components/project/ConversionIntegrityWorkspace.js'
+import { GoogleAdsPerformanceSection } from '../components/project/GoogleAdsPerformanceSection.js'
 import { AdvancedMeasurementSection } from '../components/project/advanced-measurement/AdvancedMeasurementSection.js'
 import { AdvancedMeasurementLanding } from '../components/project/advanced-measurement/AdvancedMeasurementLanding.js'
 import {
@@ -2679,11 +2680,17 @@ function ProjectPageContent({
           onReleaseInitialRun={releaseInitialSiteHealthRun}
         />
       ) : tab === 'conversions' ? (
-        <ConversionIntegrityWorkspace
-          key={model.project.id}
-          projectId={model.project.id}
-          projectName={model.project.name}
-        />
+        <>
+          {/* Delivery first, plumbing second: spend and conversions are what an
+              operator opens this tab for, and Conversion Integrity below is how
+              the numbers earn their trust. */}
+          <GoogleAdsPerformanceSection key={`${model.project.id}:performance`} projectName={model.project.name} />
+          <ConversionIntegrityWorkspace
+            key={model.project.id}
+            projectId={model.project.id}
+            projectName={model.project.name}
+          />
+        </>
       ) : tab === 'history' ? (
         <ProjectHistorySection projectName={model.project.name} />
       ) : tab === 'activity' ? (

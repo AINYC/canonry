@@ -2,7 +2,7 @@ import { afterEach, describe, expect, onTestFinished, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
-import { ConversionIntegrityWorkspace } from '../src/components/project/ConversionIntegrityWorkspace.js'
+import { ConversionIntegrityWorkspace, gtmSelectionSummary } from '../src/components/project/ConversionIntegrityWorkspace.js'
 import { getRunTrackerState, resetRunTracker } from '../src/lib/run-tracker-store.js'
 import { jsonResponse, mockFetch, pathOf } from './mock-fetch.js'
 
@@ -173,6 +173,22 @@ function installMarketingFetch(fixture: MarketingFixture, requested: string[]) {
     if (path === `${prefix}/conversion-tracking/contracts` && init?.method === 'POST') {
       return jsonResponse(fixture.createdContract ?? { error: { message: 'Unexpected contract write' } }, fixture.createdContract ? 200 : 500)
     }
+    if (path === `${prefix}/conversion-tracking/options`) {
+      return jsonResponse({
+        googleAds: {
+          customerId: '9557525423',
+          syncedAt: '2026-08-24T23:11:24.362Z',
+          conversionActions: [
+            { id: 'refund-confirmed', name: 'Refund confirmed', detail: 'PURCHASE', active: true },
+          ],
+        },
+        gtm: {
+          containerId: 'GTM-K7X2P9',
+          syncedAt: '2026-08-24T23:11:25.154Z',
+          tags: [{ id: 'tag_refund_confirmation', name: 'Refund confirmation', detail: 'awct', active: true }],
+        },
+      })
+    }
     if (path.startsWith(`${prefix}/conversion-tracking/contracts`)) return jsonResponse(fixture.contracts ?? [])
     if (path.startsWith(`${prefix}/google-ads/sync`) && init?.method === 'POST') {
       return jsonResponse(fixture.googleAdsRun ?? queuedRun('run_google_ads_sync', 'google-ads-sync'))
@@ -299,7 +315,10 @@ describe('ConversionIntegrityWorkspace', () => {
 
     expect(screen.getByText('Payment confirmed')).toBeTruthy()
     expect(screen.getByText('Example Hotel')).toBeTruthy()
-    expect(screen.getByText('Selected account and container')).toBeTruthy()
+    // The selection names the container it points at, not the fields that
+    // happen to be filled in. "Selected account and container" read the same
+    // for every project on the instance.
+    expect(screen.getByText('Container GTM-TEST123 · account account_example')).toBeTruthy()
     expect(screen.getByText('Static API evidence does not prove that a browser tag fired or that Google Ads recorded a conversion.')).toBeTruthy()
     expect(requested).toEqual(expect.arrayContaining([
       expect.stringMatching(/^\/api\/v1\/projects\/example\/google-ads\/status/),
@@ -994,8 +1013,13 @@ describe('ConversionIntegrityWorkspace', () => {
 
     fireEvent.change(screen.getByLabelText('Conversion name'), { target: { value: createdContract.name } })
     fireEvent.change(screen.getByLabelText('Website event'), { target: { value: createdContract.eventName } })
-    fireEvent.change(screen.getByLabelText('Google Ads conversion action ID'), { target: { value: createdContract.googleAds.conversionActionId } })
-    fireEvent.change(screen.getByLabelText('Tag Manager tag ID'), { target: { value: createdContract.gtm.tagId } })
+    // Offered as a select from synced inventory, not a hand-typed id: copying an
+    // opaque number out of another console fails only after saving, and a typo
+    // produces a contract that silently checks the wrong thing.
+    expect(screen.getByLabelText(/Google Ads conversion action/).tagName).toBe('SELECT')
+    expect(screen.getByLabelText(/Tag Manager tag/).tagName).toBe('SELECT')
+    fireEvent.change(screen.getByLabelText(/Google Ads conversion action/), { target: { value: createdContract.googleAds.conversionActionId } })
+    fireEvent.change(screen.getByLabelText(/Tag Manager tag/), { target: { value: createdContract.gtm.tagId } })
     fireEvent.click(screen.getByRole('button', { name: 'Save conversion contract' }))
 
     await waitFor(() => expect((screen.getByLabelText('Conversion to inspect') as HTMLSelectElement).value).toBe(createdContract.id))
@@ -1128,3 +1152,13 @@ describe('ConversionIntegrityWorkspace', () => {
     queryClient.clear()
   })
 })
+
+describe('gtmSelectionSummary', () => {
+  test('names the container, its account, and a pinned draft workspace', () => {
+    expect(gtmSelectionSummary('GTM-TEST123', 'account_example', null))
+      .toBe('Container GTM-TEST123 · account account_example')
+    expect(gtmSelectionSummary('GTM-TEST123', 'account_example', 'workspace_7'))
+      .toBe('Container GTM-TEST123 · account account_example · workspace workspace_7')
+  })
+})
+

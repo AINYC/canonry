@@ -5,6 +5,7 @@ import { canonryMcpTools } from '../src/mcp/tool-registry.js'
 const agentSafeTools = [
   ['canonry_google_ads_status', 'read', 'google-ads', 'GET /api/v1/projects/{name}/google-ads/status'],
   ['canonry_google_ads_customers', 'read', 'google-ads', 'GET /api/v1/projects/{name}/google-ads/customers'],
+  ['canonry_google_ads_performance', 'read', 'google-ads', 'GET /api/v1/projects/{name}/google-ads/performance'],
   ['canonry_google_ads_snapshots', 'read', 'google-ads', 'GET /api/v1/projects/{name}/google-ads/snapshots'],
   ['canonry_google_ads_snapshot_get', 'read', 'google-ads', 'GET /api/v1/projects/{name}/google-ads/snapshots/{snapshotId}'],
   ['canonry_google_ads_sync', 'write', 'google-ads', 'POST /api/v1/projects/{name}/google-ads/sync'],
@@ -107,6 +108,7 @@ describe('Google Marketing MCP surface', () => {
       listGtmContainers: vi.fn(),
       listGtmWorkspaces: vi.fn(),
       listGtmSnapshots: vi.fn(),
+      getGoogleAdsPerformance: vi.fn(),
       getGtmSnapshot: vi.fn(),
       triggerGtmSync: vi.fn(),
       listConversionTrackingContracts: vi.fn(),
@@ -117,6 +119,8 @@ describe('Google Marketing MCP surface', () => {
     const cases = [
       ['canonry_google_ads_status', { project: 'example' }, 'getGoogleAdsStatus', ['example']],
       ['canonry_google_ads_customers', { project: 'example' }, 'listGoogleAdsCustomers', ['example']],
+      ['canonry_google_ads_performance', { project: 'example', window: '7d' }, 'getGoogleAdsPerformance', ['example', { window: '7d' }]],
+      ['canonry_google_ads_performance', { project: 'example' }, 'getGoogleAdsPerformance', ['example', {}]],
       ['canonry_google_ads_snapshots', { project: 'example', limit: 20, cursor: 'next' }, 'listGoogleAdsSnapshots', ['example', { limit: 20, cursor: 'next' }]],
       ['canonry_google_ads_snapshot_get', { project: 'example', snapshotId: 'ads_snap_1' }, 'getGoogleAdsSnapshot', ['example', 'ads_snap_1']],
       ['canonry_google_ads_sync', { project: 'example' }, 'triggerGoogleAdsSync', ['example']],

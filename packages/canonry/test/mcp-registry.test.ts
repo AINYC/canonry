@@ -181,6 +181,8 @@ const expectedToolNames = [
   'canonry_technical_aeo_run',
   'canonry_google_ads_status',
   'canonry_google_ads_customers',
+  'canonry_conversion_tracking_options',
+  'canonry_google_ads_performance',
   'canonry_google_ads_snapshots',
   'canonry_google_ads_snapshot_get',
   'canonry_google_ads_sync',
@@ -575,8 +577,8 @@ describe('MCP tool registry', () => {
   })
 
   it('ships the curated v1 surface', () => {
-    expect(CANONRY_MCP_TOOL_COUNT).toBe(204)
-    expect(CANONRY_MCP_READ_TOOL_COUNT).toBe(138)
+    expect(CANONRY_MCP_TOOL_COUNT).toBe(206)
+    expect(CANONRY_MCP_READ_TOOL_COUNT).toBe(140)
     expect(canonryMcpTools.map(tool => tool.name)).toEqual(expectedToolNames)
     const readNames = canonryMcpTools.filter(tool => tool.access === 'read').map(tool => tool.name)
     expect(getCanonryMcpTools('read-only').map(tool => tool.name)).toEqual(readNames)
@@ -613,12 +615,12 @@ describe('MCP tool registry', () => {
       counts.set(tool.tier, (counts.get(tool.tier) ?? 0) + 1)
     }
     expect(counts.get('monitoring')).toBe(45)
-    expect(counts.get('setup')).toBe(50)
+    expect(counts.get('setup')).toBe(51)
     expect(counts.get('gsc')).toBe(10)
     expect(counts.get('ga')).toBe(11)
     expect(counts.get('gbp')).toBe(13)
     expect(counts.get('ads')).toBe(26)
-    expect(counts.get('google-ads')).toBe(5)
+    expect(counts.get('google-ads')).toBe(6)
     expect(counts.get('gtm')).toBe(7)
     expect(counts.get('conversion-tracking')).toBe(3)
     expect(counts.get('traffic')).toBe(10)

@@ -60,6 +60,7 @@ import {
   measurementQueryTemplateApplyRequestSchema,
   measurementQueryTemplateUpsertRequestSchema,
   GOOGLE_MARKETING_STORED_SNAPSHOT_PAGE_MAX,
+  googleAdsMetricsWindowSchema,
   canonicalizeGtmAccountId,
   canonicalizeGtmResourceSelection,
   type NotificationEvent,
@@ -632,6 +633,11 @@ const googleMarketingSnapshotPageInputSchema = z.object({
   project: projectNameSchema,
   limit: z.number().int().min(1).max(GOOGLE_MARKETING_STORED_SNAPSHOT_PAGE_MAX).optional(),
   cursor: z.string().trim().min(1).optional(),
+}).strict()
+
+const googleAdsPerformanceInputSchema = z.object({
+  project: projectNameSchema,
+  window: googleAdsMetricsWindowSchema.optional(),
 }).strict()
 
 const googleMarketingSnapshotInputSchema = z.object({
@@ -3108,6 +3114,31 @@ export const canonryMcpTools = [
     annotations: readAnnotations(true),
     openApiOperations: ['GET /api/v1/projects/{name}/google-ads/customers'],
     handler: (client, input) => client.listGoogleAdsCustomers(input.project),
+  }),
+  defineTool({
+    name: 'canonry_conversion_tracking_options',
+    title: 'List selectable conversion actions and GTM tags',
+    description: 'List the Google Ads conversion actions and Tag Manager tags a conversion contract can point at, read from the newest stored snapshots. Stored read: quota-free, never calls a provider, never spends the advertiser budget. An empty list means the provider has not synced, not that no options exist.',
+    access: 'read',
+    tier: 'setup',
+    inputSchema: projectInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/conversion-tracking/options'],
+    handler: (client, input) => client.getConversionTrackingOptions(input.project),
+  }),
+  defineTool({
+    name: 'canonry_google_ads_performance',
+    title: 'Read stored Google Ads performance',
+    description: 'Read impressions, clicks, cost (integer micros), conversions, the densified daily series, per-campaign totals, and the prior-equal-period comparison from the newest stored campaign-metrics snapshot. Stored read: it is quota-free, never calls Google, and never spends the advertiser budget. The capture day is partial and is excluded, so every window ends on the newest closed day.',
+    access: 'read',
+    tier: 'google-ads',
+    inputSchema: googleAdsPerformanceInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/google-ads/performance'],
+    handler: (client, input) => client.getGoogleAdsPerformance(
+      input.project,
+      input.window ? { window: input.window } : {},
+    ),
   }),
   defineTool({
     name: 'canonry_google_ads_snapshots',

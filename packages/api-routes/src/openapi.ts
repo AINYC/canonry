@@ -293,6 +293,13 @@ const googleMarketingSnapshotCursorParameter: OpenApiParameter = {
   schema: stringSchema,
 }
 
+const googleAdsMetricsWindowParameter: OpenApiParameter = {
+  name: 'window',
+  in: 'query',
+  description: 'Reporting window over closed days: 7d, 14d, or 30d. Defaults to 14d.',
+  schema: { type: 'string', enum: ['7d', '14d', '30d'] },
+}
+
 const limitQueryParameter: OpenApiParameter = {
   name: 'limit',
   in: 'query',
@@ -3043,6 +3050,18 @@ const routeCatalog: OpenApiOperation[] = [
   },
   {
     method: 'get',
+    path: '/api/v1/projects/{name}/google-ads/performance',
+    summary: 'Read computed Google Ads performance from the stored snapshot',
+    tags: ['google-ads'],
+    parameters: [nameParameter, googleAdsMetricsWindowParameter],
+    responses: {
+      200: jsonResponse('Google Ads performance returned.', 'GoogleAdsPerformanceDto'),
+      400: errorResponse('Invalid window.'),
+      404: errorResponse('Project not found.'),
+    },
+  },
+  {
+    method: 'get',
     path: '/api/v1/projects/{name}/google-ads/snapshots',
     summary: 'List sanitized Google Ads snapshots',
     tags: ['google-ads'],
@@ -3220,6 +3239,17 @@ const routeCatalog: OpenApiOperation[] = [
     responses: {
       200: jsonResponse('GTM disconnect completed.', 'GoogleMarketingDisconnectResponse'),
       403: errorResponse('Write authority is required.'),
+      404: errorResponse('Project not found.'),
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/projects/{name}/conversion-tracking/options',
+    summary: 'Selectable Google Ads conversion actions and GTM tags from stored snapshots',
+    tags: ['conversion-tracking'],
+    parameters: [nameParameter],
+    responses: {
+      200: jsonResponse('Conversion tracking options returned.', 'ConversionTrackingOptionsDto'),
       404: errorResponse('Project not found.'),
     },
   },

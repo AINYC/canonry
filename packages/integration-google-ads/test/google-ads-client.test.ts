@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, test } from 'vitest'
 import {
+  buildCampaignSpendRankingQuery,
+  buildDailyCampaignMetricsQuery,
   GOOGLE_ADS_API_VERSION,
   GoogleAdsApiError,
   GoogleAdsClient,
@@ -473,5 +475,37 @@ describe('bounded daily metric queries', () => {
       endDate: '2026-08-14',
       limit: 10_001,
     })).toThrow('between 1 and 10000')
+  })
+})
+
+describe('campaign selection covers where the money went', () => {
+  test('the daily query keeps removed campaigns when scoped to explicit ids', () => {
+    // A campaign deleted mid-window still spent real money in it. Excluding
+    // REMOVED dropped that spend while coverage still read complete, and the
+    // filter is redundant anyway once campaign.id IN (...) scopes the query.
+    const scoped = buildDailyCampaignMetricsQuery({
+      startDate: '2026-08-01',
+      endDate: '2026-08-14',
+      campaignIds: ['111', '222'],
+    })
+    expect(scoped).not.toContain("campaign.status != 'REMOVED'")
+    expect(scoped).toContain('campaign.id IN (111, 222)')
+  })
+
+  test('the unscoped daily query still bounds itself to live campaigns', () => {
+    // Without an id filter there is nothing else bounding the scan.
+    const unscoped = buildDailyCampaignMetricsQuery({ startDate: '2026-08-01', endDate: '2026-08-14' })
+    expect(unscoped).toContain("campaign.status != 'REMOVED'")
+  })
+
+  test('the ranking query aggregates by campaign and orders by spend', () => {
+    const ranking = buildCampaignSpendRankingQuery({ startDate: '2026-08-01', endDate: '2026-08-14', limit: 50 })
+    // No segments.date in the SELECT, or the API returns a row per campaign-day
+    // instead of one aggregated row per campaign.
+    expect(ranking).not.toContain('segments.date,')
+    expect(ranking).toContain('ORDER BY metrics.cost_micros DESC')
+    expect(ranking).toContain("segments.date BETWEEN '2026-08-01' AND '2026-08-14'")
+    // Removed campaigns must be rankable, or their spend is invisible again.
+    expect(ranking).not.toContain("campaign.status != 'REMOVED'")
   })
 })

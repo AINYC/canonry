@@ -58,7 +58,7 @@ export const CHART_TOOLTIP_STYLE: {
 }
 
 /** Standard axis tick styling. */
-export const CHART_AXIS_TICK = { fill: 'var(--chart-neutral-text-dim, #71717a)', fontSize: 11 } as const
+export const CHART_AXIS_TICK = { fill: 'var(--chart-neutral-text-dim, #8b8b93)', fontSize: 11 } as const
 
 /** Standard grid line color. */
 export const CHART_GRID_STROKE = 'var(--chart-grid, #27272a)'
@@ -112,7 +112,7 @@ export function providerSeriesColor(provider: string, fallbackIndex = 0): string
  */
 export const CHART_NEUTRAL = {
   text: 'var(--chart-neutral-text, #a1a1aa)',           // zinc-400 — primary axis labels
-  textDim: 'var(--chart-neutral-text-dim, #71717a)',    // zinc-500 — secondary text
+  textDim: 'var(--chart-neutral-text-dim, #8b8b93)',    // AA-compliant dim on the dark chart canvas
   textFaint: 'var(--chart-neutral-text-faint, #52525b)', // zinc-600 — faintest text, track lines
   surface: 'var(--chart-neutral-surface, #27272a)',     // zinc-800 — area fill, track surface
   trackSubtle: 'var(--chart-neutral-track-subtle, rgb(255 255 255 / 0.04))',

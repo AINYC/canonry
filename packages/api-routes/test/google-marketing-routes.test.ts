@@ -769,6 +769,27 @@ describe('Google Marketing routes', () => {
     const connection = context.db.select().from(googleAdsConnections)
       .where(eq(googleAdsConnections.projectId, 'project_acme')).get()!
     expect(connection.selectedCustomerId).toBe('1234567890')
+
+    // Selecting a customer clears every snapshot pointer, so without this the
+    // operator is left connected with no data and every downstream surface has
+    // to invent copy for it. Selection queues the sync itself.
+    const queuedSync = context.db.select().from(runs)
+      .where(eq(runs.kind, RunKinds['google-ads-sync'])).all()
+    expect(queuedSync.length).toBeGreaterThan(0)
+
+    // Reselecting must queue a SUCCESSOR, never reuse the in-flight run.
+    // Selection bumps selectionGeneration and the sync worker CAS-writes gated
+    // on it, so a run queued before this selection is already doomed; reusing
+    // it would leave the new selection with no sync at all.
+    const before = queuedSync.length
+    const reselected = await context.app.inject({
+      method: 'PUT', url: '/projects/acme/google-ads/selection',
+      payload: { customerId: '123-456-7890', loginCustomerId: null },
+    })
+    expect(reselected.statusCode).toBe(200)
+    const afterRuns = context.db.select().from(runs)
+      .where(eq(runs.kind, RunKinds['google-ads-sync'])).all()
+    expect(afterRuns.length).toBe(before + 1)
     const capturedAt = connection.lastValidatedAt ?? NOW
     context.db.insert(runs).values({
       id: 'ads-sync-1', projectId: 'project_acme', kind: RunKinds['google-ads-sync'],

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { MetricsWindowPicker } from '../shared/MetricsWindowPicker.js'
 import { Link } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import type { GscPerformanceDailyDto, MetricsWindow } from '@ainyc/canonry-contracts'
@@ -1138,23 +1139,17 @@ export function GscSection({
                     )}
                   </div>
                   <div className="flex items-center gap-2">
-                    <div className="segmented" role="group" aria-label="Performance time period">
-                      {GSC_WINDOWS.map(w => (
-                        <button
-                          key={w}
-                          type="button"
-                          aria-pressed={gscWindow === w}
-                          className={`segmented-option ${gscWindow === w ? 'segmented-option-active' : ''}`}
-                          onClick={() => {
-                            setGscWindow(w)
-                            setPerformanceOffset(0)
-                            performanceTable.setPage(1)
-                          }}
-                        >
-                          {w === 'all' ? 'All' : w}
-                        </button>
-                      ))}
-                    </div>
+                    <MetricsWindowPicker
+                      windows={GSC_WINDOWS}
+                      value={gscWindow}
+                      onChange={(next) => {
+                        setGscWindow(next)
+                        setPerformanceOffset(0)
+                        performanceTable.setPage(1)
+                      }}
+                      label="Search Console time period"
+                      formatOption={(w) => (w === 'all' ? 'All' : w)}
+                    />
                     <Button type="button" variant="outline" size="sm" disabled={loadingPerformance} onClick={() => { setPerformanceOffset(0); performanceTable.setPage(1); void loadPerformanceRows(0); void loadPerformanceDaily() }}>
                       {loadingPerformance ? 'Loading\u2026' : 'Apply filters'}
                     </Button>

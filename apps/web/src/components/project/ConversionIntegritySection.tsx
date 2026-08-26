@@ -520,6 +520,26 @@ function providerRow({
   )
 }
 
+/**
+ * The one multi-sentence explanation this panel keeps, on the tooltip rather
+ * than in the layout. It exists because the gate is otherwise unexplained: the
+ * two connections are independent, but a conversion names resources from each,
+ * so it is the only genuinely dependent action here.
+ */
+export const CONVERSION_TO_CHECK_HELP = 'A conversion names the website event, the Google Ads conversion action, and the Tag Manager tag that must agree. It needs both connections selected because it references resources from each.'
+
+export const CONVERSION_TO_CHECK_BLOCKED = 'Available once Google Ads and Tag Manager are connected.'
+
+/**
+ * Shown ONLY before anything is connected.
+ *
+ * Every other state keeps explanation in an InfoTooltip, because a data surface
+ * shows values rather than prose. An onboarding state is the documented
+ * exception: there is no data to push down, and a reader who does not know what
+ * the feature is cannot decide whether to connect two Google accounts to it.
+ */
+export const CONVERSION_INTEGRITY_PURPOSE = 'Check that a conversion is wired the same way in Google Ads and Tag Manager, so the numbers you optimise against are the ones your site actually sends. Canonry only reads the configuration; it never changes or publishes it.'
+
 function ConversionIntegritySetup({
   workspace,
   onPrimaryAction,
@@ -540,51 +560,55 @@ function ConversionIntegritySetup({
   // A provider read that failed is the one case that outranks everything: the
   // states below are not trustworthy until it is retried, so it takes over the
   // whole list rather than showing two buttons over stale data.
-  const connectionUnavailable = workspace.googleAds.state === 'unavailable'
+  // Each provider owns its own failure. Deriving one flag from Google Ads put
+  // Retry beside the healthy row whenever only Tag Manager was unavailable, and
+  // removed it from the row that had actually failed.
+  const googleAdsUnavailable = workspace.googleAds.state === 'unavailable'
+  const gtmUnavailable = workspace.gtm.state === 'unavailable'
+  const connectionUnavailable = googleAdsUnavailable || gtmUnavailable
     || workspace.gtm.state === 'unavailable'
   const retryAction: PrimaryActionPresentation = {
     id: 'retry-connection-status',
     label: 'Retry connection status',
     detail: 'Retry the stored connection reads before starting another provider action.',
   }
-  const steps = [
+  // Both connections read Ready permanently once they settle, so they share ONE
+  // compact status line instead of two full-width rows that outweigh the action
+  // below them. There is no 1/2/3 numbering: the providers are independent, and
+  // a sequence that is permanently two-thirds complete describes nothing.
+  // Neither provider settled: the one state where the reader may not know what
+  // this feature is, so the purpose is stated on the page instead of in a tooltip.
+  const nothingConnected = !googleAdsReady && !gtmReady
+
+  const connections = [
     {
-      title: 'Google Ads account',
+      title: 'Google Ads',
+      state: workspace.googleAds.state,
       ready: googleAdsReady,
       summary: workspace.googleAds.selection,
-      detail: 'Connect read-only access and choose the customer account.',
       changeLabel: 'Change Google Ads account',
       onChange: onChangeGoogleAdsSelection,
-      action: connectionUnavailable ? retryAction : googleAdsSetupAction(workspace),
+      action: googleAdsUnavailable ? retryAction : googleAdsSetupAction(workspace),
     },
     {
-      title: 'Tag Manager container',
+      title: 'Tag Manager',
+      state: workspace.gtm.state,
       ready: gtmReady,
       summary: workspace.gtm.selection,
-      detail: 'Connect read-only access and choose the container.',
       changeLabel: 'Change Tag Manager container',
       onChange: onChangeGtmSelection,
-      action: connectionUnavailable ? null : gtmSetupAction(workspace),
-    },
-    {
-      title: 'Conversion to check',
-      ready: false,
-      summary: null,
-      detail: 'Choose the website event, conversion action, and tag to check.',
-      changeLabel: null,
-      onChange: undefined,
-      // Genuinely dependent: a contract names resources from BOTH providers, so
-      // this stays gated where the provider rows no longer are.
-      action: googleAdsReady && gtmReady && !connectionUnavailable
-        ? conversionIntegrityPrimaryAction(workspace)
-        : null,
+      action: gtmUnavailable ? retryAction : gtmSetupAction(workspace),
     },
   ]
-  const activeStep = steps.findIndex((step) => !step.ready)
+  // Genuinely dependent: a contract names resources from BOTH providers, so
+  // this stays gated where the connections no longer are.
+  const conversionAction = googleAdsReady && gtmReady && !connectionUnavailable
+    ? conversionIntegrityPrimaryAction(workspace)
+    : null
 
   return (
     <section className="page-section" aria-labelledby="conversion-integrity-title">
-      <div className="section-head mb-5">
+      <div className="section-head mb-4">
         <div>
           <p className="eyebrow">Google marketing</p>
           <div className="mt-1 flex items-center gap-1.5">
@@ -593,79 +617,75 @@ function ConversionIntegritySetup({
             </h2>
             <InfoTooltip text="Canonry reads your Google configuration and never changes or publishes it. Connect Google Ads and Tag Manager, then choose one website conversion to check across both." />
           </div>
+          {nothingConnected ? (
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-secondary">{CONVERSION_INTEGRITY_PURPOSE}</p>
+          ) : null}
         </div>
       </div>
 
-      <div className="max-w-3xl pt-3">
-        <ol className="divide-y divide-default border-y border-default">
-          {steps.map((step, index) => {
-            const isActive = index === activeStep
-            // A connected row states what it is connected TO. An unconnected row
-            // says nothing: its title and its button already carry the meaning,
-            // and a sentence restating the button is the copy an operator skips.
-            const detail = step.ready ? step.summary ?? 'Connected' : null
+      <div className="max-w-3xl">
+        {/* The recurring action leads. Declaring a conversion is the only thing
+            an operator returns to; the connections settle once. */}
+        <div className="flex flex-wrap items-center justify-between gap-3 border-y border-default py-4">
+          <div className="flex items-center gap-1.5">
+            <h3 className="text-sm font-semibold text-heading">Conversion to check</h3>
+            <InfoTooltip text={CONVERSION_TO_CHECK_HELP} />
+          </div>
+          {conversionAction && onPrimaryAction ? (
+            <WriteButton
+              type="button"
+              disabled={actionPending}
+              onClick={() => onPrimaryAction(conversionAction.id)}
+            >
+              {actionPending ? 'Working…' : conversionAction.label}
+            </WriteButton>
+          ) : (
+            <p className="text-sm text-secondary">{CONVERSION_TO_CHECK_BLOCKED}</p>
+          )}
+        </div>
 
+        <ul className="flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-default py-3">
+          {connections.map((connection) => {
+            const badge = connection.ready
+              ? { label: 'Ready', tone: 'positive' as MetricTone }
+              : providerStatePresentation(connection.state)
+            const action = connection.action
             return (
-              <li
-                key={step.title}
-                aria-current={isActive ? 'step' : undefined}
-                className="grid grid-cols-[2rem_minmax(0,1fr)] gap-3 py-4"
-              >
-                <span
-                  aria-hidden="true"
-                  className={`flex size-7 items-center justify-center rounded-full border text-xs font-semibold ${step.ready ? 'border-positive bg-positive-soft text-positive' : isActive ? 'border-strong bg-surface-active text-heading' : 'border-base text-muted'}`}
-                >
-                  {step.ready ? '✓' : index + 1}
-                </span>
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                    <h4 className="text-sm font-semibold text-heading">{step.title}</h4>
-                    {step.ready ? <ToneBadge tone="positive">Ready</ToneBadge> : null}
-                    {step.summary && step.changeLabel && step.onChange ? (
-                      <WriteButton
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        aria-label={step.changeLabel}
-                        disabled={actionPending}
-                        onClick={step.onChange}
-                      >
-                        Change
-                      </WriteButton>
-                    ) : null}
-                  </div>
-                  {isActive && !step.ready && step.summary ? (
-                    <p className="mt-1 max-w-xl text-sm font-medium text-heading">{step.summary}</p>
-                  ) : null}
-                  {detail ? <p className="mt-1 max-w-xl text-sm leading-6 text-secondary">{detail}</p> : null}
-                  {step.action && onPrimaryAction ? (
-                    <div className="mt-3">
-                      {step.action.id === 'retry-connection-status' ? (
-                        <Button
-                          type="button"
-                          disabled={actionPending}
-                          onClick={() => onPrimaryAction(step.action!.id)}
-                        >
-                          {actionPending ? 'Working…' : step.action.label}
-                        </Button>
-                      ) : (
-                        <WriteButton
-                          type="button"
-                          disabled={actionPending}
-                          onClick={() => onPrimaryAction(step.action!.id)}
-                        >
-                          {actionPending ? 'Working…' : step.action.label}
-                        </WriteButton>
-                      )}
-                    </div>
-                  ) : null}
-                  {isActive && actionError ? <p role="alert" className="mt-2 text-sm text-negative">{actionError}</p> : null}
-                </div>
+              <li key={connection.title} className="flex min-w-0 flex-wrap items-center gap-2 text-sm">
+                <span className="font-medium text-heading">{connection.title}</span>
+                <ToneBadge tone={badge.tone}>{badge.label}</ToneBadge>
+                {connection.summary ? (
+                  <span className="min-w-0 truncate text-secondary">{connection.summary}</span>
+                ) : null}
+                {action && onPrimaryAction ? (
+                  action.id === 'retry-connection-status' ? (
+                    <Button type="button" variant="outline" size="sm" disabled={actionPending} onClick={() => onPrimaryAction(action.id)}>
+                      {actionPending ? 'Working…' : action.label}
+                    </Button>
+                  ) : (
+                    <WriteButton type="button" variant="outline" size="sm" disabled={actionPending} onClick={() => onPrimaryAction(action.id)}>
+                      {actionPending ? 'Working…' : action.label}
+                    </WriteButton>
+                  )
+                ) : null}
+                {connection.summary && connection.onChange ? (
+                  <WriteButton
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    aria-label={connection.changeLabel}
+                    disabled={actionPending}
+                    onClick={connection.onChange}
+                  >
+                    Change
+                  </WriteButton>
+                ) : null}
               </li>
             )
           })}
-        </ol>
+        </ul>
 
+        {actionError ? <p role="alert" className="mt-3 text-sm text-negative">{actionError}</p> : null}
       </div>
     </section>
   )

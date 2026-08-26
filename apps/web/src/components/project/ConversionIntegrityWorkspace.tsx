@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEv
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { RunKinds } from '@ainyc/canonry-contracts'
 import type {
+  ConversionTrackingOptionsDto,
   ConversionTrackingContractWriteRequest,
   GoogleAdsConnectionStatusDto,
   GtmConnectionStatusDto,
@@ -11,6 +12,7 @@ import {
   deleteApiV1ProjectsByNameGtmConnectionMutation,
   getApiV1ProjectsByNameConversionTrackingContractsByContractIdIntegrityOptions,
   getApiV1ProjectsByNameConversionTrackingContractsOptions,
+  getApiV1ProjectsByNameConversionTrackingOptionsOptions,
   getApiV1ProjectsByNameGoogleAdsCustomersOptions,
   getApiV1ProjectsByNameGoogleAdsSnapshotsOptions,
   getApiV1ProjectsByNameGoogleAdsStatusOptions,
@@ -175,6 +177,21 @@ function googleAdsConnectionVm(
   }
 }
 
+/**
+ * The identifying values of a settled Tag Manager selection, in the order an
+ * operator recognises them: the container first, then the account it lives
+ * under, then the draft workspace when one is pinned.
+ */
+export function gtmSelectionSummary(
+  containerId: string,
+  accountId: string,
+  workspaceId: string | null,
+): string {
+  const parts = [`Container ${containerId}`, `account ${accountId}`]
+  if (workspaceId) parts.push(`workspace ${workspaceId}`)
+  return parts.join(' · ')
+}
+
 function gtmConnectionVm(
   status: GtmConnectionStatusDto | undefined,
   snapshot: SnapshotEvidenceVm,
@@ -210,7 +227,12 @@ function gtmConnectionVm(
   }
   return {
     state: status.status,
-    selection: selection.workspaceId ? 'Selected account, container, and draft workspace' : 'Selected account and container',
+    // Name the selection, do not describe its shape. "Selected account,
+    // container, and draft workspace" told an operator which FIELDS were filled
+    // in, never which container they are looking at, so two projects pointed at
+    // different containers read identically. The status DTO carries ids and no
+    // display names, so the ids are the identity.
+    selection: gtmSelectionSummary(selection.containerId, selection.accountId, selection.workspaceId),
     ...snapshot,
     evidence: status.status === 'stale'
       ? 'The selected container needs a fresh static configuration observation.'
@@ -408,6 +430,106 @@ function DisconnectConnection({
   )
 }
 
+
+/**
+ * A field that offers real, synced choices instead of asking the operator to
+ * copy an opaque numeric id out of another console.
+ *
+ * Keeps a manual escape hatch: a contract may legitimately point at something
+ * created since the last sync, and a select alone would make that unenterable.
+ * The escape hatch is the fallback, never the default.
+ */
+function ConversionOptionField({
+  id, label, options, synced, loading, failed, onRetry, emptyHint, value, onChange,
+}: {
+  id: string
+  label: string
+  options: ConversionTrackingOptionsDto['googleAds']['conversionActions']
+  synced: boolean
+  loading: boolean
+  /** The options READ failed. Distinct from a successful read that found none. */
+  failed: boolean
+  onRetry: () => void
+  emptyHint: string
+  value: string
+  onChange: (next: string) => void
+}) {
+  const known = options.some((option) => option.id === value)
+  const [manual, setManual] = useState(false)
+  const useManual = manual || (value !== '' && !known && options.length > 0)
+
+  // The control and its mode switch are SIBLINGS of the label, never children.
+  // A <label> wrapping two interactive elements has ambiguous activation
+  // semantics: clicking the text can focus the field or press the button.
+  const labelEl = <label htmlFor={id} className={labelClassName}>{label}</label>
+
+  if (loading) {
+    return (
+      <div>
+        {labelEl}
+        <select id={id} className={fieldClassName} disabled>
+          <option>Loading…</option>
+        </select>
+      </div>
+    )
+  }
+
+  // Three states that must not collapse into one. A failed read is not an
+  // unsynced provider, and neither is a provider that synced and genuinely has
+  // no options: telling all three to "run a sync" sends the operator to do work
+  // that will not help.
+  if (failed) {
+    return (
+      <div>
+        {labelEl}
+        <input id={id} required className={fieldClassName} value={value} onChange={(event) => onChange(event.target.value)} />
+        <p className="mt-1 text-xs text-negative">
+          Could not load the list.{' '}
+          <button type="button" className="text-link underline" onClick={onRetry}>Retry</button>
+        </p>
+      </div>
+    )
+  }
+
+  if (!synced || options.length === 0) {
+    return (
+      <div>
+        {labelEl}
+        <input id={id} required className={fieldClassName} value={value} onChange={(event) => onChange(event.target.value)} />
+        <p className="mt-1 text-xs text-muted">{synced ? 'Synced, but nothing to choose from yet.' : emptyHint}</p>
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      {labelEl}
+      {useManual ? (
+        <input id={id} required className={fieldClassName} value={value} onChange={(event) => onChange(event.target.value)} />
+      ) : (
+        <select id={id} required className={fieldClassName} value={value} onChange={(event) => onChange(event.target.value)}>
+          <option value="">Select {label.toLowerCase()}</option>
+          {options.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.name}
+              {option.detail ? ` (${option.detail})` : ''}
+              {option.active ? '' : ' — inactive'}
+            </option>
+          ))}
+        </select>
+      )}
+      <button
+        type="button"
+        className="mt-1 text-xs text-link"
+        onClick={() => { setManual(!useManual); onChange('') }}
+      >
+        {useManual ? 'Choose from synced list' : 'Enter an ID manually'}
+      </button>
+    </div>
+  )
+}
+
+
 export function ConversionIntegrityWorkspace({ projectId, projectName }: { projectId: string; projectName: string }) {
   const account = useAccount()
   const [actionError, setActionError] = useState<string | null>(null)
@@ -439,6 +561,12 @@ export function ConversionIntegrityWorkspace({ projectId, projectName }: { proje
     ...getApiV1ProjectsByNameConversionTrackingContractsOptions({ client: heyClient, path: { name: projectName } }),
     staleTime: GOOGLE_MARKETING_STALE_MS,
   })
+  const conversionOptionsQuery = useQuery({
+    ...getApiV1ProjectsByNameConversionTrackingOptionsOptions({ client: heyClient, path: { name: projectName } }),
+    staleTime: GOOGLE_MARKETING_STALE_MS,
+  })
+  const conversionOptions = conversionOptionsQuery.data
+
   const googleAdsSnapshotsQuery = useQuery({
     ...getApiV1ProjectsByNameGoogleAdsSnapshotsOptions({ client: heyClient, path: { name: projectName }, query: { limit: 5 } }),
     staleTime: GOOGLE_MARKETING_STALE_MS,
@@ -639,8 +767,26 @@ export function ConversionIntegrityWorkspace({ projectId, projectName }: { proje
       contractsQuery.refetch(),
       googleAdsSnapshotsQuery.refetch(),
       gtmSnapshotsQuery.refetch(),
+      conversionOptionsQuery.refetch(),
       activeContract ? integrityQuery.refetch() : Promise.resolve(),
     ])
+  }
+
+  /**
+   * Selecting a resource queues a provider sync server-side, so a single
+   * refetch lands BEFORE that run finishes and the operator sees the
+   * pre-sync state with nothing to tell them more is coming.
+   *
+   * Polls until the snapshot evidence the sync writes actually appears, then
+   * stops. Bounded, because a sync can fail: after the last attempt the surface
+   * simply shows its normal unsynced state rather than spinning forever.
+   */
+  async function refreshUntilSyncLands(hasEvidence: () => boolean) {
+    await refreshStoredEvidence()
+    for (let attempt = 0; attempt < 10 && !hasEvidence(); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1_500))
+      await refreshStoredEvidence()
+    }
   }
 
   function rememberOpener() {
@@ -824,7 +970,7 @@ export function ConversionIntegrityWorkspace({ projectId, projectName }: { proje
       })
       setSelectionPanel(null)
       restoreOpener()
-      await refreshStoredEvidence()
+      await refreshUntilSyncLands(() => googleAdsStatusQuery.data?.selectedCustomer != null)
     } catch (error) {
       setActionError(extractErrorMessage(error))
     }
@@ -848,7 +994,7 @@ export function ConversionIntegrityWorkspace({ projectId, projectName }: { proje
       })
       setSelectionPanel(null)
       restoreOpener()
-      await refreshStoredEvidence()
+      await refreshUntilSyncLands(() => gtmStatusQuery.data?.status === 'connected')
     } catch (error) {
       setActionError(extractErrorMessage(error))
     }
@@ -1357,14 +1503,30 @@ export function ConversionIntegrityWorkspace({ projectId, projectName }: { proje
                 Website event
                 <input id="contract-event-name" required className={fieldClassName} value={contractDraft.eventName} onChange={(event) => setContractDraft(previous => ({ ...previous, eventName: event.target.value }))} placeholder="booking_complete" />
               </label>
-              <label htmlFor="contract-conversion-action" className={labelClassName}>
-                Google Ads conversion action ID
-                <input id="contract-conversion-action" required className={fieldClassName} value={contractDraft.conversionActionId} onChange={(event) => setContractDraft(previous => ({ ...previous, conversionActionId: event.target.value }))} />
-              </label>
-              <label htmlFor="contract-gtm-tag" className={labelClassName}>
-                Tag Manager tag ID
-                <input id="contract-gtm-tag" required className={fieldClassName} value={contractDraft.tagId} onChange={(event) => setContractDraft(previous => ({ ...previous, tagId: event.target.value }))} />
-              </label>
+              <ConversionOptionField
+                id="contract-conversion-action"
+                label="Google Ads conversion action"
+                options={conversionOptions?.googleAds.conversionActions ?? []}
+                synced={conversionOptions?.googleAds.syncedAt != null}
+                loading={conversionOptionsQuery.isLoading}
+                failed={conversionOptionsQuery.isError}
+                onRetry={() => void conversionOptionsQuery.refetch()}
+                emptyHint="Run a Google Ads sync to list conversion actions."
+                value={contractDraft.conversionActionId}
+                onChange={(next) => setContractDraft(previous => ({ ...previous, conversionActionId: next }))}
+              />
+              <ConversionOptionField
+                id="contract-gtm-tag"
+                label="Tag Manager tag"
+                options={conversionOptions?.gtm.tags ?? []}
+                synced={conversionOptions?.gtm.syncedAt != null}
+                loading={conversionOptionsQuery.isLoading}
+                failed={conversionOptionsQuery.isError}
+                onRetry={() => void conversionOptionsQuery.refetch()}
+                emptyHint="Run a Tag Manager sync to list tags."
+                value={contractDraft.tagId}
+                onChange={(next) => setContractDraft(previous => ({ ...previous, tagId: next }))}
+              />
             </div>
             <details className="inline-disclosure mt-5 max-w-3xl">
               <summary>Additional matching rules</summary>

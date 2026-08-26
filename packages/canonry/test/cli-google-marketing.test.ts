@@ -30,6 +30,7 @@ describe('Google Marketing CLI', () => {
       'google-ads status',
       'google-ads customers',
       'google-ads sync',
+      'google-ads performance',
       'gtm accounts',
       'gtm workspaces',
       'gtm sync',
@@ -91,6 +92,101 @@ describe('Google Marketing CLI', () => {
 
     expect(client.listGtmContainers).toHaveBeenCalledWith('example', '1')
     expect(client.listGtmWorkspaces).toHaveBeenCalledWith('example', '1', '2')
+  })
+
+  const performanceDto = {
+    window: '7d',
+    startDate: '2026-08-18',
+    endDate: '2026-08-24',
+    days: 7,
+    totals: {
+      impressions: 440,
+      clicks: 20,
+      costMicros: 6_000_000,
+      conversions: 2.5,
+      conversionValueMicros: 3_000_000,
+      ctr: 20 / 440,
+      cpcMicros: 300_000,
+      conversionRate: 0.125,
+      costPerConversionMicros: 2_400_000,
+    },
+    daily: [
+      { date: '2026-08-18', origin: 'provider', impressions: 440, clicks: 20, costMicros: 6_000_000, conversions: 2.5, ctr: 20 / 440 },
+      { date: '2026-08-19', origin: 'filled', impressions: 0, clicks: 0, costMicros: 0, conversions: 0, ctr: null },
+    ],
+    campaigns: [{
+      campaignId: 'c1',
+      name: 'Brand Search',
+      status: 'enabled',
+      totals: {
+        impressions: 440, clicks: 20, costMicros: 6_000_000, conversions: 2.5,
+        conversionValueMicros: 3_000_000, ctr: 20 / 440, cpcMicros: 300_000,
+        conversionRate: 0.125, costPerConversionMicros: 2_400_000,
+      },
+    }],
+    comparison: null,
+    comparisonUnavailableReason: 'insufficient-history',
+    source: {
+      snapshotId: 'metrics-snapshot',
+      capturedAt: '2026-08-25T12:00:00.000Z',
+      customerId: '1234567890',
+      currencyCode: 'USD',
+      timeZone: 'UTC',
+      asOfDate: '2026-08-24',
+      openDate: '2026-08-25',
+      truncated: false,
+      campaignsQueried: 1,
+      campaignsInInventory: 1,
+    },
+  }
+
+  it('emits the performance DTO verbatim so a UI fetch can be swapped for the CLI', async () => {
+    const client = {
+      getGoogleAdsPerformance: vi.fn().mockResolvedValue(performanceDto),
+    } as unknown as GoogleMarketingCliClient
+    const commands = createGoogleMarketingCliCommands(() => client)
+
+    const output = await captureStdout(async () => {
+      await dispatchRegisteredCommand([
+        'google-ads', 'performance', 'example', '--window', '7d', '--format', 'json',
+      ], 'text', commands)
+    })
+
+    expect(client.getGoogleAdsPerformance).toHaveBeenCalledWith('example', { window: '7d' })
+    // Byte-identical to the API response: no rounding, no currency formatting,
+    // no micros division anywhere in the machine format.
+    expect(JSON.parse(output)).toEqual(performanceDto)
+  })
+
+  it('formats micros as currency only in human output', async () => {
+    const client = {
+      getGoogleAdsPerformance: vi.fn().mockResolvedValue(performanceDto),
+    } as unknown as GoogleMarketingCliClient
+    const commands = createGoogleMarketingCliCommands(() => client)
+
+    const output = await captureStdout(async () => {
+      await dispatchRegisteredCommand(['google-ads', 'performance', 'example'], 'text', commands)
+    })
+
+    expect(client.getGoogleAdsPerformance).toHaveBeenCalledWith('example', {})
+    expect(output).toContain('$6.00')
+    expect(output).toContain('$0.30')
+    expect(output).not.toContain('6000000')
+    // The excluded partial day is named, so a reader does not read the newest
+    // closed day as "today collapsed".
+    expect(output).toContain('2026-08-25 still open, excluded')
+    expect(output).toContain('unavailable (insufficient-history)')
+  })
+
+  it('refuses a window the stored snapshot cannot serve', async () => {
+    const client = { getGoogleAdsPerformance: vi.fn() } as unknown as GoogleMarketingCliClient
+    const commands = createGoogleMarketingCliCommands(() => client)
+
+    await expect(captureStdout(async () => {
+      // 30d is servable now; 90d is the window the stored snapshot cannot reach.
+      await dispatchRegisteredCommand(['google-ads', 'performance', 'example', '--window', '90d'], 'text', commands)
+    })).rejects.toMatchObject({ code: 'CLI_USAGE_ERROR' })
+    expect(client.getGoogleAdsPerformance).not.toHaveBeenCalled()
   })
 
   it('keeps contract integrity agent-friendly as findings JSONL', async () => {

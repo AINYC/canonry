@@ -498,25 +498,57 @@ function campaignMetricDto(row: GoogleAdsDailyCampaignMetricsRow): GoogleAdsCamp
   }
 }
 
+/**
+ * The window every metrics read covers: the last MAX_DAYS calendar days in the
+ * account's own time zone.
+ */
+function defaultMetricsWindow(now: Date, timeZone: string | null | undefined): { startDate: string; endDate: string } {
+  const customerTimeZone = typeof timeZone === 'string' && timeZone.trim() !== '' ? timeZone : 'UTC'
+  const endDate = formatIsoDateInTimeZone(now.toISOString(), customerTimeZone)
+  return { startDate: shiftIsoCalendarDate(endDate, -(GOOGLE_ADS_CAMPAIGN_METRICS_MAX_DAYS - 1)), endDate }
+}
+
+/**
+ * Which campaigns the bounded daily-metrics query should cover.
+ *
+ * `rankedCampaignIds` is the account's campaigns ordered by spend over the same
+ * window, removed ones included. Selecting by spend rather than by campaign id
+ * matters twice over:
+ *
+ * - id order is arbitrary with respect to money, so an account above the cap
+ *   could spend the whole allowance on dormant campaigns and omit its biggest
+ *   spender from the totals;
+ * - a campaign removed mid-window still spent real money in it, and the
+ *   inventory list excludes removed campaigns, so selecting from inventory
+ *   alone loses that spend while coverage still reads complete.
+ *
+ * Falls back to inventory order when the ranking is unavailable, so a failed
+ * ranking read degrades to the old behaviour rather than to no metrics at all.
+ */
 function defaultMetricsQuery(
   now: Date,
   campaigns: readonly GoogleAdsCampaignDto[],
   timeZone: string | null | undefined,
+  rankedCampaignIds?: readonly string[],
 ): { query: GoogleAdsCampaignMetricsQuery | null; inventoryTruncated: boolean } {
-  const campaignIds = campaigns
+  const inventoryIds = campaigns
     .map(campaign => campaign.id)
     .sort((left, right) => left.localeCompare(right))
-  const selected = campaignIds.slice(0, GOOGLE_ADS_CAMPAIGN_METRICS_MAX_CAMPAIGNS)
+
+  // The ranking is authoritative when present. Inventory ids that the ranking
+  // never mentioned had no delivery in the window, so they are appended rather
+  // than dropped: a zero-spend campaign is still a real campaign to report.
+  const ranked = rankedCampaignIds ?? []
+  const ordered = ranked.length > 0
+    ? [...ranked, ...inventoryIds.filter(id => !ranked.includes(id))]
+    : inventoryIds
+
+  const selected = ordered.slice(0, GOOGLE_ADS_CAMPAIGN_METRICS_MAX_CAMPAIGNS)
   if (selected.length === 0) return { query: null, inventoryTruncated: false }
-  const customerTimeZone = typeof timeZone === 'string' && timeZone.trim() !== '' ? timeZone : 'UTC'
-  const endDate = formatIsoDateInTimeZone(now.toISOString(), customerTimeZone)
+  const { startDate, endDate } = defaultMetricsWindow(now, timeZone)
   return {
-    query: googleAdsCampaignMetricsQuerySchema.parse({
-      campaignIds: selected,
-      startDate: shiftIsoCalendarDate(endDate, -(GOOGLE_ADS_CAMPAIGN_METRICS_MAX_DAYS - 1)),
-      endDate,
-    }),
-    inventoryTruncated: campaignIds.length > selected.length,
+    query: googleAdsCampaignMetricsQuerySchema.parse({ campaignIds: selected, startDate, endDate }),
+    inventoryTruncated: ordered.length > selected.length,
   }
 }
 
@@ -927,7 +959,36 @@ class DefaultGoogleMarketingRuntime implements GoogleMarketingRuntime {
     )
     const effectiveGoalGraph = deriveGoogleAdsEffectiveGoalGraph(inventory)
 
-    const defaults = defaultMetricsQuery(this.#now(), inventory.campaigns, customerResult.data.timeZone)
+    // One extra bounded read: campaigns ranked by spend over the same window,
+    // removed ones included, so the daily query is scoped to where the money
+    // went. A failure here is not fatal; selection degrades to inventory order.
+    const rankingWindow = defaultMetricsWindow(this.#now(), customerResult.data.timeZone)
+    // Fetch ONE MORE than the cap. Exactly-at-cap is ambiguous: it cannot be
+    // told apart from an account with more campaigns whose tail was cut, and
+    // that ambiguity is what lets a subset sum be reported as complete.
+    const ranking = await client
+      .getCampaignSpendRanking(customerId, {
+        ...rankingWindow,
+        limit: GOOGLE_ADS_CAMPAIGN_METRICS_MAX_CAMPAIGNS + 1,
+      })
+      .then(result => ({
+        ids: result.data.map(row => String(row.campaign.id)),
+        failed: false,
+      }))
+      // A swallowed failure silently falls back to inventory order, which
+      // EXCLUDES removed campaigns, so a campaign deleted mid-window loses its
+      // spend while `truncated` still reads false. Record the failure and let it
+      // surface as incompleteness instead of disappearing.
+      .catch(() => ({ ids: [] as string[], failed: true }))
+
+    const rankingTruncated = ranking.ids.length > GOOGLE_ADS_CAMPAIGN_METRICS_MAX_CAMPAIGNS
+
+    const defaults = defaultMetricsQuery(
+      this.#now(),
+      inventory.campaigns,
+      customerResult.data.timeZone,
+      ranking.failed ? undefined : ranking.ids.slice(0, GOOGLE_ADS_CAMPAIGN_METRICS_MAX_CAMPAIGNS),
+    )
     const metricsQuery = suppliedMetricsQuery ?? defaults.query
     if (!metricsQuery) {
       return {
@@ -948,7 +1009,11 @@ class DefaultGoogleMarketingRuntime implements GoogleMarketingRuntime {
       rows: metricRows.slice(0, GOOGLE_ADS_CAMPAIGN_METRICS_MAX_ROWS),
       truncated:
         metricRows.length > GOOGLE_ADS_CAMPAIGN_METRICS_MAX_ROWS ||
-        (suppliedMetricsQuery === undefined && defaults.inventoryTruncated),
+        (suppliedMetricsQuery === undefined && defaults.inventoryTruncated) ||
+        // Either the ranking could not be read (so selection fell back to an
+        // order that omits removed campaigns) or it reported more campaigns
+        // than the cap. Both mean these totals are a subset of the account.
+        (suppliedMetricsQuery === undefined && (ranking.failed || rankingTruncated)),
       fetchedAt: this.#now().toISOString(),
     }
     const metricsPayload: GoogleAdsSnapshotPayload = {

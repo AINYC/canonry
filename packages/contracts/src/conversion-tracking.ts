@@ -168,3 +168,44 @@ export const conversionTrackingIntegrityAssessmentDtoSchema = z.object({
   evaluatedAt: z.string(),
 }).strict()
 export type ConversionTrackingIntegrityAssessmentDto = z.infer<typeof conversionTrackingIntegrityAssessmentDtoSchema>
+
+/**
+ * Everything the "declare a conversion" form needs to offer real choices
+ * instead of asking an operator to hand-copy opaque numeric ids out of two
+ * other consoles.
+ *
+ * Both lists come from the latest STORED snapshots, so reading them costs no
+ * provider quota and cannot spend the advertiser's budget. A list is empty when
+ * the provider is connected but has not synced, which the form must present as
+ * "sync first", not as "no options exist".
+ */
+export const conversionTrackingOptionSchema = z.object({
+  id: opaqueIdSchema,
+  /** Human label the operator recognises, e.g. "Booking completed". */
+  name: z.string(),
+  /** Secondary line: the Ads category, or the GTM tag type. */
+  detail: z.string(),
+  /**
+   * False when the option exists but is not a sensible target: a removed Ads
+   * action, or a paused GTM tag. Offered but flagged, never silently hidden,
+   * because a contract may legitimately point at one.
+   */
+  active: z.boolean(),
+})
+export type ConversionTrackingOption = z.infer<typeof conversionTrackingOptionSchema>
+
+export const conversionTrackingOptionsDtoSchema = z.object({
+  googleAds: z.object({
+    /** Null when Google Ads is not connected or no customer is selected. */
+    customerId: opaqueIdSchema.nullable(),
+    syncedAt: z.string().nullable(),
+    conversionActions: z.array(conversionTrackingOptionSchema),
+  }),
+  gtm: z.object({
+    containerId: opaqueIdSchema.nullable(),
+    syncedAt: z.string().nullable(),
+    tags: z.array(conversionTrackingOptionSchema),
+  }),
+})
+export type ConversionTrackingOptionsDto = z.infer<typeof conversionTrackingOptionsDtoSchema>
+

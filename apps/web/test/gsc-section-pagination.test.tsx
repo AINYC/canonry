@@ -151,7 +151,7 @@ test('uses server pagination when unfiltered and client pagination for expanded 
   expect(screen.getByText('search query 025')).not.toBeNull()
   expect(screen.queryByText('search query 024')).toBeNull()
 
-  const performancePeriod = screen.getByRole('group', { name: 'Performance time period' })
+  const performancePeriod = screen.getByRole('group', { name: 'Search Console time period' })
   expect(within(performancePeriod).getByRole('button', { name: '30d' }).getAttribute('aria-pressed')).toBe('true')
   fireEvent.click(within(performancePeriod).getByRole('button', { name: '7d' }))
   expect(within(performancePeriod).getByRole('button', { name: '7d' }).getAttribute('aria-pressed')).toBe('true')

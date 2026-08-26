@@ -264,6 +264,10 @@ export const MCP_OPENAPI_OPERATION_CLASSIFICATIONS = {
   'PUT /api/v1/projects/{name}/gtm/selection': 'deferred',
   'POST /api/v1/projects/{name}/google-ads/sync': 'included',
   'POST /api/v1/projects/{name}/gtm/sync': 'included',
+  // Computed performance over the STORED snapshot. Quota-free and budget-free:
+  // it never calls Google, unlike the live customers/sync reads above.
+  'GET /api/v1/projects/{name}/conversion-tracking/options': 'included',
+  'GET /api/v1/projects/{name}/google-ads/performance': 'included',
   'GET /api/v1/projects/{name}/google-ads/snapshots': 'included',
   'GET /api/v1/projects/{name}/google-ads/snapshots/{snapshotId}': 'included',
   'GET /api/v1/projects/{name}/gtm/snapshots': 'included',

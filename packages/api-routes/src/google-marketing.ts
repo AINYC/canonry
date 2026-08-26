@@ -30,11 +30,17 @@ import {
   conversionTrackingContractSchema,
   conversionTrackingContractWriteRequestSchema,
   conversionTrackingIntegrityAssessmentDtoSchema,
+  GoogleAdsCampaignStatuses,
+  calendarDateRange,
+  formatIsoDate,
+  formatIsoDateInTimeZone,
   googleAdsAccessibleCustomersResponseSchema,
   googleAdsCustomerSelectionRequestSchema,
+  googleAdsMetricsWindowSchema,
   googleAdsRawSnapshotDtoSchema,
   googleMarketingOAuthConnectRequestSchema,
   googleMarketingProviderSchema,
+  inclusiveDayCount,
   forbidden,
   gtmAccountsResponseSchema,
   gtmContainerListResponseSchema,
@@ -46,14 +52,25 @@ import {
   notImplemented,
   providerError,
   quotaExceeded,
+  relativeChangeRatio,
+  shiftIsoCalendarDate,
   validationError,
   type ConversionTrackingContract,
   type ConversionTrackingContractWriteRequest,
   type ConversionTrackingIntegrityAssessmentDto,
   type GoogleAdsAccessibleCustomerDto,
   type GoogleAdsAccessibleCustomersResponse,
+  type GoogleAdsCampaignMetricDto,
+  type GoogleAdsCampaignMetricsResponse,
+  type GoogleAdsCampaignPerformance,
   type GoogleAdsConnectionMetadataDto,
   type GoogleAdsConnectionStatusDto,
+  type GoogleAdsInventoryDto,
+  type GoogleAdsMetricTotals,
+  type GoogleAdsMetricsDailyPoint,
+  type GoogleAdsMetricsWindow,
+  type GoogleAdsPerformanceComparison,
+  type GoogleAdsPerformanceDto,
   type GoogleAdsRawSnapshotDto,
   type GoogleMarketingProvider,
   type GtmAccountsResponse,
@@ -854,6 +871,375 @@ function latestGtmSnapshot(app: FastifyInstance, projectId: string): GtmRawSnaps
   return snapshot
 }
 
+// --- Google Ads stored performance -------------------------------------------
+
+const googleAdsPerformanceQuerySchema = z.object({
+  window: googleAdsMetricsWindowSchema.optional(),
+}).strict()
+
+const GOOGLE_ADS_PERFORMANCE_WINDOW_DAYS: Record<GoogleAdsMetricsWindow, number> = {
+  '7d': 7,
+  '14d': 14,
+  '30d': 30,
+}
+
+const GOOGLE_ADS_PERFORMANCE_DEFAULT_WINDOW: GoogleAdsMetricsWindow = '14d'
+
+/**
+ * Running sums for one scope. Deliberately separate from the DTO so every ratio
+ * is derived exactly once, from the finished sums, instead of being averaged
+ * out of per-day ratios.
+ */
+interface GoogleAdsMetricSums {
+  impressions: number
+  clicks: number
+  costMicros: number
+  conversions: number
+  /** Null until a row in scope reports a value: unreported is not a measured zero. */
+  conversionValueMicros: number | null
+}
+
+function emptyGoogleAdsMetricSums(): GoogleAdsMetricSums {
+  return { impressions: 0, clicks: 0, costMicros: 0, conversions: 0, conversionValueMicros: null }
+}
+
+function addGoogleAdsMetricRow(sums: GoogleAdsMetricSums, row: GoogleAdsCampaignMetricDto): void {
+  sums.impressions += row.impressions
+  sums.clicks += row.clicks
+  sums.costMicros += row.costMicros
+  sums.conversions += row.conversions
+  if (row.conversionValueMicros !== null) {
+    sums.conversionValueMicros = (sums.conversionValueMicros ?? 0) + row.conversionValueMicros
+  }
+}
+
+/**
+ * Money stays INTEGER MICROS and every ratio stays a RAW float: rounding here
+ * would be a display decision baked into the transport, and a renderer can no
+ * longer recover the measured value from a rounded one.
+ *
+ * A ratio with a zero denominator is null, never 0. An undefined 0/0 is not the
+ * same fact as a measured zero, and a chart that plots it as 0 invents a point.
+ */
+function googleAdsMetricTotals(sums: GoogleAdsMetricSums): GoogleAdsMetricTotals {
+  return {
+    impressions: sums.impressions,
+    clicks: sums.clicks,
+    costMicros: sums.costMicros,
+    conversions: sums.conversions,
+    conversionValueMicros: sums.conversionValueMicros,
+    ctr: sums.impressions === 0 ? null : sums.clicks / sums.impressions,
+    cpcMicros: sums.clicks === 0 ? null : Math.round(sums.costMicros / sums.clicks),
+    conversionRate: sums.clicks === 0 ? null : sums.conversions / sums.clicks,
+    costPerConversionMicros: sums.conversions === 0 ? null : Math.round(sums.costMicros / sums.conversions),
+  }
+}
+
+
+/** The stored metrics snapshot plus the account labels the DTO reports beside it. */
+interface GoogleAdsMetricsEvidence {
+  snapshotId: string
+  capturedAt: string
+  customerId: string
+  currencyCode: string | null
+  timeZone: string | null
+  metrics: GoogleAdsCampaignMetricsResponse
+}
+
+/**
+ * The newest stored `campaign-metrics` snapshot for the connection's CURRENT
+ * selection generation. Anchored on the connection's exact snapshot id, the way
+ * the inventory read is: timestamp ordering alone would happily return evidence
+ * captured for a customer the operator has since replaced.
+ *
+ * This is a stored read. It must never reach the Google Ads API — a live read
+ * spends the advertiser's budget and is gated behind live-read authority that a
+ * plain dashboard reader does not hold.
+ */
+function latestGoogleAdsMetricsEvidence(app: FastifyInstance, projectId: string): GoogleAdsMetricsEvidence | null {
+  const connection = app.db.select().from(googleAdsConnections)
+    .where(eq(googleAdsConnections.projectId, projectId)).get()
+  if (!connection?.selectedCustomerId || !connection.lastMetricsSnapshotId || !connection.lastMetricsSnapshotAt) return null
+  const conditions: SQL[] = [
+    eq(googleAdsRawSnapshots.projectId, projectId),
+    eq(googleAdsRawSnapshots.id, connection.lastMetricsSnapshotId),
+    eq(googleAdsRawSnapshots.connectionId, connection.id),
+    eq(googleAdsRawSnapshots.customerId, connection.selectedCustomerId),
+    eq(googleAdsRawSnapshots.kind, GoogleAdsSnapshotKinds['campaign-metrics']),
+    eq(googleAdsRawSnapshots.capturedAt, connection.lastMetricsSnapshotAt),
+  ]
+  const row = app.db.select().from(googleAdsRawSnapshots).where(and(...conditions)).get()
+  const snapshot = row ? toGoogleAdsSnapshot(row) : null
+  if (
+    !snapshot
+    || snapshot.metadata.id !== connection.lastMetricsSnapshotId
+    || snapshot.metadata.connectionId !== connection.id
+    || snapshot.metadata.customerId !== connection.selectedCustomerId
+    || snapshot.metadata.capturedAt !== connection.lastMetricsSnapshotAt
+    || snapshot.payload.kind !== GoogleAdsSnapshotKinds['campaign-metrics']
+  ) return null
+  return {
+    snapshotId: snapshot.metadata.id,
+    capturedAt: snapshot.metadata.capturedAt,
+    customerId: connection.selectedCustomerId,
+    currencyCode: connection.selectedCustomerCurrencyCode,
+    timeZone: connection.selectedCustomerTimeZone,
+    metrics: snapshot.payload.data,
+  }
+}
+
+interface GoogleAdsClosedPeriod {
+  startDate: string
+  endDate: string
+  days: number
+}
+
+/**
+ * The window's closed-day bounds, clamped to what the snapshot actually covers.
+ *
+ * Clamping rather than extending is the point: a day before the snapshot's own
+ * query range was never measured, and densifying it to zero would report an
+ * outage the advertiser never had.
+ */
+function googleAdsClosedWindow(
+  coverageStart: string,
+  asOfDate: string,
+  windowDays: number,
+): GoogleAdsClosedPeriod | null {
+  const closedDays = inclusiveDayCount(coverageStart, asOfDate)
+  if (closedDays === null || closedDays < 1) return null
+  const days = Math.min(windowDays, closedDays)
+  return { startDate: shiftIsoCalendarDate(asOfDate, -(days - 1)), endDate: asOfDate, days }
+}
+
+function googleAdsRowsInPeriod(
+  rows: readonly GoogleAdsCampaignMetricDto[],
+  period: GoogleAdsClosedPeriod,
+): GoogleAdsCampaignMetricDto[] {
+  return rows.filter(row => row.date >= period.startDate && row.date <= period.endDate)
+}
+
+function googleAdsSumOf(rows: readonly GoogleAdsCampaignMetricDto[]): GoogleAdsMetricSums {
+  const sums = emptyGoogleAdsMetricSums()
+  for (const row of rows) addGoogleAdsMetricRow(sums, row)
+  return sums
+}
+
+/**
+ * One point per CALENDAR day in the period, not one per row the provider
+ * returned. Google Ads omits a day with no delivery, so a series built from
+ * "days that exist" silently compresses the x-axis; `origin` records which days
+ * were densified. A filled day carries measured zeros, because on this provider
+ * a missing day means zero delivery, not unknown delivery.
+ */
+function googleAdsDailySeries(
+  rows: readonly GoogleAdsCampaignMetricDto[],
+  period: GoogleAdsClosedPeriod,
+): GoogleAdsMetricsDailyPoint[] {
+  const byDate = new Map<string, GoogleAdsMetricSums>()
+  for (const row of rows) {
+    const sums = byDate.get(row.date) ?? emptyGoogleAdsMetricSums()
+    addGoogleAdsMetricRow(sums, row)
+    byDate.set(row.date, sums)
+  }
+  return calendarDateRange(period.startDate, period.endDate).map((date): GoogleAdsMetricsDailyPoint => {
+    const sums = byDate.get(date)
+    if (!sums) {
+      return { date, origin: 'filled', impressions: 0, clicks: 0, costMicros: 0, conversions: 0, ctr: null }
+    }
+    return {
+      date,
+      origin: 'provider',
+      impressions: sums.impressions,
+      clicks: sums.clicks,
+      costMicros: sums.costMicros,
+      conversions: sums.conversions,
+      ctr: sums.impressions === 0 ? null : sums.clicks / sums.impressions,
+    }
+  })
+}
+
+/**
+ * Per-campaign totals for the window, labelled from the stored inventory.
+ *
+ * A campaign the metrics snapshot names but the inventory snapshot does not is
+ * still returned, with a null name and `unknown` status. Dropping it would
+ * silently remove real spend from a per-campaign table whose column total is
+ * expected to reconcile with the window total.
+ */
+function googleAdsCampaignPerformance(
+  rows: readonly GoogleAdsCampaignMetricDto[],
+  inventory: GoogleAdsInventoryDto | null,
+): GoogleAdsCampaignPerformance[] {
+  const labels = new Map((inventory?.campaigns ?? []).map(campaign => [campaign.id, campaign]))
+  const byCampaign = new Map<string, GoogleAdsMetricSums>()
+  for (const row of rows) {
+    const sums = byCampaign.get(row.campaignId) ?? emptyGoogleAdsMetricSums()
+    addGoogleAdsMetricRow(sums, row)
+    byCampaign.set(row.campaignId, sums)
+  }
+  return [...byCampaign.entries()]
+    // Spend descending: the biggest spender is the row an operator looks for
+    // first, and campaignId order is meaningless to a human. Sorted here rather
+    // than in the component so the CLI, which iterates DTO order, matches the
+    // dashboard. campaignId breaks ties so the order stays stable across reads.
+    .sort(([leftId, leftSums], [rightId, rightSums]) =>
+      rightSums.costMicros - leftSums.costMicros || leftId.localeCompare(rightId))
+    .map(([campaignId, sums]): GoogleAdsCampaignPerformance => {
+      const label = labels.get(campaignId)
+      return {
+        campaignId,
+        name: label?.name ?? null,
+        status: label?.status ?? GoogleAdsCampaignStatuses.unknown,
+        totals: googleAdsMetricTotals(sums),
+      }
+    })
+}
+
+function googleAdsChangeRatio(current: number | null, prior: number | null): number | null {
+  if (current === null || prior === null) return null
+  return relativeChangeRatio(current, prior)
+}
+
+/**
+ * Prior-equal-period comparison, or null when the stored snapshot cannot cover
+ * 2N closed days.
+ *
+ * A snapshot holds GOOGLE_ADS_CAMPAIGN_METRICS_MAX_DAYS (31) days of which at
+ * most 30 are closed, so a 30d window can never have a prior period. Reporting
+ * a truncated prior period as if it were equal-length would manufacture a
+ * decline out of the missing days.
+ */
+function googleAdsComparison(
+  metrics: GoogleAdsCampaignMetricsResponse,
+  current: GoogleAdsClosedPeriod,
+  currentTotals: GoogleAdsMetricTotals,
+  windowDays: number,
+): GoogleAdsPerformanceComparison | null {
+  if (current.days !== windowDays) return null
+  const priorEnd = shiftIsoCalendarDate(current.startDate, -1)
+  const priorStart = shiftIsoCalendarDate(priorEnd, -(windowDays - 1))
+  if (priorStart < metrics.query.startDate) return null
+  const prior: GoogleAdsClosedPeriod = { startDate: priorStart, endDate: priorEnd, days: windowDays }
+  const priorTotals = googleAdsMetricTotals(googleAdsSumOf(googleAdsRowsInPeriod(metrics.rows, prior)))
+  return {
+    days: windowDays,
+    prior: { startDate: priorStart, endDate: priorEnd, days: windowDays, totals: priorTotals },
+    change: {
+      impressions: googleAdsChangeRatio(currentTotals.impressions, priorTotals.impressions),
+      clicks: googleAdsChangeRatio(currentTotals.clicks, priorTotals.clicks),
+      costMicros: googleAdsChangeRatio(currentTotals.costMicros, priorTotals.costMicros),
+      conversions: googleAdsChangeRatio(currentTotals.conversions, priorTotals.conversions),
+      ctr: googleAdsChangeRatio(currentTotals.ctr, priorTotals.ctr),
+      conversionRate: googleAdsChangeRatio(currentTotals.conversionRate, priorTotals.conversionRate),
+    },
+  }
+}
+
+/**
+ * The documented empty payload for a project with no usable stored metrics.
+ *
+ * Deliberately a 200, not a 404: "this project has no Google Ads evidence yet"
+ * is a real, renderable answer, and a 404 would make a dashboard show an error
+ * for the ordinary pre-sync state. The window is still named so the caller can
+ * label the empty chart; with no payload to read a date from, the request clock
+ * is the only source available, and no measured value depends on it.
+ */
+function emptyGoogleAdsPerformance(
+  window: GoogleAdsMetricsWindow,
+  windowDays: number,
+  reason: 'insufficient-history' | 'no-snapshot',
+  endDate: string,
+): GoogleAdsPerformanceDto {
+  return {
+    window,
+    startDate: shiftIsoCalendarDate(endDate, -(windowDays - 1)),
+    endDate,
+    days: windowDays,
+    totals: googleAdsMetricTotals(emptyGoogleAdsMetricSums()),
+    daily: [],
+    campaigns: [],
+    comparison: null,
+    comparisonUnavailableReason: reason,
+    source: null,
+  }
+}
+
+/**
+ * Computed Google Ads performance over CLOSED days only.
+ *
+ * The capture day is excluded from every window. Snapshots are taken mid-day, so
+ * that day is partial, and including it draws a fabricated cliff on the right
+ * edge of every chart. The cutoff comes from the payload's own `fetchedAt`, never
+ * from a server clock: a stale snapshot must keep reporting the window it
+ * actually measured instead of sliding forward and inventing empty days.
+ */
+function googleAdsPerformance(
+  app: FastifyInstance,
+  projectId: string,
+  window: GoogleAdsMetricsWindow,
+): GoogleAdsPerformanceDto {
+  const windowDays = GOOGLE_ADS_PERFORMANCE_WINDOW_DAYS[window]
+  const evidence = latestGoogleAdsMetricsEvidence(app, projectId)
+  if (!evidence) {
+    // Today is still open everywhere, so an empty window is still labelled as
+    // ending on a closed day. Nothing measured depends on this date.
+    const today = formatIsoDate(new Date().toISOString())
+    return emptyGoogleAdsPerformance(window, windowDays, 'no-snapshot', shiftIsoCalendarDate(today, -1))
+  }
+
+  const { metrics } = evidence
+  // Google Ads buckets metrics by the ACCOUNT's calendar day, so the capture
+  // date must be read in the account's zone. A UTC-derived date is a whole day
+  // ahead or behind for part of every day in a non-UTC account.
+  const captureDate = formatIsoDateInTimeZone(metrics.fetchedAt, evidence.timeZone ?? 'UTC')
+  const openDate = captureDate >= metrics.query.startDate && captureDate <= metrics.query.endDate
+    ? captureDate
+    : null
+  const asOfDate = captureDate <= metrics.query.endDate
+    ? shiftIsoCalendarDate(captureDate, -1)
+    : metrics.query.endDate
+  const current = googleAdsClosedWindow(metrics.query.startDate, asOfDate, windowDays)
+  if (!current) {
+    // A snapshot whose whole queried range is the still-open capture day holds
+    // no closed evidence at all. There is nothing to report and nothing to
+    // compare, so say so rather than publish the partial day.
+    return emptyGoogleAdsPerformance(window, windowDays, 'insufficient-history', asOfDate)
+  }
+
+  const windowRows = googleAdsRowsInPeriod(metrics.rows, current)
+  const totals = googleAdsMetricTotals(googleAdsSumOf(windowRows))
+  const inventorySnapshot = latestGoogleAdsSnapshot(app, projectId)
+  const inventory = inventorySnapshot?.payload.kind === GoogleAdsSnapshotKinds.inventory
+    ? inventorySnapshot.payload.data
+    : null
+  const comparison = googleAdsComparison(metrics, current, totals, windowDays)
+
+  return {
+    window,
+    startDate: current.startDate,
+    endDate: current.endDate,
+    days: current.days,
+    totals,
+    daily: googleAdsDailySeries(windowRows, current),
+    campaigns: googleAdsCampaignPerformance(windowRows, inventory),
+    comparison,
+    comparisonUnavailableReason: comparison ? null : 'insufficient-history',
+    source: {
+      snapshotId: evidence.snapshotId,
+      capturedAt: evidence.capturedAt,
+      customerId: evidence.customerId,
+      currencyCode: evidence.currencyCode,
+      timeZone: evidence.timeZone,
+      asOfDate,
+      openDate,
+      truncated: metrics.truncated,
+      campaignsQueried: metrics.query.campaignIds.length,
+      campaignsInInventory: inventory?.campaigns.length ?? 0,
+    },
+  }
+}
+
 function toConversionTrackingContract(row: typeof conversionTrackingContracts.$inferSelect): ConversionTrackingContract {
   const parsed = conversionTrackingContractSchema.safeParse({
     id: row.id,
@@ -1410,6 +1796,57 @@ export async function googleMarketingRoutes(app: FastifyInstance, opts: GoogleMa
 
   // --- Resource selection --------------------------------------------------------
 
+  /**
+   * Queue a provider sync right after a selection, so an operator is never left
+   * connected with no data.
+   *
+   * Selecting a customer or container clears every snapshot pointer, which put
+   * the project in a state that reads as "not set up": status stays
+   * `selection-required` because the selected resource resolves from a snapshot
+   * that no longer exists, the metrics view has nothing to show, and the
+   * conversion form falls back to hand-typed ids. Selection is an explicit act
+   * with exactly one sensible follow-up, so it should not be homework.
+   *
+   * GATED IDENTICALLY TO THE SYNC ROUTE. A caller holding only the write scope
+   * must not be able to cause a provider call through selection that it cannot
+   * make directly, so a caller failing that gate simply gets the previous
+   * behaviour rather than an error: the selection itself already succeeded.
+   */
+  const queueSelectionSync = (
+    request: FastifyRequest,
+    projectId: string,
+    kind: 'google-ads-sync' | 'gtm-sync',
+    callback: ((runId: string, projectId: string) => void | Promise<void>) | undefined,
+  ): string | null => {
+    if (!callback) return null
+    try {
+      requireLiveRead(request)
+    } catch {
+      return null
+    }
+    // ALWAYS queue a successor; never reuse an in-flight run.
+    //
+    // Selection increments `selectionGeneration`, and the sync worker CAS-writes
+    // its evidence gated on that generation (google-marketing-sync.ts). So a run
+    // queued before this selection is already doomed: it will fail the compare
+    // and throw. Reusing it would leave the new selection with no sync at all,
+    // which is exactly the dead state this helper exists to prevent.
+    //
+    // Two rapid selections therefore queue two runs. That is correct rather than
+    // wasteful: each one is a distinct generation and the earlier run cannot
+    // satisfy the later selection.
+    const run = queuedRun(projectId, RunKinds[kind])
+    app.db.transaction((tx) => {
+      tx.insert(runs).values(run).run()
+      writeAuditLog(tx, auditFromRequest(request, {
+        projectId, actor: 'api', action: `${kind}.requested-on-selection`,
+        entityType: 'run', entityId: run.id,
+      }))
+    })
+    enqueueAfterCommit(app, callback, run.id, projectId, kind)
+    return run.id
+  }
+
   app.put<{ Params: { name: string }; Body: unknown }>('/projects/:name/google-ads/selection', async (request) => {
     requireWrite(request)
     const parsedBody = parseBody(googleAdsCustomerSelectionRequestSchema, request.body, 'Google Ads selection')
@@ -1448,6 +1885,7 @@ export async function googleMarketingRoutes(app: FastifyInstance, opts: GoogleMa
         diff: { loginCustomerId: body.loginCustomerId ?? null, customerId: body.customerId },
       }))
     })
+    queueSelectionSync(request, project.id, 'google-ads-sync', opts.onGoogleAdsSyncRequested)
     return googleAdsStatus(app, opts, projectRef)
   })
 
@@ -1490,6 +1928,7 @@ export async function googleMarketingRoutes(app: FastifyInstance, opts: GoogleMa
         diff: { accountId: body.accountId, containerId: body.containerId, workspaceId: body.workspaceId ?? null },
       }))
     })
+    queueSelectionSync(request, project.id, 'gtm-sync', opts.onGtmSyncRequested)
     return gtmStatus(app, opts, projectRef)
   })
 
@@ -1563,6 +2002,20 @@ export async function googleMarketingRoutes(app: FastifyInstance, opts: GoogleMa
     })
     if (queued) enqueueAfterCommit(app, opts.onGtmSyncRequested, run.id, project.id, 'gtm-sync')
     return run
+  })
+
+  // --- Computed stored performance ----------------------------------------------
+
+  // Stored-evidence read. It deliberately does NOT reach Google: a live metrics
+  // read spends the advertiser's budget and is gated behind live-read authority,
+  // while this is the figure a dashboard renders on every page load.
+  app.get<{
+    Params: { name: string }
+    Querystring: { window?: string }
+  }>('/projects/:name/google-ads/performance', async (request) => {
+    const project = resolveProject(app.db, request.params.name)
+    const query = parseBody(googleAdsPerformanceQuerySchema, request.query, 'Google Ads performance')
+    return googleAdsPerformance(app, project.id, query.window ?? GOOGLE_ADS_PERFORMANCE_DEFAULT_WINDOW)
   })
 
   // --- Append-only sanitized snapshot reads -------------------------------------
@@ -1707,6 +2160,56 @@ export async function googleMarketingRoutes(app: FastifyInstance, opts: GoogleMa
   })
 
   // --- Conversion-tracking contract + integrity reads ---------------------------
+
+  /**
+   * Options for the declare-a-conversion form.
+   *
+   * Reads the latest STORED snapshots only, so it costs no provider quota and
+   * cannot spend the advertiser's budget. Without this the operator had to copy
+   * two opaque numeric ids out of the Google Ads and Tag Manager consoles by
+   * hand, which fails only after saving and produces a contract that silently
+   * checks the wrong thing on a typo.
+   */
+  app.get<{ Params: { name: string } }>('/projects/:name/conversion-tracking/options', async (request) => {
+    const project = resolveProject(app.db, request.params.name)
+
+    const adsSnapshot = latestGoogleAdsSnapshot(app, project.id)
+    const adsInventory = adsSnapshot?.payload.kind === GoogleAdsSnapshotKinds.inventory
+      ? adsSnapshot.payload.data
+      : null
+
+    const gtmSnapshot = latestGtmSnapshot(app, project.id)
+    const gtmContainer = gtmSnapshot?.payload.kind === GtmSnapshotKinds.container
+      ? gtmSnapshot.payload.data
+      : null
+    // The draft workspace is what the operator is editing; fall back to live.
+    const gtmGraph = (gtmContainer?.draft ?? gtmContainer?.live)?.graph ?? null
+
+    return {
+      googleAds: {
+        customerId: adsSnapshot?.metadata.customerId ?? null,
+        syncedAt: adsSnapshot?.metadata.capturedAt ?? null,
+        conversionActions: (adsInventory?.conversionActions ?? []).map(action => ({
+          id: action.id,
+          name: action.name,
+          detail: action.category,
+          // A removed action is still offered: an existing contract may point
+          // at one, and hiding it would make that contract unexplainable.
+          active: action.status !== 'removed',
+        })),
+      },
+      gtm: {
+        containerId: gtmSnapshot?.metadata.containerId ?? null,
+        syncedAt: gtmSnapshot?.metadata.capturedAt ?? null,
+        tags: (gtmGraph?.tags ?? []).map(tag => ({
+          id: tag.id,
+          name: tag.name,
+          detail: tag.type,
+          active: !tag.paused,
+        })),
+      },
+    }
+  })
 
   app.get<{ Params: { name: string } }>('/projects/:name/conversion-tracking/contracts', async (request) => {
     const project = resolveProject(app.db, request.params.name)

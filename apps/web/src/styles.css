@@ -159,7 +159,10 @@
   --chart-site-health-resource: #d4d4d8;
   --chart-site-health-redirect: #9aa7b8;
   --chart-neutral-text: #a1a1aa;
-  --chart-neutral-text-dim: #71717a;
+  /* 5.89:1 on --chart-bg #09090b. zinc-500 (#71717a) is 4.12:1 and fails
+     WCAG AA for the 11px axis ticks in CHART_AXIS_TICK. The light-mode value
+     below stays zinc-500: on white it is 4.83:1 and already passes. */
+  --chart-neutral-text-dim: #8b8b93;
   --chart-neutral-text-faint: #52525b;
   --chart-neutral-surface: #27272a;
   --chart-neutral-track-subtle: rgb(255 255 255 / 0.04);

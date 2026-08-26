@@ -6,6 +6,8 @@ import type {
   GoogleAdsAccessibleCustomersResponse,
   GoogleAdsConnectionStatusDto,
   GoogleAdsCustomerSelectionRequest,
+  GoogleAdsMetricsWindow,
+  GoogleAdsPerformanceDto,
   GoogleAdsStoredSnapshotPage,
   GoogleAdsStoredSnapshotReadEnvelope,
   GoogleMarketingDisconnectResponse,
@@ -23,6 +25,7 @@ import {
   canonicalizeGtmResourceSelection,
   conversionTrackingContractWriteRequestSchema,
   describeError,
+  formatMicros,
 } from '@ainyc/canonry-contracts'
 import { CliError, isMachineFormat } from '../cli-error.js'
 import { emitJsonl } from '../cli-output.js'
@@ -40,6 +43,7 @@ export interface GoogleMarketingCliClient {
   listGoogleAdsCustomers(project: string): Promise<GoogleAdsAccessibleCustomersResponse>
   setGoogleAdsSelection(project: string, request: GoogleAdsCustomerSelectionRequest): Promise<GoogleAdsConnectionStatusDto>
   triggerGoogleAdsSync(project: string): Promise<RunDto>
+  getGoogleAdsPerformance(project: string, query?: { window?: GoogleAdsMetricsWindow }): Promise<GoogleAdsPerformanceDto>
   listGoogleAdsSnapshots(project: string, query?: { limit?: number; cursor?: string }): Promise<GoogleAdsStoredSnapshotPage>
   getGoogleAdsSnapshot(project: string, snapshotId: string): Promise<GoogleAdsStoredSnapshotReadEnvelope>
 
@@ -231,6 +235,87 @@ export async function googleAdsSync(
   const run = await client.triggerGoogleAdsSync(project)
   if (printMachine(run, opts.format)) return
   console.log(`Google Ads read-only sync queued (run ${run.id}). Use \`canonry run show ${run.id}\` to check it.`)
+}
+
+/**
+ * Every money field crossing this boundary is INTEGER MICROS. It becomes a
+ * currency string HERE, at the render edge, and nowhere earlier: `--format json`
+ * must stay byte-identical to the API response so an agent can swap a UI fetch
+ * for this command without re-deriving anything.
+ */
+function performanceMicros(micros: number | null, currencyCode: string | null): string {
+  if (micros === null) return '—'
+  // No resolved account currency: print the magnitude without asserting a unit.
+  // Defaulting to USD puts a dollar sign on a EUR account, which is a wrong
+  // number rather than a missing one.
+  if (currencyCode === null) return (micros / 1_000_000).toFixed(2)
+  return formatMicros(micros, currencyCode)
+}
+
+/** A raw ratio becomes a percentage only for a human reader; null stays visibly absent. */
+function performanceRatio(ratio: number | null): string {
+  return ratio === null ? '—' : `${(ratio * 100).toFixed(2)}%`
+}
+
+function performanceChange(ratio: number | null): string {
+  if (ratio === null) return ''
+  const sign = ratio > 0 ? '+' : ''
+  return ` (${sign}${(ratio * 100).toFixed(1)}% vs prior period)`
+}
+
+export async function googleAdsPerformance(
+  client: GoogleMarketingCliClient,
+  project: string,
+  opts: { window?: GoogleAdsMetricsWindow; format?: string },
+): Promise<void> {
+  const result = await client.getGoogleAdsPerformance(project, opts.window ? { window: opts.window } : {})
+  if (printMachine(result, opts.format)) return
+
+  if (!result.source) {
+    console.log(`No stored Google Ads metrics for project "${project}".`)
+    console.log(`Run \`canonry google-ads sync ${project}\` after selecting a customer.`)
+    return
+  }
+
+  const currency = result.source.currencyCode
+  const { totals, comparison } = result
+  console.log(`Window:       ${result.startDate} → ${result.endDate} (${result.days} closed day(s), ${result.window})`)
+  // The capture day is PARTIAL, so it is excluded. Saying so keeps a reader from
+  // reading the newest closed day as "today is down".
+  console.log(`As of:        ${result.source.asOfDate}${result.source.openDate ? ` (${result.source.openDate} still open, excluded)` : ''}`)
+  console.log(`Account:      ${result.source.customerId} (${currency ?? '?'}, ${result.source.timeZone ?? 'unknown zone'})`)
+  console.log(`Impressions:  ${totals.impressions}${performanceChange(comparison?.change.impressions ?? null)}`)
+  console.log(`Clicks:       ${totals.clicks} (CTR ${performanceRatio(totals.ctr)})${performanceChange(comparison?.change.clicks ?? null)}`)
+  console.log(`Cost:         ${performanceMicros(totals.costMicros, currency)} (CPC ${performanceMicros(totals.cpcMicros, currency)})${performanceChange(comparison?.change.costMicros ?? null)}`)
+  console.log(`Conversions:  ${totals.conversions} (rate ${performanceRatio(totals.conversionRate)}, cost/conv ${performanceMicros(totals.costPerConversionMicros, currency)})`)
+  if (!comparison) {
+    console.log(`Comparison:   unavailable (${result.comparisonUnavailableReason ?? 'unknown'})`)
+  }
+  // The row cap and the 50-campaign query cap are DIFFERENT limits. An account
+  // with more than 50 campaigns is summed from the queried subset while
+  // `truncated` stays false, so reporting coverage only on `truncated` would
+  // print a subtotal as the account total. Compare the counts directly.
+  if (result.source.campaignsInInventory > 0 && result.source.campaignsQueried < result.source.campaignsInInventory) {
+    console.log(`Coverage:     ${result.source.campaignsQueried} of ${result.source.campaignsInInventory} campaigns; totals are a subset of the account.`)
+  }
+  if (result.source.truncated) {
+    // `truncated` is set by the sync from EITHER the provider row cap or the
+    // 50-campaign selection cap, so naming one of them is wrong half the time.
+    console.log(`Note:         the provider returned a bounded result, so these totals are a subset sum.`)
+  }
+
+  if (result.campaigns.length > 0) {
+    console.log(`\n${result.campaigns.length} campaign(s):\n`)
+    for (const campaign of result.campaigns) {
+      const label = campaign.name ?? `(not in stored inventory: ${campaign.campaignId})`
+      console.log(`  ${label.padEnd(32).slice(0, 32)}  ${campaign.status.padEnd(8)}  ${String(campaign.totals.impressions).padStart(8)} impr  ${String(campaign.totals.clicks).padStart(6)} clicks  ${performanceMicros(campaign.totals.costMicros, currency).padStart(12)}`)
+    }
+  }
+
+  const filled = result.daily.filter(point => point.origin === 'filled').length
+  if (filled > 0) {
+    console.log(`\n${filled} of ${result.daily.length} day(s) had no delivery and are reported as zero.`)
+  }
 }
 
 export async function googleAdsSnapshots(
