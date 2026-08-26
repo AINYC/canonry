@@ -330,6 +330,83 @@ function partitionDeadLinks(deadLinks: SiteCrawlReport['deadLinks']): {
  * reads publish only complete snapshots as current; an explicitly selected
  * partial run remains inspectable without replacing the last known-good graph.
  */
+
+/**
+ * The crawl budgets that go with a page budget.
+ *
+ * The engine defaults are sized for a general-purpose crawl and are the reason
+ * asking for 1,000 pages used to yield 140: `maxPages` bounds how many URLs are
+ * ADMITTED to the frontier, while `maxBytes` bounds how many are actually
+ * FETCHED out of it. A site serving ~745 KB of decompressed HTML per page
+ * exhausts the 100 MB default after ~140 pages, whatever the page budget says,
+ * and gzip does not help because the cap counts decompressed bytes.
+ *
+ * Two failures follow from that, and both are worse than the truncation:
+ *
+ * - The budget latch is first-write-wins, so a soft admission-side reason
+ *   (`max-query-variants`, hit while seeding the sitemap) masks the real
+ *   byte stop. `isHardFetchStop()` stays false and the crawler keeps issuing
+ *   real requests at the audited site while discarding every response, until
+ *   the duration cap ends the run. The "safe partial audit" was the LEAST
+ *   polite mode we had.
+ * - The run then records the masked reason, so the database misreports why it
+ *   stopped.
+ *
+ * Sizing every budget from `maxPages` is what avoids both: with the byte cap
+ * out of reach, the crawl ends because it ran out of admitted URLs, which is a
+ * stop we can report honestly.
+ */
+
+/**
+ * Why the crawl actually stopped.
+ *
+ * `terminationReason` cannot be trusted on its own: the engine's budget latch
+ * is first-write-wins, so a soft admission-side reason hit while seeding the
+ * sitemap masks whatever really ended the fetch loop. A byte-capped run was
+ * being recorded as `max-query-variants`, which sent anyone reading the row
+ * looking at the wrong budget entirely.
+ *
+ * The summary carries the counters to settle it, so prefer the measurement
+ * over the label and fall back to the label only when nothing was exhausted.
+ */
+export function reportedTermination(summary: {
+  terminationReason: string | null
+  bytesRead?: number
+  elapsedMs?: number
+  fetchesStarted?: number
+  limits?: { maxBytes?: number; maxDurationMs?: number; maxFetches?: number }
+}): string {
+  const limits = summary.limits
+  if (limits) {
+    if (limits.maxBytes && (summary.bytesRead ?? 0) >= limits.maxBytes) return 'max-bytes'
+    if (limits.maxDurationMs && (summary.elapsedMs ?? 0) >= limits.maxDurationMs) return 'max-duration'
+    if (limits.maxFetches && (summary.fetchesStarted ?? 0) >= limits.maxFetches) return 'max-fetches'
+  }
+  return summary.terminationReason ?? 'complete'
+}
+
+export function crawlBudgetsFor(maxPages: number): {
+  maxBytes: number
+  maxDurationMs: number
+  maxFetches: number
+  maxQueryVariants: number
+} {
+  return {
+    // 2x the ~745 KB/page measured on a media-heavy production site, so the
+    // byte cap is headroom rather than the thing that stops the crawl.
+    maxBytes: maxPages * 1_500_000,
+    // ~5 pages/s at the engine's default concurrency of 5, doubled for slow
+    // origins, and never below the engine's own 2-minute floor.
+    maxDurationMs: Math.max(120_000, Math.ceil((maxPages / 5) * 1_000 * 2)),
+    // Redirects and dead-link probes cost fetches without producing pages.
+    maxFetches: Math.ceil(maxPages * 1.5),
+    // Raised off the default of 10 because it is an ADMISSION limit: a sitemap
+    // with many query-parameter variants trips it during seeding and latches a
+    // soft reason that then masks whatever really stops the crawl.
+    maxQueryVariants: Math.max(50, Math.ceil(maxPages / 10)),
+  }
+}
+
 export async function executeSiteAudit(
   db: DatabaseClient,
   runId: string,
@@ -695,6 +772,7 @@ export async function executeSiteAudit(
       maxEdges,
       maxDepth: opts.maxDepth ?? null,
     })
+    const budgets = crawlBudgetsFor(maxPages)
     const report: SiteCrawlReport = await runSiteCrawl(crawlRootUrl, {
       mode: 'summary',
       sitemapUrl: opts.sitemapUrl,
@@ -702,6 +780,7 @@ export async function executeSiteAudit(
       maxEdges,
       maxDepth: opts.maxDepth,
       checkDeadLinks: opts.checkDeadLinks ?? false,
+      ...budgets,
       signal: opts.signal,
       onEvent: persistEvent,
     })
@@ -852,7 +931,7 @@ export async function executeSiteAudit(
         maxDepth: opts.maxDepth ?? null,
         checkDeadLinks: opts.checkDeadLinks ?? false,
         complete: crawlSummary.complete,
-        termination: crawlSummary.terminationReason ?? 'complete',
+        termination: reportedTermination(crawlSummary),
         detailsAvailable: true,
         pagesDiscovered: crawlSummary.pagesDiscovered,
         pagesFetched: crawlSummary.pagesFetched,
