@@ -12,7 +12,7 @@ import { Button } from '../components/ui/button.js'
 import { Card } from '../components/ui/card.js'
 import { WriteButton } from '../components/shared/AccessControls.js'
 import { InfoTooltip } from '../components/shared/InfoTooltip.js'
-import { MentionShare } from '../components/project/MentionShare.js'
+import { MentionShare, mentionClassFigures } from '../components/project/MentionShare.js'
 import { CitationBadge } from '../components/shared/CitationBadge.js'
 import { ProviderBadge } from '../components/shared/ProviderBadge.js'
 import { RunRow } from '../components/shared/RunRow.js'
@@ -1115,7 +1115,7 @@ function OverviewBrief({
 
   const headline = (() => {
     if (sweepRunning) return 'A fresh sweep is running now'
-    if (!comparison.hasPreviousRun) return 'Baseline captured. The next sweep will show change.'
+    if (!comparison.hasPreviousRun) return 'Baseline captured'
     if (comparison.querySetChanged) return 'Tracking scope changed since the previous sweep'
     if (mentionDirection === citationDirection) {
       if (mentionDirection === 'steady') return 'Answer mentions and citation coverage held steady'
@@ -1149,7 +1149,7 @@ function OverviewBrief({
             Visibility
             <InfoTooltip text="Each sweep records two independent signals: answer mentions (your brand named in the answer text) and source citations (your domain in the engine's source list). They move separately." />
           </p>
-          <h2 id="overview-brief-title" className="overview-brief-title">{headline}</h2>
+          <h2 id="overview-brief-title" className={`overview-brief-title${!sweepRunning && !comparison.hasPreviousRun ? ' overview-brief-title-quiet' : ''}`}>{headline}</h2>
         </div>
         <p className="overview-brief-updated">
           {latestSweep ? `Updated ${latestSweep.startedAt}` : 'No completed sweep'}
@@ -1243,6 +1243,36 @@ function OverviewDisclosure({
       </summary>
       <div className="overview-disclosure-body">{children}</div>
     </details>
+  )
+}
+
+/**
+ * The competitive panel with zero tracked competitors. The full scaffolding
+ * (class toggle, share figure, gap meters reading "0 / N") implies an all-clear
+ * that nothing measured; instead this states the situation in one row and the
+ * header's "+ Add competitor" button stays the only owner of the action.
+ */
+function CompetitiveEmptyState({
+  summary,
+}: {
+  summary: ProjectCommandCenterVm['mentionShareSummary']
+}) {
+  const figures = mentionClassFigures(summary.breakdown, {
+    hasCompetitors: false,
+    unavailable: summary.unavailable === true,
+    noRun: summary.breakdown.snapshotsTotal === 0 && summary.branded.snapshotsTotal === 0,
+    otherClassHasData: summary.branded.snapshotsTotal > 0,
+  })
+  return (
+    <div className="rounded-xl border border-default bg-surface px-5 py-4">
+      <p className="text-sm text-strong">
+        No competitors tracked
+        <span className="text-faint"> · {figures.detail}</span>
+      </p>
+      <p className="mt-1 text-[13px] text-secondary">
+        Mention and citation gaps need at least one tracked competitor to measure against.
+      </p>
+    </div>
   )
 }
 
@@ -2320,31 +2350,35 @@ function ProjectPageContent({
               </div>
             </div>
 
-            <div className="aeo-hero competitive-summary">
-              <MentionShare
-                key={model.project.name}
-                summary={model.mentionShareSummary}
-                projectLabel={model.project.displayName || model.project.name}
-                competitorDomains={competitorDomains}
-              />
+            {competitorDomains.length === 0 ? (
+              <CompetitiveEmptyState summary={model.mentionShareSummary} />
+            ) : (
+              <div className="aeo-hero competitive-summary">
+                <MentionShare
+                  key={model.project.name}
+                  summary={model.mentionShareSummary}
+                  projectLabel={model.project.displayName || model.project.name}
+                  competitorDomains={competitorDomains}
+                />
 
-              <div className="competitive-gaps">
-                <div className="aeo-hero-rows">
-                  <OverviewMetricRow
-                    label="Mention gaps"
-                    summary={model.mentionGaps}
-                    displayValue={<><span className="text-primary">{model.mentionGaps.value}</span><span className="text-faint"> / {model.queryCounts.total}</span></>}
-                    tooltip="Queries where a competitor was mentioned in the answer but your brand was not."
-                  />
-                  <OverviewMetricRow
-                    label="Citation gaps"
-                    summary={model.gapQueries}
-                    displayValue={<><span className="text-primary">{model.gapQueries.value}</span><span className="text-faint"> / {model.queryCounts.total}</span></>}
-                    tooltip="Queries where a competitor was cited as a source but you were not."
-                  />
+                <div className="competitive-gaps">
+                  <div className="aeo-hero-rows">
+                    <OverviewMetricRow
+                      label="Mention gaps"
+                      summary={model.mentionGaps}
+                      displayValue={<><span className="text-primary">{model.mentionGaps.value}</span><span className="text-faint"> / {model.queryCounts.total}</span></>}
+                      tooltip="Queries where a competitor was mentioned in the answer but your brand was not."
+                    />
+                    <OverviewMetricRow
+                      label="Citation gaps"
+                      summary={model.gapQueries}
+                      displayValue={<><span className="text-primary">{model.gapQueries.value}</span><span className="text-faint"> / {model.queryCounts.total}</span></>}
+                      tooltip="Queries where a competitor was cited as a source but you were not."
+                    />
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
 
             {addingCompetitor && (
               <div className="mt-4 mb-3 flex gap-2 rounded-lg border border-base bg-bg-elevated/40 p-3">

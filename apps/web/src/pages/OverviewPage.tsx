@@ -30,7 +30,7 @@ function OverviewProjectCard({
       </div>
       <div className="project-row-primary">
         <div>
-          <p className="project-name">{project.project.name}</p>
+          <p className="project-name">{project.project.displayName || project.project.name}</p>
           <p className="project-domain">{project.project.canonicalDomain}</p>
         </div>
         <p className="project-insight">{project.insight}</p>
@@ -38,7 +38,7 @@ function OverviewProjectCard({
       <div className="project-row-stat">
         <div className="metric-inline-block">
           <p className="metric-inline-label">Mentioned</p>
-          <p className={`metric-inline-value ${project.mentionTone === 'caution' ? 'text-caution-400' : ''}`}>{project.mentionScore}</p>
+          <p className={`metric-inline-value ${project.mentionTone === 'caution' ? 'text-caution-400' : ''}`}>{project.mentionScore}<span className="text-faint">%</span></p>
           {/* `providerCoverage` is only set when the sweep covered a SUBSET of
               configured providers, and it is why the tone shifted to caution:
               the score above is built on incomplete data and is not comparable

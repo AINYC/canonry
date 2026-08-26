@@ -70,4 +70,23 @@ describe('Sparkline', () => {
   it('renders nothing at all for an empty series', () => {
     expect(renderToStaticMarkup(<Sparkline points={[]} tone="neutral" />)).toBe('')
   })
+
+  it('draws a single reading as a visible dot, not a blank box', () => {
+    // With one point the polyline got one coordinate and drew nothing, leaving
+    // only the guide line as a stray dash in the row's reserved chart column —
+    // every trial project's starting state. The single reading now renders as
+    // a zero-length round-capped segment (a dot), centred horizontally, with
+    // the tone class intact so the stroke colour still comes from CSS.
+    const html = renderToStaticMarkup(<Sparkline points={[38]} tone="caution" />)
+    const coords = pointsOf(html)
+
+    expect(html).toContain('sparkline-caution')
+    // Two identical coordinates = the zero-length dot segment.
+    expect(coords).toHaveLength(2)
+    expect(coords[0]).toEqual(coords[1])
+    // On the plot, not on the guide line (which would read as zero).
+    expect(coords[0]!.y).toBeLessThan(GUIDE_Y)
+    // The cap is widened inline into a visible marker.
+    expect(html).toMatch(/stroke-width\s*:\s*7/)
+  })
 })

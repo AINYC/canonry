@@ -138,8 +138,8 @@ test('defaults to the by-engine view with a per-engine legend, and toggles to al
   expect(allEngines.getAttribute('aria-pressed')).toBe('false')
   expect(screen.getByRole('button', { name: 'All' })).toBeTruthy()
 
-  // The headline is the blended average across engines, tagged "avg".
-  expect(screen.getByText('avg')).toBeTruthy()
+  // The headline is the blended average across engines, tagged "engine avg".
+  expect(screen.getByText('engine avg')).toBeTruthy()
 
   // The legend lists each engine with its latest value (a direct read of the
   // rightmost plotted point — gemini 50% in both buckets, openai 25% then gone).
@@ -149,12 +149,75 @@ test('defaults to the by-engine view with a per-engine legend, and toggles to al
   expect(within(legend).getByText('25%')).toBeTruthy()
 
   // Switching to All engines presses it (no refetch) and drops the per-engine
-  // legend + "avg" tag — the headline now matches the single plotted line.
+  // legend + "engine avg" tag — the headline now matches the single plotted line.
   act(() => { fireEvent.click(allEngines) })
   expect(allEngines.getAttribute('aria-pressed')).toBe('true')
   expect(byEngine.getAttribute('aria-pressed')).toBe('false')
   expect(screen.queryByRole('list', { name: 'Engines' })).toBeNull()
-  expect(screen.queryByText('avg')).toBeNull()
+  expect(screen.queryByText('engine avg')).toBeNull()
+})
+
+test('rounds the headline and legend to whole percents — one precision per viewport', async () => {
+  // Rates chosen to have a fractional percent (43.8 / 37.5) so the rounding is observable.
+  const fractional = TWO_BUCKETS.map(bucket => ({
+    ...bucket,
+    mentionRate: 0.438,
+    byProvider: { gemini: provider(0.25, 0.375) },
+  }))
+  const restore = mockFetch((url) => {
+    const path = url.split('?')[0]!
+    if (path.endsWith('/projects/test-project/analytics/metrics')) {
+      return jsonResponse(metricsDto(fractional))
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  })
+  onTestFinished(restore)
+
+  renderSection()
+
+  const legend = await screen.findByRole('list', { name: 'Engines' })
+  expect(within(legend).getByText('38%')).toBeTruthy()
+  expect(document.querySelector('.visibility-trend-current-value')!.textContent).toBe('44%')
+  // The raw one-decimal values never reach a visible readout (they stay in
+  // tooltips and the sr-only data table, where the exact fraction has room).
+  expect(screen.queryByText('43.8%')).toBeNull()
+  expect(screen.queryByText('37.5%')).toBeNull()
+})
+
+test('replaces the chart with a baseline note until a second sweep exists', async () => {
+  const restore = mockFetch((url) => {
+    const path = url.split('?')[0]!
+    if (path.endsWith('/projects/test-project/analytics/metrics')) {
+      return jsonResponse(metricsDto([TWO_BUCKETS[0]]))
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  })
+  onTestFinished(restore)
+
+  renderSection()
+
+  // One bucket: the per-engine legend still carries the readout, but no
+  // full-height grid renders around a single stranded point.
+  await screen.findByRole('list', { name: 'Engines' })
+  expect(screen.getByText('Baseline captured. The trend line appears after the next sweep.')).toBeTruthy()
+  expect(screen.queryByRole('img', { name: /trend chart/i })).toBeNull()
+})
+
+test('draws the chart once a second bucket exists', async () => {
+  const restore = mockFetch((url) => {
+    const path = url.split('?')[0]!
+    if (path.endsWith('/projects/test-project/analytics/metrics')) {
+      return jsonResponse(metricsDto(TWO_BUCKETS))
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  })
+  onTestFinished(restore)
+
+  renderSection()
+
+  await screen.findByRole('list', { name: 'Engines' })
+  expect(screen.getByRole('img', { name: /trend chart over 2 buckets/i })).toBeTruthy()
+  expect(screen.queryByText('Baseline captured. The trend line appears after the next sweep.')).toBeNull()
 })
 
 test('labels per-engine legend entries from analytics bucket evidence and surfaces categorical model changes', async () => {

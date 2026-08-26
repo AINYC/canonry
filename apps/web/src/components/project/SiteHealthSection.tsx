@@ -1998,20 +1998,22 @@ export function SiteHealthSection({
         </div>
 
         <div className="flex flex-wrap items-start gap-2">
-          <label className="grid gap-1 text-xs text-muted">
-            Scan history
-            <select
-              aria-label="View a Site Health scan"
-              value={selectedRunId ?? ''}
-              onChange={(event) => selectRun(event.target.value)}
-              className="h-9 min-w-48 rounded-md border border-base bg-bg px-3 text-sm text-primary outline-none focus:border-strong focus:ring-2 focus:ring-mono-600"
-            >
-              <option value="">Latest scan</option>
-              {selectableScans.map((scan) => (
-                <option key={scan.runId} value={scan.runId}>{scanOptionLabel(scan)}</option>
-              ))}
-            </select>
-          </label>
+          {selectableScans.length > 0 && (
+            <label className="grid gap-1 text-xs text-muted">
+              Scan history
+              <select
+                aria-label="View a Site Health scan"
+                value={selectedRunId ?? ''}
+                onChange={(event) => selectRun(event.target.value)}
+                className="h-9 min-w-48 rounded-md border border-base bg-bg px-3 text-sm text-primary outline-none focus:border-strong focus:ring-2 focus:ring-mono-600"
+              >
+                <option value="">Latest scan</option>
+                {selectableScans.map((scan) => (
+                  <option key={scan.runId} value={scan.runId}>{scanOptionLabel(scan)}</option>
+                ))}
+              </select>
+            </label>
+          )}
 
           {!embedded && (
             <div className="flex items-end gap-2 pt-5">
@@ -2091,7 +2093,7 @@ export function SiteHealthSection({
         </section>
       )}
 
-      {!explicitOnboarding && <div className="flex flex-wrap items-center justify-between gap-3 border-b border-default">
+      {!explicitOnboarding && (crawl?.hasCrawlData || crawl?.legacyAuditAvailable) && <div className="flex flex-wrap items-center justify-between gap-3 border-b border-default">
         <div role="tablist" aria-label="Site Health views" aria-orientation="horizontal" className="flex min-w-0 gap-5">
           {SITE_HEALTH_VIEWS.map((item, index) => (
             <button
@@ -2240,8 +2242,14 @@ export function SiteHealthSection({
                   ? 'A full-site scan has not been run for this project.'
                   : 'Run a scan to discover pages, site sections, and internal links.'}
             </p>
-            {(crawl?.legacyAuditAvailable || explicitOnboarding) && (
+            {(crawl?.legacyAuditAvailable || explicitOnboarding || !embedded) && (
               <div className="mt-4 flex flex-wrap justify-center gap-2">
+                {!explicitOnboarding && !embedded && (
+                  <WriteButton onClick={startScan} disabled={scanBusy}>
+                    {scanBusy ? <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" /> : <Play className="size-4" aria-hidden="true" />}
+                    Run scan
+                  </WriteButton>
+                )}
                 {crawl?.legacyAuditAvailable && !explicitOnboarding && (
                   <Button variant="secondary" size="sm" onClick={() => setView('technical')}>View page health</Button>
                 )}

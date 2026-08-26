@@ -124,3 +124,13 @@ export function localTimeZoneLabel(): string {
     .find((part) => part.type === 'timeZoneName')?.value
   return formatTimeZoneLabel(zone, abbrev)
 }
+
+/**
+ * One rounding for every visible percent readout: whole numbers only. The same
+ * metric rendered at mixed precisions in one viewport (43.8% beside 38%) reads
+ * as a contradiction, not as extra accuracy — decimals stay in tooltips and
+ * the sr-only data table, where the exact fraction has room to explain itself.
+ */
+export function formatWholePercent(value: number): string {
+  return `${Math.round(value)}%`
+}
