@@ -456,6 +456,10 @@ const COVERAGE: Record<string, CoverageEntry> = {
     kind: 'internal-only',
     reason: 'Immutable snapshots of a project\'s tracked query set, recorded so analytics can compare like-for-like instead of inferring measurement-set membership from query row timestamps. Consumed only by the analytics response, which surfaces the parts a reader needs (`referenceBasketRevision`, per-bucket `basketRevision`, and `basketChanges`); the raw membership blob is an internal comparison key.',
   },
+    insightNotifyState: {
+      kind: 'internal-only',
+      reason: 'What an insight webhook has already said, so it stops saying it. Alerting bookkeeping in exactly the sense doctorHealthState is: it records the identity of a delivered finding (project, type, subject, and the title with its magnitude neutralised) so a finding that persists across runs notifies once rather than on every run. Nothing here is a measurement, the insights themselves are served by the insights routes, and exposing send-state would invite a reader to mistake \'already alerted\' for \'still true\'.',
+    },
   doctorHealthState: {
     kind: 'internal-only',
     reason: 'Last observed doctor outcome per project, kept only so health alerting can fire on transitions rather than on every scheduled pass. It is alerting bookkeeping, not a measurement: the report itself is served live by GET /projects/:name/doctor, and exposing a cached copy would invite readers to trust a stale health verdict.',
