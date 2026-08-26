@@ -4369,12 +4369,22 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
   // GET /projects/:name/traffic/events
   app.get<{
     Params: { name: string }
-    Querystring: { since?: string; until?: string; kind?: string; limit?: string; sourceId?: string; granularity?: string }
+    Querystring: { since?: string; until?: string; kind?: string; limit?: string; sourceId?: string; granularity?: string; sinceMinutes?: string }
   }>('/projects/:name/traffic/events', async (request) => {
     const project = resolveProject(app.db, request.params.name)
 
     const now = new Date()
     const defaultSince = new Date(now.getTime() - 24 * 60 * 60_000)
+
+    // `sinceMinutes` is the SYNC body parameter. Passed here it was silently
+    // ignored and the window fell back to 24 hours, so a caller asking for 90
+    // days got a correct-looking answer for the wrong range. A wrong number
+    // returned confidently is worse than an error, so name the right parameter.
+    if (request.query?.sinceMinutes !== undefined) {
+      throw validationError(
+        '"sinceMinutes" is not a query parameter on this route. Use "since" (and optionally "until") with an ISO-8601 timestamp.',
+      )
+    }
 
     const sinceParam = request.query?.since
     const untilParam = request.query?.until

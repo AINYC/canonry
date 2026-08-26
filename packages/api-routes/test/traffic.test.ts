@@ -5173,7 +5173,9 @@ describe('crawler-hit content/infra segmentation', () => {
     try {
       const res = await h.app.inject({
         method: 'GET',
-        url: '/api/v1/projects/test-project/traffic/events?sinceMinutes=1440&granularity=day',
+        // 24h explicitly. This previously read `sinceMinutes=1440` and only
+        // worked because 1440 minutes happens to equal the ignored default.
+        url: `/api/v1/projects/test-project/traffic/events?since=${encodeURIComponent(new Date(Date.now() - 24 * 60 * 60_000).toISOString())}&granularity=day`,
       })
       expect(res.statusCode).toBe(200)
       const body = JSON.parse(res.payload)
@@ -5208,6 +5210,28 @@ describe('crawler-hit content/infra segmentation', () => {
    * Rows are inserted directly, like the 90-day series test, because the sync
    * path time-filters anything older than its window.
    */
+  /**
+   * `sinceMinutes` is the sync body parameter. Sent here it used to be ignored
+   * and the window quietly fell back to 24 hours, so a caller asking for 90 days
+   * got a plausible answer for the wrong range. That cost real debugging time
+   * while writing the test above: the data looked missing when the window was
+   * simply wrong. Fail loudly instead.
+   */
+  it('rejects sinceMinutes rather than silently answering for 24 hours', async () => {
+    const { h } = await mixedPathHarness()
+    try {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: '/api/v1/projects/test-project/traffic/events?sinceMinutes=14400&granularity=day',
+      })
+      expect(res.statusCode).toBe(400)
+      const body = JSON.parse(res.payload)
+      // The message must name the parameter that actually works.
+      expect(body.error.message).toContain('sinceMinutes')
+      expect(body.error.message).toContain('since')
+    } finally { await h.close() }
+  })
+
   it('keeps the series bounded by buckets, not paths x buckets, on a high-cardinality site', async () => {
     const { h, sourceId } = await mixedPathHarness()
     try {
@@ -5243,12 +5267,11 @@ describe('crawler-hit content/infra segmentation', () => {
         rows.push(rowFor(ts, '/robots.txt'))
         rows.push(rowFor(ts, '/sitemap_index.xml'))
       }
-      // Chunked: one 132-row insert exceeds SQLite's bound-parameter limit and
-      // silently lands only part of the set.
-      for (let i = 0; i < rows.length; i += 20) {
-        h.db.insert(crawlerEventsHourly).values(rows.slice(i, i + 20)).run()
-      }
-      // Prove the fixture is actually in the table before asserting on the API.
+      h.db.insert(crawlerEventsHourly).values(rows).run()
+      // Guard the fixture before asserting on the API. When this test first
+      // failed the rows looked missing, and the cause was the QUERY window, not
+      // the insert. This separates those two failures so the next person does
+      // not go hunting in the wrong place.
       const inserted = h.db
         .select()
         .from(crawlerEventsHourly)
