@@ -1,14 +1,50 @@
 import { eq, desc, and, inArray, or } from 'drizzle-orm'
 import { deliverWebhook, measurementRunCompleteness, redactNotificationUrl, resolveDestination, resolveWebhookTarget, toAlertView } from '@ainyc/canonry-api-routes'
 import type { DatabaseClient } from '@ainyc/canonry-db'
-import { auditLog, doctorHealthState, groupRunsByCreatedAt, notifications, projects, queries, querySnapshots, runs } from '@ainyc/canonry-db'
+import { auditLog, doctorHealthState, groupRunsByCreatedAt, insightNotifyState, notifications, projects, queries, querySnapshots, runs } from '@ainyc/canonry-db'
 import type { NotificationEvent, WebhookPayload, InsightWebhookPayload, HealthWebhookPayload } from '@ainyc/canonry-contracts'
-import type { AnalysisResult } from '@ainyc/canonry-intelligence'
+import type { AnalysisResult, Insight } from '@ainyc/canonry-intelligence'
 import crypto from 'node:crypto'
 import { createLogger } from './logger.js'
 import { describeError } from '@ainyc/canonry-contracts'
 
 const log = createLogger('Notifier')
+
+/**
+ * How far a magnitude must move before the same finding is news again.
+ *
+ * A GBP keyword drop drifting 79% -> 80% is the same story. A drop deepening
+ * 30% -> 60% is not. Twenty points is a judgement, not a measurement, and it is
+ * here rather than inline so it can be argued with.
+ */
+const MATERIAL_MAGNITUDE_DELTA = 20
+
+const SEVERITY_RANK: Record<string, number> = { low: 0, medium: 1, high: 2, critical: 3 }
+function severityRank(severity: string): number {
+  return SEVERITY_RANK[severity] ?? 0
+}
+
+/**
+ * The finding's wording with its magnitude neutralised, so a percentage that
+ * drifts is not mistaken for a new finding while a window that advances is.
+ * Only a number immediately followed by `%` is neutralised: dates, counts and
+ * identifiers in the title stay, and they are what make an advanced window read
+ * as different.
+ */
+function insightFingerprint(insight: Insight): string {
+  return insight.title.replace(/\b\d+(?:\.\d+)?%/g, 'N%')
+}
+
+/** The leading percentage in a title, when it has one. */
+function insightMagnitude(insight: Insight): number | null {
+  const match = /\b(\d+(?:\.\d+)?)%/.exec(insight.title)
+  return match?.[1] === undefined ? null : Math.round(Number(match[1]))
+}
+
+/** Stable across runs: same project, type, subject and wording is the same news. */
+function insightNotifyKey(projectId: string, insight: Insight): string {
+  return `${projectId}:${insight.type}:${insight.query}:${insightFingerprint(insight)}`
+}
 
 export class Notifier {
   private db: DatabaseClient
@@ -246,12 +282,67 @@ export class Notifier {
     return event
   }
 
+  /**
+   * Has this finding already been said?
+   *
+   * The identity of a finding is its type, its subject and its wording with the
+   * magnitude neutralised. So the same drop reported at 79% and at 80% over the
+   * same window is one piece of news, while the same drop over an ADVANCED
+   * window is a new one.
+   *
+   * Re-notifies on three things and nothing else:
+   *   - never sent before
+   *   - severity got worse (medium -> high -> critical)
+   *   - magnitude moved by more than MATERIAL_MAGNITUDE_DELTA points
+   *
+   * Deliberately NOT time-based. A daily repeat is exactly the behaviour this
+   * exists to stop, and "re-alert after N days" is that behaviour with a delay.
+   */
+  private isNewInsightNews(projectId: string, insight: Insight): boolean {
+    const key = insightNotifyKey(projectId, insight)
+    const previous = this.db.select().from(insightNotifyState)
+      .where(eq(insightNotifyState.key, key)).get()
+    if (!previous) return true
+    if (severityRank(insight.severity) > severityRank(previous.severity)) return true
+    const magnitude = insightMagnitude(insight)
+    if (magnitude !== null && previous.magnitude !== null && previous.magnitude !== undefined) {
+      if (Math.abs(magnitude - previous.magnitude) > MATERIAL_MAGNITUDE_DELTA) return true
+    }
+    return false
+  }
+
+  /** Record a delivered insight so it stops being news. */
+  private rememberInsightNotified(projectId: string, insight: Insight): void {
+    const key = insightNotifyKey(projectId, insight)
+    const row = {
+      key,
+      projectId,
+      type: insight.type,
+      subject: insight.query,
+      fingerprint: insightFingerprint(insight),
+      severity: insight.severity,
+      magnitude: insightMagnitude(insight),
+      notifiedAt: new Date().toISOString(),
+    }
+    const existing = this.db.select().from(insightNotifyState)
+      .where(eq(insightNotifyState.key, key)).get()
+    if (existing) {
+      this.db.update(insightNotifyState).set(row).where(eq(insightNotifyState.key, key)).run()
+    } else {
+      this.db.insert(insightNotifyState).values(row).run()
+    }
+  }
+
   /** Dispatch insight webhooks for critical/high severity insights after a run. */
   async dispatchInsightWebhooks(runId: string, projectId: string, result: AnalysisResult): Promise<void> {
     type InsightEvent = 'insight.critical' | 'insight.high'
     const insightEvents: InsightEvent[] = []
-    const criticalInsights = result.insights.filter(i => i.severity === 'critical')
-    const highInsights = result.insights.filter(i => i.severity === 'high')
+    // ONLY WHAT HAS NOT ALREADY BEEN SAID. Health is edge-triggered and citations
+    // are transition-based; insight dispatch used to have no memory at all, so a
+    // finding that persists alerted on every run. See {@link isNewInsightNews}.
+    const unsent = result.insights.filter(i => this.isNewInsightNews(projectId, i))
+    const criticalInsights = unsent.filter(i => i.severity === 'critical')
+    const highInsights = unsent.filter(i => i.severity === 'high')
     if (criticalInsights.length > 0) insightEvents.push('insight.critical')
     if (highInsights.length > 0) insightEvents.push('insight.high')
     if (insightEvents.length === 0) return
@@ -296,6 +387,10 @@ export class Notifier {
           dashboardUrl: `${this.serverUrl}/projects/${project.name}`,
         }
         await this.sendWebhook(config.url, payload, notif.id, projectId, notif.webhookSecret ?? null)
+        // Recorded only after a send, for the reason the health path already
+        // documents: marking "decided to notify" reads as delivered even when
+        // nothing actually went out.
+        for (const insight of relevantInsights) this.rememberInsightNotified(projectId, insight)
       }
     }
   }

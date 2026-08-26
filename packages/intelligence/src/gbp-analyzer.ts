@@ -26,6 +26,24 @@ export const GBP_KEYWORD_DROP_PCT = 40
 export const GBP_KEYWORD_SEVERE_PCT = 70
 /** The prior month must have at least this many impressions (noise guard). */
 export const GBP_KEYWORD_MIN_BASELINE = 20
+/**
+ * A keyword drop is only SEVERE if the actions it should have cost also fell.
+ *
+ * MEASURED on a real client: "santa monica hotels" impressions fell 1,019 -> 210
+ * month over month, a 79% drop on their largest non-brand keyword, and it was
+ * graded `high` on that percentage alone. Website clicks over the same period ran
+ * 19.0/day then 17.3/day, calls and direction requests likewise flat. The reach
+ * that disappeared was people searching an adjacent city, seeing a hotel in the
+ * wrong one, and scrolling past. Nothing was lost, and the alert said otherwise
+ * every day for a month.
+ *
+ * WINDOW MISMATCH, STATED: the keyword series is monthly and the action deltas
+ * are 7d vs prior 7d, so these do not cover the same period. That is why this
+ * only ever DOWNGRADES. "The keyword fell but conversions held" is safe to act
+ * on across mismatched windows; "conversions also fell, so escalate" is not, and
+ * is deliberately not implemented here.
+ */
+export const GBP_ACTIONS_HELD_PCT = -10
 
 /** Sentinel `provider` for GBP insights — they are location-scoped, not provider-scoped. */
 export const GBP_INSIGHT_PROVIDER = 'gbp'
@@ -208,7 +226,10 @@ export function analyzeGbp(signals: GbpLocationSignals[]): GbpInsightDraft[] {
       drafts.push({
         ...base,
         type: 'gbp-keyword-drop',
-        severity: worstKeyword.dropPct >= GBP_KEYWORD_SEVERE_PCT ? 'high' : 'medium',
+        severity:
+          worstKeyword.dropPct >= GBP_KEYWORD_SEVERE_PCT && !actionsHeldUp(loc)
+            ? 'high'
+            : 'medium',
         title: `${loc.displayName}: "${worstKeyword.keyword}" impressions down ${worstKeyword.dropPct}% month-over-month${window}`,
         recommendation: {
           action: 'Check whether the property still ranks for this local search term and refresh the profile',
@@ -218,6 +239,21 @@ export function analyzeGbp(signals: GbpLocationSignals[]): GbpInsightDraft[] {
     }
   }
   return drafts
+}
+
+/**
+ * Did the actions this keyword should drive hold up?
+ *
+ * True when every headline metric with a delta on record is flat or better than
+ * {@link GBP_ACTIONS_HELD_PCT}. A location with no action deltas at all returns
+ * false: unknown is not evidence of health, and the drop keeps its severity.
+ */
+function actionsHeldUp(loc: GbpLocationSignals): boolean {
+  const deltas = GBP_HEADLINE_METRICS
+    .map(metric => loc.metricDeltaPct[metric])
+    .filter((d): d is number => typeof d === 'number')
+  if (deltas.length === 0) return false
+  return deltas.every(d => d >= GBP_ACTIONS_HELD_PCT)
 }
 
 function pickWorstMetricDrop(loc: GbpLocationSignals): { metric: string; deltaPct: number; recent: number; prior: number } | null {

@@ -3997,6 +3997,32 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
       `ALTER TABLE oauth_clients ADD COLUMN registration TEXT NOT NULL DEFAULT 'operator'`,
     ],
   },
+  {
+    version: 148,
+    name: 'insight-notify-state',
+    // Insight dispatch had no memory. Health is edge-triggered and citations are
+    // transition-based, but every run recomputed its insights and sent whatever
+    // was high or critical, so a finding that persists alerted on every run,
+    // forever. Measured on one client: a GBP keyword drop notified daily for over
+    // a month with byte-identical text, because Google publishes GBP keyword data
+    // about a month behind and the comparison window sat still while the calendar
+    // moved on. The insights table held ONE row for it, so nothing in the stored
+    // data revealed the repetition.
+    statements: [
+      `CREATE TABLE IF NOT EXISTS insight_notify_state (
+        key         TEXT PRIMARY KEY,
+        project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        type        TEXT NOT NULL,
+        subject     TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        severity    TEXT NOT NULL,
+        magnitude   INTEGER,
+        notified_at TEXT NOT NULL
+      )`,
+      `CREATE INDEX IF NOT EXISTS insight_notify_state_project
+         ON insight_notify_state(project_id)`,
+    ],
+  },
 ]
 
 function addRunsMeasurementPlanVersionForeignKey(tx: MigrationDb): void {

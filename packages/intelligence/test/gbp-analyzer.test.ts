@@ -209,13 +209,26 @@ describe('analyzeGbp', () => {
       expect(drop[0]!.title).toContain('venice hotel')
     })
 
-    it('escalates a severe keyword drop to high', () => {
-      const insights = analyzeGbp([healthy({
-        keywordPoints: [{ keyword: 'venice hotel', recent: 10, prior: 100 }],
-      })])
-      const drop = insights.filter((i) => i.type === 'gbp-keyword-drop')
-      expect(drop[0]!.severity).toBe('high')
-    })
+      it('escalates a severe keyword drop to high WHEN ACTIONS FELL WITH IT', () => {
+        const insights = analyzeGbp([healthy({
+          keywordPoints: [{ keyword: 'venice hotel', recent: 10, prior: 100 }],
+          metricDeltaPct: { WEBSITE_CLICKS: -60, CALL_CLICKS: -55, BUSINESS_DIRECTION_REQUESTS: -50 },
+        })])
+        const drop = insights.filter((i) => i.type === 'gbp-keyword-drop')
+        expect(drop[0]!.severity).toBe('high')
+      })
+
+      it('keeps a severe drop at medium when the actions it should drive held up', () => {
+        // The `healthy` fixture has every action delta at 0. Measured on a real
+        // client: a 79% drop on their biggest non-brand keyword while website
+        // clicks ran 19.0/day then 17.3/day. It alerted `high` daily for a month
+        // over reach that was never converting.
+        const insights = analyzeGbp([healthy({
+          keywordPoints: [{ keyword: 'venice hotel', recent: 10, prior: 100 }],
+        })])
+        const drop = insights.filter((i) => i.type === 'gbp-keyword-drop')
+        expect(drop[0]!.severity).toBe('medium')
+      })
 
     it('ignores keywords with a tiny prior baseline', () => {
       const insights = analyzeGbp([healthy({
@@ -252,7 +265,9 @@ describe('analyzeGbp', () => {
       const drop = insights.filter((i) => i.type === 'gbp-keyword-drop')
       expect(drop).toHaveLength(1)
       expect(drop[0]!.title).toContain('severe drop')
-      expect(drop[0]!.severity).toBe('high')
+        // Medium, not high: this fixture's action deltas are all 0, so the
+        // drop cost nothing. Picking the WORST keyword is what this tests.
+        expect(drop[0]!.severity).toBe('medium')
     })
   })
 

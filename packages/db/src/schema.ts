@@ -583,6 +583,45 @@ export const schedules = sqliteTable('schedules', {
  * warning persists, and an operator who learns to ignore the channel is worse
  * than no channel at all.
  */
+/**
+ * WHAT AN INSIGHT WEBHOOK HAS ALREADY SAID, so it stops saying it.
+ *
+ * Health is edge-triggered and citations are transition-based, but insight
+ * dispatch had no memory: every run recomputed its findings and sent whatever
+ * was high or critical. A finding that persists therefore alerted on every run,
+ * forever.
+ *
+ * MEASURED on gjelina-hotel: a GBP keyword drop notified daily at 08:30 for over
+ * a month with byte-identical text, because Google publishes GBP keyword data
+ * about a month behind, so the comparison window sat at 2026-06 -> 2026-07 while
+ * the calendar moved on. The insights table held ONE row for it: the finding was
+ * recomputed and re-sent, never re-stored, so nothing in the data showed the
+ * repetition.
+ *
+ * Keyed on the identity of the FINDING, not on the run: same project, type,
+ * subject and window is the same news. A changed window, a changed severity or a
+ * materially changed magnitude is new news and notifies again.
+ */
+export const insightNotifyState = sqliteTable('insight_notify_state', {
+  /** `${projectId}:${type}:${subject}:${window}` - stable across runs. */
+  key: text('key').primaryKey(),
+  projectId: text('project_id').notNull(),
+  /** Insight type, e.g. `gbp-keyword-drop`. */
+  type: text('type').notNull(),
+  /** What the finding is about: the keyword, query, or url. */
+  subject: text('subject').notNull(),
+  /**
+   * The finding's identity as text: its title with the magnitude number
+   * neutralised, so 79% and 80% of the same drop over the same window are one
+   * piece of news, while a window that advances is a different one.
+   */
+  fingerprint: text('fingerprint').notNull(),
+  severity: text('severity').notNull(),
+  /** Rounded magnitude, so a drift from 79% to 80% is not treated as new news. */
+  magnitude: integer('magnitude'),
+  notifiedAt: text('notified_at').notNull(),
+})
+
 export const doctorHealthState = sqliteTable('doctor_health_state', {
   projectId: text('project_id').primaryKey(),
   /** Worst check status observed on the last pass: ok | warn | fail. */
