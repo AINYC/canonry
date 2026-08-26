@@ -64,7 +64,11 @@ import {
 } from '../../lib/social-chart-helpers.js'
 import { buildAiChartData } from '../../lib/ai-chart-helpers.js'
 
-const TRAFFIC_WINDOWS: MetricsWindow[] = ['7d', '30d', '90d', 'all']
+// 'all' is deliberately absent. GA treats it as unbounded retention; the
+// server lane is queried with `since`, which has no unbounded form (omitting it
+// means 24h, not everything). One control offering 'all' therefore labelled two
+// incomparable ranges identically. 7d/30d/90d mean the same thing in both lanes.
+const TRAFFIC_WINDOWS: MetricsWindow[] = ['7d', '30d', '90d']
 
 // The server-side lane is queried in minutes, the GA lane by window name. One
 // control drives both, so the mapping lives here rather than in either consumer.
@@ -74,6 +78,8 @@ const TRAFFIC_WINDOW_MINUTES: Record<MetricsWindow, number> = {
   '7d': 7 * 24 * 60,
   '30d': 30 * 24 * 60,
   '90d': 90 * 24 * 60,
+  // Unreachable from the control (see TRAFFIC_WINDOWS); present only to satisfy
+  // the MetricsWindow key set. Never rendered as a selectable range.
   all: 90 * 24 * 60,
 }
 
@@ -235,32 +241,47 @@ export function ActivitySection({ projectName }: { projectName: string }) {
   return (
     <div className="space-y-10">
       <ServerActivityPanel projectName={projectName} />
+      {/*
+        The picker lives HERE, not inside ClickThroughActivity. That component
+        returns a connect prompt before rendering its own controls when GA4 is
+        disconnected, which left the server chart visible but stuck on its
+        default range with no way to change it.
+      */}
+      <div className="flex items-center justify-end">
+        <div className="segmented" role="group" aria-label="Traffic time period">
+          {TRAFFIC_WINDOWS.map(w => (
+            <button
+              key={w}
+              type="button"
+              aria-pressed={trafficWindow === w}
+              className={`segmented-option ${trafficWindow === w ? 'segmented-option-active' : ''}`}
+              onClick={() => setTrafficWindow(w)}
+            >
+              {w}
+            </button>
+          ))}
+        </div>
+      </div>
       <AiTrafficHistoryPanel
         projectName={projectName}
         sinceMinutes={TRAFFIC_WINDOW_MINUTES[trafficWindow]}
       />
-      <ClickThroughActivity
-        projectName={projectName}
-        window={trafficWindow}
-        onWindowChange={setTrafficWindow}
-      />
+      <ClickThroughActivity projectName={projectName} window={trafficWindow} />
     </div>
   )
 }
 
 // Exported for focused testing of the GA4 click-through panel (e.g. landing-page
 // pagination) without standing up a router for the sibling ServerActivityPanel's links.
-export function ClickThroughActivity({ projectName, window: windowProp, onWindowChange }: {
+export function ClickThroughActivity({ projectName, window: windowProp }: {
   projectName: string
+  /** Owned by ActivitySection, which renders the only picker on the page. */
   window?: MetricsWindow
-  onWindowChange?: (w: MetricsWindow) => void
 }) {
   const queryClient = useQueryClient()
-  // Controlled by the wrapper in the app; falls back to own state so this
+  // Read-only here: ActivitySection owns the control. Defaulted so this
   // component stays independently mountable in tests.
-  const [ownWindow, setOwnWindow] = useState<MetricsWindow>('30d')
-  const trafficWindow = windowProp ?? ownWindow
-  const setTrafficWindow = onWindowChange ?? setOwnWindow
+  const trafficWindow = windowProp ?? '30d'
   const [status, setStatus] = useState<ApiGaStatus | null>(null)
   const [traffic, setTraffic] = useState<ApiGaTraffic | null>(null)
   const [loading, setLoading] = useState(true)
@@ -644,19 +665,6 @@ export function ClickThroughActivity({ projectName, window: windowProp, onWindow
               Site Traffic
               <InfoTooltip text={`Aggregated traffic metrics from Google Analytics 4.${traffic?.periodStart && traffic?.periodEnd ? ` Data available: ${new Date(traffic.periodStart + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })} – ${new Date(traffic.periodEnd + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}.` : ''} Distinct users are unavailable when the selected history extends beyond a stored aggregate. Organic sessions are Google organic search sessions specifically.`} />
             </h2>
-          </div>
-          <div className="segmented" role="group" aria-label="Traffic time period">
-            {TRAFFIC_WINDOWS.map(w => (
-              <button
-                key={w}
-                type="button"
-                aria-pressed={trafficWindow === w}
-                className={`segmented-option ${trafficWindow === w ? 'segmented-option-active' : ''}`}
-                onClick={() => setTrafficWindow(w)}
-              >
-                {w === 'all' ? 'All' : w}
-              </button>
-            ))}
           </div>
         </div>
 

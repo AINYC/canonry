@@ -5199,6 +5199,92 @@ describe('crawler-hit content/infra segmentation', () => {
       }
     } finally { await h.close() }
   })
+  /**
+   * Review finding: the first version grouped the series by (bucket, path), so a
+   * site with many distinct paths materialized paths x buckets rows before any
+   * limit applied. This pins the fix: many distinct paths across many days must
+   * still return one row per bucket, with the content split intact.
+   *
+   * Rows are inserted directly, like the 90-day series test, because the sync
+   * path time-filters anything older than its window.
+   */
+  it('keeps the series bounded by buckets, not paths x buckets, on a high-cardinality site', async () => {
+    const { h, sourceId } = await mixedPathHarness()
+    try {
+      const source = h.db
+        .select()
+        .from(trafficSources)
+        .where(eq(trafficSources.id, sourceId))
+        .get()!
+      const writtenAt = new Date().toISOString()
+      const rowFor = (tsHour: string, pathNormalized: string) => ({
+        projectId: source.projectId,
+        sourceId,
+        tsHour,
+        botId: 'openai-gptbot',
+        operator: 'OpenAI',
+        verificationStatus: 'claimed_unverified' as const,
+        pathNormalized,
+        status: 200,
+        hits: 1,
+        sampledUserAgent: 'GPTBot/1.0',
+        createdAt: writtenAt,
+        updatedAt: writtenAt,
+      })
+
+      // 6 days x 20 distinct content paths, plus 2 infrastructure paths per day.
+      const rows = []
+      for (let day = 0; day < 6; day++) {
+        const d = new Date()
+        d.setUTCDate(d.getUTCDate() - (day + 1))
+        d.setUTCHours(12, 0, 0, 0)
+        const ts = d.toISOString()
+        for (let n = 0; n < 20; n++) rows.push(rowFor(ts, `/blog/post-${day}-${n}`))
+        rows.push(rowFor(ts, '/robots.txt'))
+        rows.push(rowFor(ts, '/sitemap_index.xml'))
+      }
+      // Chunked: one 132-row insert exceeds SQLite's bound-parameter limit and
+      // silently lands only part of the set.
+      for (let i = 0; i < rows.length; i += 20) {
+        h.db.insert(crawlerEventsHourly).values(rows.slice(i, i + 20)).run()
+      }
+      // Prove the fixture is actually in the table before asserting on the API.
+      const inserted = h.db
+        .select()
+        .from(crawlerEventsHourly)
+        .where(eq(crawlerEventsHourly.sourceId, sourceId))
+        .all()
+      expect(inserted.length).toBeGreaterThanOrEqual(rows.length)
+
+      // The events route windows on ISO `since`/`until`, NOT sinceMinutes (that
+      // is a sync body param). Passing the wrong one silently falls back to 24h.
+      const windowStart = new Date()
+      windowStart.setUTCDate(windowStart.getUTCDate() - 10)
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/projects/test-project/traffic/events?since=${encodeURIComponent(windowStart.toISOString())}&granularity=day`,
+      })
+      expect(res.statusCode).toBe(200)
+      const body = JSON.parse(res.payload)
+
+      // One point per calendar day, never one per path.
+      const buckets = body.series.points.map((pt: { bucket: string }) => pt.bucket)
+      expect(new Set(buckets).size).toBe(buckets.length)
+      expect(buckets.length).toBeLessThan(40)
+
+      const sum = (k: string) => body.series.points
+        .reduce((a: number, pt: Record<string, number>) => a + pt[k], 0)
+      // 120 content rows and 12 infrastructure rows ON TOP of the harness
+      // fixture, which is already inside this window. The split must survive the
+      // bounded query, not just the total.
+      const fixtureTotal = EXPECTED_SEGMENTS.content + EXPECTED_SEGMENTS.sitemap
+        + EXPECTED_SEGMENTS.robots + EXPECTED_SEGMENTS.asset + EXPECTED_SEGMENTS.other
+      expect(sum('crawlerContentHits')).toBe(120 + EXPECTED_SEGMENTS.content)
+      expect(sum('crawlerHits')).toBe(132 + fixtureTotal)
+      expect(sum('crawlerContentHits')).toBeLessThan(sum('crawlerHits'))
+    } finally { await h.close() }
+  })
+
   it('reads 0 content crawls for an all-infrastructure source', async () => {
     const baseTime = new Date(Date.now() - 60 * 60_000)
     baseTime.setMinutes(0, 0, 0)

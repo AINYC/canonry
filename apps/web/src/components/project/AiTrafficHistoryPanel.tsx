@@ -54,10 +54,10 @@ function Tile({ label, value, caption, tooltip }: {
 }) {
   return (
     <div className="rounded-lg border border-default bg-bg/40 px-4 py-3 flex flex-col">
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted mb-1 flex items-center gap-1">
-        {label}
+      <div className="flex items-center gap-1 mb-1">
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">{label}</p>
         <InfoTooltip text={tooltip} />
-      </p>
+      </div>
       <p className="text-xl font-semibold text-primary tabular-nums">{value}</p>
       <p className="text-xs text-muted mt-0.5">{caption}</p>
     </div>
@@ -88,15 +88,38 @@ export function AiTrafficHistoryPanel({
     { crawlers: 0, fetches: 0, visits: 0 },
   ), [points])
 
+  // A failed request and a quiet window are different facts and must not share a
+  // message. The API densifies the window, so a successful empty range returns
+  // zero-valued points rather than none: "no activity" is an all-zero series,
+  // NOT an absent one. Reading `points.length === 0` as "no activity" showed a
+  // request error as a calm "nothing happened".
+  const measuredAnything = totals.crawlers > 0 || totals.fetches > 0 || totals.visits > 0
+
   if (events.isLoading) {
     return <Card className="surface-card p-5"><div className="text-sm text-muted">Loading AI traffic history…</div></Card>
   }
-  if (points.length === 0) {
+  if (events.isError) {
     return (
       <Card className="surface-card p-5">
-        <p className="text-sm text-secondary">No server-side activity recorded yet.</p>
+        <p className="text-sm text-secondary">Could not load AI traffic history.</p>
         <p className="text-xs text-muted mt-1">
-          Connect a traffic source to see how AI engines read this site over time.
+          The request failed, so this is not a reading of zero activity. Retry, or check the traffic source.
+        </p>
+      </Card>
+    )
+  }
+  if (!measuredAnything) {
+    return (
+      <Card className="surface-card p-5">
+        <p className="text-sm text-secondary">
+          {points.length === 0
+            ? 'No server-side traffic source connected yet.'
+            : 'No AI activity recorded in this period.'}
+        </p>
+        <p className="text-xs text-muted mt-1">
+          {points.length === 0
+            ? 'Connect a traffic source to see how AI engines read this site over time.'
+            : 'The window was measured and nothing was recorded. Try a longer range.'}
         </p>
       </Card>
     )
@@ -126,10 +149,12 @@ export function AiTrafficHistoryPanel({
       </div>
 
       <div className="mb-2 flex items-center justify-between gap-3">
-        <h3 className="text-sm font-semibold text-heading flex items-center gap-1.5">
-          Machines reading your site
+        {/* Tooltip is a SIBLING of the heading: nesting an interactive button
+            inside <h3> changes the heading's accessible name. */}
+        <div className="flex items-center gap-1.5">
+          <h3 className="text-sm font-semibold text-heading">Machines reading your site</h3>
           <InfoTooltip text="Crawlers index pages for later. Page fetches happen while an engine is answering someone. Both are machines, not people." />
-        </h3>
+        </div>
         <label className="flex items-center gap-1.5 text-xs text-secondary cursor-pointer">
           <input
             type="checkbox"
@@ -159,10 +184,10 @@ export function AiTrafficHistoryPanel({
         </ComposedChart>
       </ResponsiveContainer>
 
-      <h3 className="text-sm font-semibold text-heading flex items-center gap-1.5 mt-5 mb-2">
-        People arriving from AI
+      <div className="flex items-center gap-1.5 mt-5 mb-2">
+        <h3 className="text-sm font-semibold text-heading">People arriving from AI</h3>
         <InfoTooltip text="Visits your own server answered, counted from server logs rather than a browser tag. A visit answered with a redirect is not counted, because the person had not arrived yet." />
-      </h3>
+      </div>
       <ResponsiveContainer width="100%" height={150}>
         <ComposedChart data={points} margin={{ top: 4, right: 8, left: -18, bottom: 0 }}>
           <CartesianGrid stroke={CHART_GRID_STROKE} vertical={false} />

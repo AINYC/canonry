@@ -3,7 +3,7 @@ import { isIP } from 'node:net'
 import { isDeepStrictEqual } from 'node:util'
 import { Agent as UndiciAgent } from 'undici'
 import { countableReferralCondition, referralLandedCondition } from './ai-referral-status.js'
-import { and, desc, eq, gte, lte, sql } from 'drizzle-orm'
+import { and, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { CURRENT_CLOUDFLARE_WORKER_VERSION } from './cloudflare-worker-version.js'
 import {
@@ -45,6 +45,7 @@ import {
   trafficConnectVercelRequestSchema,
   trafficResetRequestSchema,
   classifyTrafficPath,
+  TrafficPathClasses,
   segmentCrawlerHits,
   sumInfraHits,
   describeError,
@@ -4479,31 +4480,49 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
       const crawlerSeriesBucket = granularity === TrafficSeriesGranularities.day
         ? sql<string>`substr(${crawlerEventsHourly.tsHour}, 1, 10)`
         : crawlerEventsHourly.tsHour
-      // Group by path as well as bucket so each bucket can be segmented the same
-      // way the totals are. Distinct normalized paths per window is small, so the
-      // extra grouping key is cheap, and it is the only way to get a per-day
-      // content count: the classification is per path, not per hit.
+      // Content-vs-infrastructure is decided per PATH, but grouping the series by
+      // (bucket, path) materializes one row per path per bucket, which on a large
+      // site is millions of rows for a 90-day window. Instead: read the DISTINCT
+      // paths once (the bound the totals query already lives with), classify them
+      // in JS, then aggregate per bucket with the non-content set pushed into SQL.
+      // Rows returned are now (distinct paths + buckets), never their product.
+      const distinctPaths = app.db
+        .select({ pathNormalized: crawlerEventsHourly.pathNormalized })
+        .from(crawlerEventsHourly)
+        .where(crawlerWhere)
+        .groupBy(crawlerEventsHourly.pathNormalized)
+        .all()
+      // Push whichever side is SMALLER into the IN list, so a site that is mostly
+      // assets costs the same as one that is mostly pages.
+      const contentPaths: string[] = []
+      const infraPaths: string[] = []
+      for (const { pathNormalized } of distinctPaths) {
+        if (classifyTrafficPath(pathNormalized) === TrafficPathClasses.content) contentPaths.push(pathNormalized)
+        else infraPaths.push(pathNormalized)
+      }
+      const useContentList = contentPaths.length <= infraPaths.length
+      const listed = useContentList ? contentPaths : infraPaths
+      const contentExpr = listed.length === 0
+        // An empty list means one side is empty: either every path is content, or none is.
+        ? (useContentList ? sql`0` : sql`${crawlerEventsHourly.hits}`)
+        : useContentList
+          ? sql`CASE WHEN ${inArray(crawlerEventsHourly.pathNormalized, listed)} THEN ${crawlerEventsHourly.hits} ELSE 0 END`
+          : sql`CASE WHEN ${inArray(crawlerEventsHourly.pathNormalized, listed)} THEN 0 ELSE ${crawlerEventsHourly.hits} END`
+
       const crawlerSeries = app.db
         .select({
           bucket: crawlerSeriesBucket,
-          pathNormalized: crawlerEventsHourly.pathNormalized,
           hits: sql<number>`COALESCE(SUM(${crawlerEventsHourly.hits}), 0)`,
+          content: sql<number>`COALESCE(SUM(${contentExpr}), 0)`,
         })
         .from(crawlerEventsHourly)
         .where(crawlerWhere)
-        .groupBy(crawlerSeriesBucket, crawlerEventsHourly.pathNormalized)
+        .groupBy(crawlerSeriesBucket)
         .all()
-      const crawlerPathsByBucket = new Map<string, Array<{ pathNormalized: string; hits: number }>>()
       for (const row of crawlerSeries) {
-        const bucket = String(row.bucket)
-        const point = trafficSeriesPoint(seriesByBucket, bucket)
-        point.crawlerHits += Number(row.hits)
-        let paths = crawlerPathsByBucket.get(bucket)
-        if (!paths) { paths = []; crawlerPathsByBucket.set(bucket, paths) }
-        paths.push({ pathNormalized: row.pathNormalized, hits: Number(row.hits) })
-      }
-      for (const [bucket, paths] of crawlerPathsByBucket) {
-        trafficSeriesPoint(seriesByBucket, bucket).crawlerContentHits = segmentCrawlerHits(paths).content
+        const point = trafficSeriesPoint(seriesByBucket, String(row.bucket))
+        point.crawlerHits = Number(row.hits)
+        point.crawlerContentHits = Number(row.content)
       }
 
       const rows = app.db

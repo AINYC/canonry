@@ -510,9 +510,9 @@ test('top time picker reloads every GA surface and replaces all Social data', as
   onTestFinished(restoreFetch)
 
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  render(
+  const { rerender } = render(
     <QueryClientProvider client={queryClient}>
-      <ClickThroughActivity projectName="test-project" />
+      <ClickThroughActivity projectName="test-project" window="30d" />
     </QueryClientProvider>,
   )
 
@@ -539,13 +539,21 @@ test('top time picker reloads every GA surface and replaces all Social data', as
   }
 
   await assertWindow('30d')
-  const picker = screen.getByRole('group', { name: 'Traffic time period' })
-  fireEvent.click(within(picker).getByRole('button', { name: '7d' }))
+  // The picker now lives in ActivitySection, which owns the shared range, so
+  // this drives the same reload through the prop ClickThroughActivity receives.
+  // 'All' is gone: it meant unbounded to GA and 90 days to the server lane.
+  rerender(
+    <QueryClientProvider client={queryClient}>
+      <ClickThroughActivity projectName="test-project" window="7d" />
+    </QueryClientProvider>,
+  )
   await assertWindow('7d')
-  fireEvent.click(within(picker).getByRole('button', { name: '90d' }))
+  rerender(
+    <QueryClientProvider client={queryClient}>
+      <ClickThroughActivity projectName="test-project" window="90d" />
+    </QueryClientProvider>,
+  )
   await assertWindow('90d')
-  fireEvent.click(within(picker).getByRole('button', { name: 'All' }))
-  await assertWindow('all')
 })
 
 /**
@@ -594,4 +602,88 @@ test('AI traffic history renders from server data with no GA4 involved', async (
   expect(screen.getByText('4')).toBeTruthy()
   expect(screen.queryByText('30')).toBeNull()
   expect(screen.queryByText('5')).toBeNull()
+})
+
+/**
+ * Review finding: a failed request and a quiet window were both rendered as "no
+ * activity". The API densifies the window, so a measured-but-empty range returns
+ * zero-valued points, not none. These pin the three states apart.
+ */
+test('AI traffic history separates a failed request from a measured-empty window', async () => {
+  const restoreFetch = mockFetch((url) => {
+    if (url.split('?')[0]!.endsWith('/projects/test-project/traffic/events')) {
+      return new Response('boom', { status: 500 })
+    }
+    throw new Error(`unexpected fetch: ${url}`)
+  })
+  onTestFinished(restoreFetch)
+
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(
+    <QueryClientProvider client={queryClient}>
+      <AiTrafficHistoryPanel projectName="test-project" sinceMinutes={43200} />
+    </QueryClientProvider>,
+  )
+
+  // An error must never read as a measured zero.
+  expect(await screen.findByText(/Could not load AI traffic history/i)).toBeTruthy()
+  expect(screen.getByText(/not a reading of zero activity/i)).toBeTruthy()
+  expect(screen.queryByText(/No AI activity recorded/i)).toBeNull()
+})
+
+test('AI traffic history reports a measured-empty window as measured, not unconnected', async () => {
+  const restoreFetch = mockFetch((url) => {
+    if (url.split('?')[0]!.endsWith('/projects/test-project/traffic/events')) {
+      return jsonResponse({
+        events: [],
+        eventRows: { total: 0, returned: 0, truncated: false },
+        totals: { crawlerHits: 0, crawlerContentHits: 0, aiUserFetchHits: 0, aiReferralHits: 0, aiReferralLandedHits: 0 },
+        // Densified: the window WAS measured, it just held nothing.
+        series: {
+          granularity: 'day',
+          points: [
+            { bucket: '2026-08-01', crawlerHits: 0, crawlerContentHits: 0, aiUserFetchHits: 0, aiReferralHits: 0, aiReferralLandedHits: 0 },
+            { bucket: '2026-08-02', crawlerHits: 0, crawlerContentHits: 0, aiUserFetchHits: 0, aiReferralHits: 0, aiReferralLandedHits: 0 },
+          ],
+        },
+      })
+    }
+    throw new Error(`unexpected fetch: ${url}`)
+  })
+  onTestFinished(restoreFetch)
+
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(
+    <QueryClientProvider client={queryClient}>
+      <AiTrafficHistoryPanel projectName="test-project" sinceMinutes={43200} />
+    </QueryClientProvider>,
+  )
+
+  expect(await screen.findByText(/No AI activity recorded in this period/i)).toBeTruthy()
+  // Points exist, so this is NOT the "no source connected" case.
+  expect(screen.queryByText(/No server-side traffic source connected/i)).toBeNull()
+  expect(screen.queryByText(/Could not load/i)).toBeNull()
+})
+
+test('the traffic range picker survives a disconnected GA4', async () => {
+  const restoreFetch = mockFetch((url) => {
+    const urlPath = url.split('?')[0]!
+    if (urlPath.endsWith('/ga/status')) {
+      return jsonResponse({ connected: false, propertyId: null, clientEmail: null, lastSyncedAt: null })
+    }
+    return jsonResponse({})
+  })
+  onTestFinished(restoreFetch)
+
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(
+    <QueryClientProvider client={queryClient}>
+      <ClickThroughActivity projectName="test-project" window="30d" />
+    </QueryClientProvider>,
+  )
+
+  // The picker now lives in ActivitySection, so the GA panel must NOT own one.
+  // Its disappearance on disconnect was the defect.
+  await screen.findByText(/Connect Google Analytics 4/i)
+  expect(screen.queryByRole('group', { name: /Traffic time period/i })).toBeNull()
 })
