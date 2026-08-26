@@ -1074,7 +1074,13 @@ export function ClickThroughActivity({ projectName, window: windowProp }: {
               </Card>
             )}
 
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.5fr)]">
+            {/* Stacked, not side by side. The breakdown is a six-column table
+                (source, medium, channel, sessions, share, users) and at ~60% of
+                the row it wrapped or truncated the source names, which are the
+                column a reader actually scans. Full width also matches the
+                approved mock. The summary tiles above it are already a 3-up
+                grid, so they fill the width without changes. */}
+            <div className="grid gap-4">
               <Card className="surface-card p-5">
                 <div className="mb-4">
                   <p className="eyebrow eyebrow-soft">Summary</p>
