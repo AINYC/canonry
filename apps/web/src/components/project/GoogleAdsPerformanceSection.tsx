@@ -84,7 +84,12 @@ export function formatGoogleAdsMicros(micros: number | null, currency: string | 
 /** A raw ratio (0.0731) as a display percentage. Never rounded before this point. */
 export function formatGoogleAdsRatio(ratio: number | null): string {
   if (ratio === null || !Number.isFinite(ratio)) return GOOGLE_ADS_NOT_AVAILABLE
-  return `${PERCENT_FORMAT.format(ratio * 100)}%`
+  const percent = ratio * 100
+  // One decimal turns a measured 0.04% into "0%", which asserts no rate at all.
+  // A rate that is small is not a rate that is absent, and this surface already
+  // distinguishes those everywhere else.
+  if (percent > 0 && percent < 0.1) return '<0.1%'
+  return `${PERCENT_FORMAT.format(percent)}%`
 }
 
 /**
@@ -310,7 +315,10 @@ export function GoogleAdsPerformanceSection({ projectName }: { projectName: stri
     // render edge that turns them into money.
     costMicros: { label: 'Spend', color: CHART_SERIES_COLORS[1]!, axisId: 'spend', formatValue: (v) => formatGoogleAdsMicros(v, currency) },
     conversions: { label: 'Conversions', color: CHART_SERIES_COLORS[0]!, axisId: 'conversions', formatValue: (v) => CONVERSION_FORMAT.format(v) },
-    clicks: { label: 'Clicks', color: CHART_SERIES_COLORS[2]!, axisId: 'conversions', formatValue: (v) => COUNT_FORMAT.format(v) },
+    // Its own axis: clicks and conversions differ by an order of magnitude
+    // (913 vs 37.5 on the reference fixture), so sharing one axis renders
+    // conversions as a flat line at roughly 4% of the scale.
+    clicks: { label: 'Clicks', color: CHART_SERIES_COLORS[2]!, axisId: 'clicks', formatValue: (v) => COUNT_FORMAT.format(v) },
     impressions: { label: 'Impressions', color: CHART_SERIES_COLORS[3]!, axisId: 'impressions', formatValue: (v) => COUNT_FORMAT.format(v) },
   }
 

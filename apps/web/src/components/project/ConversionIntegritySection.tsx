@@ -560,7 +560,12 @@ function ConversionIntegritySetup({
   // A provider read that failed is the one case that outranks everything: the
   // states below are not trustworthy until it is retried, so it takes over the
   // whole list rather than showing two buttons over stale data.
-  const connectionUnavailable = workspace.googleAds.state === 'unavailable'
+  // Each provider owns its own failure. Deriving one flag from Google Ads put
+  // Retry beside the healthy row whenever only Tag Manager was unavailable, and
+  // removed it from the row that had actually failed.
+  const googleAdsUnavailable = workspace.googleAds.state === 'unavailable'
+  const gtmUnavailable = workspace.gtm.state === 'unavailable'
+  const connectionUnavailable = googleAdsUnavailable || gtmUnavailable
     || workspace.gtm.state === 'unavailable'
   const retryAction: PrimaryActionPresentation = {
     id: 'retry-connection-status',
@@ -583,7 +588,7 @@ function ConversionIntegritySetup({
       summary: workspace.googleAds.selection,
       changeLabel: 'Change Google Ads account',
       onChange: onChangeGoogleAdsSelection,
-      action: connectionUnavailable ? retryAction : googleAdsSetupAction(workspace),
+      action: googleAdsUnavailable ? retryAction : googleAdsSetupAction(workspace),
     },
     {
       title: 'Tag Manager',
@@ -592,7 +597,7 @@ function ConversionIntegritySetup({
       summary: workspace.gtm.selection,
       changeLabel: 'Change Tag Manager container',
       onChange: onChangeGtmSelection,
-      action: connectionUnavailable ? null : gtmSetupAction(workspace),
+      action: gtmUnavailable ? retryAction : gtmSetupAction(workspace),
     },
   ]
   // Genuinely dependent: a contract names resources from BOTH providers, so

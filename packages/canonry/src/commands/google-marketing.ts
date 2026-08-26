@@ -299,7 +299,9 @@ export async function googleAdsPerformance(
     console.log(`Coverage:     ${result.source.campaignsQueried} of ${result.source.campaignsInInventory} campaigns; totals are a subset of the account.`)
   }
   if (result.source.truncated) {
-    console.log(`Note:         the provider row cap was hit, so these totals are a subset sum.`)
+    // `truncated` is set by the sync from EITHER the provider row cap or the
+    // 50-campaign selection cap, so naming one of them is wrong half the time.
+    console.log(`Note:         the provider returned a bounded result, so these totals are a subset sum.`)
   }
 
   if (result.campaigns.length > 0) {

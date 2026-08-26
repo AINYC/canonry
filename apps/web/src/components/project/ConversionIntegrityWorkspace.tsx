@@ -440,13 +440,16 @@ function DisconnectConnection({
  * The escape hatch is the fallback, never the default.
  */
 function ConversionOptionField({
-  id, label, options, synced, loading, emptyHint, value, onChange,
+  id, label, options, synced, loading, failed, onRetry, emptyHint, value, onChange,
 }: {
   id: string
   label: string
   options: ConversionTrackingOptionsDto['googleAds']['conversionActions']
   synced: boolean
   loading: boolean
+  /** The options READ failed. Distinct from a successful read that found none. */
+  failed: boolean
+  onRetry: () => void
   emptyHint: string
   value: string
   onChange: (next: string) => void
@@ -455,32 +458,52 @@ function ConversionOptionField({
   const [manual, setManual] = useState(false)
   const useManual = manual || (value !== '' && !known && options.length > 0)
 
+  // The control and its mode switch are SIBLINGS of the label, never children.
+  // A <label> wrapping two interactive elements has ambiguous activation
+  // semantics: clicking the text can focus the field or press the button.
+  const labelEl = <label htmlFor={id} className={labelClassName}>{label}</label>
+
   if (loading) {
     return (
-      <label htmlFor={id} className={labelClassName}>
-        {label}
+      <div>
+        {labelEl}
         <select id={id} className={fieldClassName} disabled>
           <option>Loading…</option>
         </select>
-      </label>
+      </div>
     )
   }
 
-  // Nothing synced yet: an empty select would read as "no conversion actions
-  // exist", which is a different and wrong claim.
+  // Three states that must not collapse into one. A failed read is not an
+  // unsynced provider, and neither is a provider that synced and genuinely has
+  // no options: telling all three to "run a sync" sends the operator to do work
+  // that will not help.
+  if (failed) {
+    return (
+      <div>
+        {labelEl}
+        <input id={id} required className={fieldClassName} value={value} onChange={(event) => onChange(event.target.value)} />
+        <p className="mt-1 text-xs text-negative">
+          Could not load the list.{' '}
+          <button type="button" className="text-link underline" onClick={onRetry}>Retry</button>
+        </p>
+      </div>
+    )
+  }
+
   if (!synced || options.length === 0) {
     return (
-      <label htmlFor={id} className={labelClassName}>
-        {label}
+      <div>
+        {labelEl}
         <input id={id} required className={fieldClassName} value={value} onChange={(event) => onChange(event.target.value)} />
-        <span className="mt-1 block text-xs text-muted">{emptyHint}</span>
-      </label>
+        <p className="mt-1 text-xs text-muted">{synced ? 'Synced, but nothing to choose from yet.' : emptyHint}</p>
+      </div>
     )
   }
 
   return (
-    <label htmlFor={id} className={labelClassName}>
-      {label}
+    <div>
+      {labelEl}
       {useManual ? (
         <input id={id} required className={fieldClassName} value={value} onChange={(event) => onChange(event.target.value)} />
       ) : (
@@ -502,9 +525,10 @@ function ConversionOptionField({
       >
         {useManual ? 'Choose from synced list' : 'Enter an ID manually'}
       </button>
-    </label>
+    </div>
   )
 }
+
 
 export function ConversionIntegrityWorkspace({ projectId, projectName }: { projectId: string; projectName: string }) {
   const account = useAccount()
@@ -743,8 +767,26 @@ export function ConversionIntegrityWorkspace({ projectId, projectName }: { proje
       contractsQuery.refetch(),
       googleAdsSnapshotsQuery.refetch(),
       gtmSnapshotsQuery.refetch(),
+      conversionOptionsQuery.refetch(),
       activeContract ? integrityQuery.refetch() : Promise.resolve(),
     ])
+  }
+
+  /**
+   * Selecting a resource queues a provider sync server-side, so a single
+   * refetch lands BEFORE that run finishes and the operator sees the
+   * pre-sync state with nothing to tell them more is coming.
+   *
+   * Polls until the snapshot evidence the sync writes actually appears, then
+   * stops. Bounded, because a sync can fail: after the last attempt the surface
+   * simply shows its normal unsynced state rather than spinning forever.
+   */
+  async function refreshUntilSyncLands(hasEvidence: () => boolean) {
+    await refreshStoredEvidence()
+    for (let attempt = 0; attempt < 10 && !hasEvidence(); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1_500))
+      await refreshStoredEvidence()
+    }
   }
 
   function rememberOpener() {
@@ -928,7 +970,7 @@ export function ConversionIntegrityWorkspace({ projectId, projectName }: { proje
       })
       setSelectionPanel(null)
       restoreOpener()
-      await refreshStoredEvidence()
+      await refreshUntilSyncLands(() => googleAdsStatusQuery.data?.selectedCustomer != null)
     } catch (error) {
       setActionError(extractErrorMessage(error))
     }
@@ -952,7 +994,7 @@ export function ConversionIntegrityWorkspace({ projectId, projectName }: { proje
       })
       setSelectionPanel(null)
       restoreOpener()
-      await refreshStoredEvidence()
+      await refreshUntilSyncLands(() => gtmStatusQuery.data?.status === 'connected')
     } catch (error) {
       setActionError(extractErrorMessage(error))
     }
@@ -1467,6 +1509,8 @@ export function ConversionIntegrityWorkspace({ projectId, projectName }: { proje
                 options={conversionOptions?.googleAds.conversionActions ?? []}
                 synced={conversionOptions?.googleAds.syncedAt != null}
                 loading={conversionOptionsQuery.isLoading}
+                failed={conversionOptionsQuery.isError}
+                onRetry={() => void conversionOptionsQuery.refetch()}
                 emptyHint="Run a Google Ads sync to list conversion actions."
                 value={contractDraft.conversionActionId}
                 onChange={(next) => setContractDraft(previous => ({ ...previous, conversionActionId: next }))}
@@ -1477,6 +1521,8 @@ export function ConversionIntegrityWorkspace({ projectId, projectName }: { proje
                 options={conversionOptions?.gtm.tags ?? []}
                 synced={conversionOptions?.gtm.syncedAt != null}
                 loading={conversionOptionsQuery.isLoading}
+                failed={conversionOptionsQuery.isError}
+                onRetry={() => void conversionOptionsQuery.refetch()}
                 emptyHint="Run a Tag Manager sync to list tags."
                 value={contractDraft.tagId}
                 onChange={(next) => setContractDraft(previous => ({ ...previous, tagId: next }))}

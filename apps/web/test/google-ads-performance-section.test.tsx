@@ -417,6 +417,16 @@ describe('GoogleAdsPerformanceSection', () => {
     expect(screen.queryByText(/syncing/i)).toBeNull()
   })
 
+  test('a small but real rate is not rendered as zero', () => {
+    // 0.04% is a measured rate. One decimal turned it into "0%", which asserts
+    // no rate at all, the same null-vs-zero confusion this surface avoids
+    // everywhere else.
+    expect(formatGoogleAdsRatio(0.0004)).toBe('<0.1%')
+    expect(formatGoogleAdsRatio(0)).toBe('0%')
+    expect(formatGoogleAdsRatio(null)).toBe(GOOGLE_ADS_NOT_AVAILABLE)
+    expect(formatGoogleAdsRatio(0.073)).toBe('7.3%')
+  })
+
   test('shows a loading state before the stored snapshot arrives', () => {
     renderSection(performanceDto())
 

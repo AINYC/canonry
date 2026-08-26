@@ -963,19 +963,31 @@ class DefaultGoogleMarketingRuntime implements GoogleMarketingRuntime {
     // removed ones included, so the daily query is scoped to where the money
     // went. A failure here is not fatal; selection degrades to inventory order.
     const rankingWindow = defaultMetricsWindow(this.#now(), customerResult.data.timeZone)
-    const rankedCampaignIds = await client
+    // Fetch ONE MORE than the cap. Exactly-at-cap is ambiguous: it cannot be
+    // told apart from an account with more campaigns whose tail was cut, and
+    // that ambiguity is what lets a subset sum be reported as complete.
+    const ranking = await client
       .getCampaignSpendRanking(customerId, {
         ...rankingWindow,
-        limit: GOOGLE_ADS_CAMPAIGN_METRICS_MAX_CAMPAIGNS,
+        limit: GOOGLE_ADS_CAMPAIGN_METRICS_MAX_CAMPAIGNS + 1,
       })
-      .then(result => result.data.map(row => String(row.campaign.id)))
-      .catch(() => undefined)
+      .then(result => ({
+        ids: result.data.map(row => String(row.campaign.id)),
+        failed: false,
+      }))
+      // A swallowed failure silently falls back to inventory order, which
+      // EXCLUDES removed campaigns, so a campaign deleted mid-window loses its
+      // spend while `truncated` still reads false. Record the failure and let it
+      // surface as incompleteness instead of disappearing.
+      .catch(() => ({ ids: [] as string[], failed: true }))
+
+    const rankingTruncated = ranking.ids.length > GOOGLE_ADS_CAMPAIGN_METRICS_MAX_CAMPAIGNS
 
     const defaults = defaultMetricsQuery(
       this.#now(),
       inventory.campaigns,
       customerResult.data.timeZone,
-      rankedCampaignIds,
+      ranking.failed ? undefined : ranking.ids.slice(0, GOOGLE_ADS_CAMPAIGN_METRICS_MAX_CAMPAIGNS),
     )
     const metricsQuery = suppliedMetricsQuery ?? defaults.query
     if (!metricsQuery) {
@@ -997,7 +1009,11 @@ class DefaultGoogleMarketingRuntime implements GoogleMarketingRuntime {
       rows: metricRows.slice(0, GOOGLE_ADS_CAMPAIGN_METRICS_MAX_ROWS),
       truncated:
         metricRows.length > GOOGLE_ADS_CAMPAIGN_METRICS_MAX_ROWS ||
-        (suppliedMetricsQuery === undefined && defaults.inventoryTruncated),
+        (suppliedMetricsQuery === undefined && defaults.inventoryTruncated) ||
+        // Either the ranking could not be read (so selection fell back to an
+        // order that omits removed campaigns) or it reported more campaigns
+        // than the cap. Both mean these totals are a subset of the account.
+        (suppliedMetricsQuery === undefined && (ranking.failed || rankingTruncated)),
       fetchedAt: this.#now().toISOString(),
     }
     const metricsPayload: GoogleAdsSnapshotPayload = {

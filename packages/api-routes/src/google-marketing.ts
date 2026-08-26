@@ -1817,34 +1817,34 @@ export async function googleMarketingRoutes(app: FastifyInstance, opts: GoogleMa
     projectId: string,
     kind: 'google-ads-sync' | 'gtm-sync',
     callback: ((runId: string, projectId: string) => void | Promise<void>) | undefined,
-  ): void => {
-    if (!callback) return
+  ): string | null => {
+    if (!callback) return null
     try {
       requireLiveRead(request)
     } catch {
-      return
+      return null
     }
-    const candidateRun = queuedRun(projectId, RunKinds[kind])
-    let run: typeof runs.$inferSelect | typeof candidateRun = candidateRun
-    let queued = false
+    // ALWAYS queue a successor; never reuse an in-flight run.
+    //
+    // Selection increments `selectionGeneration`, and the sync worker CAS-writes
+    // its evidence gated on that generation (google-marketing-sync.ts). So a run
+    // queued before this selection is already doomed: it will fail the compare
+    // and throw. Reusing it would leave the new selection with no sync at all,
+    // which is exactly the dead state this helper exists to prevent.
+    //
+    // Two rapid selections therefore queue two runs. That is correct rather than
+    // wasteful: each one is a distinct generation and the earlier run cannot
+    // satisfy the later selection.
+    const run = queuedRun(projectId, RunKinds[kind])
     app.db.transaction((tx) => {
-      const existing = tx.select().from(runs).where(and(
-        eq(runs.projectId, projectId),
-        eq(runs.kind, RunKinds[kind]),
-        or(eq(runs.status, RunStatuses.queued), eq(runs.status, RunStatuses.running)),
-      )).orderBy(desc(runs.createdAt)).get()
-      if (existing) {
-        run = existing
-        return
-      }
-      tx.insert(runs).values(candidateRun).run()
-      queued = true
+      tx.insert(runs).values(run).run()
       writeAuditLog(tx, auditFromRequest(request, {
         projectId, actor: 'api', action: `${kind}.requested-on-selection`,
         entityType: 'run', entityId: run.id,
       }))
     })
-    if (queued) enqueueAfterCommit(app, callback, run.id, projectId, kind)
+    enqueueAfterCommit(app, callback, run.id, projectId, kind)
+    return run.id
   }
 
   app.put<{ Params: { name: string }; Body: unknown }>('/projects/:name/google-ads/selection', async (request) => {
