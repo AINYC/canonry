@@ -7098,6 +7098,7 @@ export type OnboardingTelemetryEvent = {
     eventId: string;
     flowVersion: 1;
     onboardingSessionId: string;
+    surface?: 'wizard' | 'platform' | 'site_health';
     event: 'onboarding.started';
     step: 'system' | 'project' | 'queries' | 'competitors' | 'run';
     resumed: boolean;
@@ -7105,6 +7106,7 @@ export type OnboardingTelemetryEvent = {
     eventId: string;
     flowVersion: 1;
     onboardingSessionId: string;
+    surface?: 'wizard' | 'platform' | 'site_health';
     event: 'onboarding.step_completed';
     step: 'system' | 'project' | 'queries' | 'competitors' | 'run';
     method: 'existing' | 'inline' | 'manual' | 'generated' | 'skipped' | 'automatic';
@@ -7113,20 +7115,23 @@ export type OnboardingTelemetryEvent = {
     eventId: string;
     flowVersion: 1;
     onboardingSessionId: string;
+    surface?: 'wizard' | 'platform' | 'site_health';
     event: 'onboarding.blocked';
     step: 'system' | 'project' | 'queries' | 'competitors' | 'run';
     action: 'continue' | 'configure_provider' | 'generate_queries' | 'save' | 'launch_run' | 'retry_run';
-    reasonCode: 'api_unavailable' | 'database_unavailable' | 'worker_unavailable' | 'no_provider' | 'no_queries' | 'provider_save_failed' | 'project_create_failed' | 'query_save_failed' | 'run_rejected' | 'run_failed' | 'run_cancelled' | 'unknown';
+    reasonCode: 'api_unavailable' | 'database_unavailable' | 'worker_unavailable' | 'no_provider' | 'no_queries' | 'provider_save_failed' | 'project_create_failed' | 'query_save_failed' | 'run_rejected' | 'run_failed' | 'run_cancelled' | 'rate_limited' | 'provider_auth' | 'network' | 'unknown';
 } | {
     eventId: string;
     flowVersion: 1;
     onboardingSessionId: string;
+    surface?: 'wizard' | 'platform' | 'site_health';
     event: 'run.requested';
     origin: 'dashboard_setup';
     result: 'queued' | 'rejected';
+    kind?: 'answer_visibility' | 'site_health';
     providerCountBucket: '0' | '1' | '2-3' | '4-5' | '6-10' | '11+';
     queryCountBucket: '0' | '1' | '2-3' | '4-5' | '6-10' | '11+';
-    reasonCode?: 'api_unavailable' | 'database_unavailable' | 'worker_unavailable' | 'no_provider' | 'no_queries' | 'provider_save_failed' | 'project_create_failed' | 'query_save_failed' | 'run_rejected' | 'run_failed' | 'run_cancelled' | 'unknown';
+    reasonCode?: 'api_unavailable' | 'database_unavailable' | 'worker_unavailable' | 'no_provider' | 'no_queries' | 'provider_save_failed' | 'project_create_failed' | 'query_save_failed' | 'run_rejected' | 'run_failed' | 'run_cancelled' | 'rate_limited' | 'provider_auth' | 'network' | 'unknown';
 };
 
 export type OrganicEvidenceDto = {

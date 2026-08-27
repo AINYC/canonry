@@ -2,9 +2,38 @@ import crypto from 'node:crypto'
 import { and, eq, inArray, sql } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { queries, querySnapshots } from '@ainyc/canonry-db'
-import { keywordGenerateRequestSchema, queryGenerateRequestSchema, validationError, notImplemented, internalError, notFound } from '@ainyc/canonry-contracts'
+import { AppError, keywordGenerateRequestSchema, queryGenerateRequestSchema, validationError, notImplemented, internalError, notFound, providerAuthError, quotaExceeded, providerError, classifyProviderErrorMessage, describeError } from '@ainyc/canonry-contracts'
 import { auditFromRequest, resolveProject, writeAuditLog } from './helpers.js'
 import { diffProjectQueries, preserveSnapshotQueryText, replaceProjectQueries } from './query-replace.js'
+
+/**
+ * Turn a raw provider failure into an error that keeps its KIND.
+ *
+ * Generation calls an answer provider, so its failures are provider failures:
+ * a bad key, a rate limit, a dropped connection. Collapsing all of them into
+ * `INTERNAL_ERROR` left the dashboard unable to tell the caller what to do,
+ * and left the onboarding funnel recording `unknown` for every block on the
+ * step with the worst recovery. An `AppError` thrown from deeper in the stack
+ * already carries a meaningful code and is passed through untouched.
+ */
+function generationFailure(err: unknown, fallbackMessage: string): AppError {
+  if (err instanceof AppError) return err
+  const message = err instanceof Error ? describeError(err) : fallbackMessage
+  switch (classifyProviderErrorMessage(message)) {
+    case 'PROVIDER_AUTH':
+      return providerAuthError(message)
+    case 'RATE_LIMITED':
+      return quotaExceeded('provider requests', { message })
+    case 'NETWORK':
+    case 'TIMEOUT':
+      return providerError(message)
+    // A malformed provider response and an unrecognized failure are both ours
+    // to explain, not the caller's to retry.
+    case 'PARSE_ERROR':
+    case 'UNKNOWN':
+      return internalError(message)
+  }
+}
 
 export interface QueryRoutesOptions {
   onGenerateQueries?: (provider: string, count: number, project: {
@@ -284,7 +313,7 @@ export async function queryRoutes(app: FastifyInstance, opts: QueryRoutesOptions
       return reply.send({ queries: generated, provider })
     } catch (err) {
       request.log.error({ err }, 'Query generation failed')
-      throw internalError(err instanceof Error ? err.message : 'Failed to generate queries')
+      throw generationFailure(err, 'Failed to generate queries')
     }
   })
 
@@ -459,7 +488,7 @@ export async function queryRoutes(app: FastifyInstance, opts: QueryRoutesOptions
       return reply.send({ keywords: generated, provider })
     } catch (err) {
       request.log.error({ err }, 'Keyword generation failed')
-      throw internalError(err instanceof Error ? err.message : 'Failed to generate keywords')
+      throw generationFailure(err, 'Failed to generate keywords')
     }
   })
 }

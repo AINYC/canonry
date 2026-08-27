@@ -36,9 +36,12 @@ import {
   createOnboardingEventId,
   getOrCreateOnboardingSessionId,
   isOnboardingHealthSettled,
+  markOnboardingRunHandled,
+  markOnboardingRunLaunched,
   onboardingErrorReason,
   onboardingStepFromIndex,
   onboardingSystemBlockReason,
+  readOnboardingLaunchedRun,
 } from '../lib/onboarding-telemetry.js'
 import type { DashboardVm, HealthSnapshot, ProjectCommandCenterVm, RunListItemVm } from '../view-models.js'
 
@@ -51,7 +54,9 @@ const SETUP_STEPS = [
 ] as const
 
 type SetupStep = 0 | 1 | 2 | 3 | 4
-type PendingOnboardingTelemetryEvent<T> = T extends unknown ? Omit<T, 'eventId'> : never
+// `surface` is stamped centrally in `emitOnboardingEvent`, so no call site
+// supplies it.
+type PendingOnboardingTelemetryEvent<T> = T extends unknown ? Omit<T, 'eventId' | 'surface'> : never
 
 export function isSuccessfulSetupRun(
   status: RunListItemVm['status'],
@@ -261,6 +266,10 @@ function ReadySetupPage({
       recordedOnboardingEvents.current.add(dedupeKey)
     }
     void recordOnboardingEvent({
+      // Stamped centrally so no call site can forget it. Without a surface the
+      // wizard's funnel and the first-run launchpad's funnel pool into one
+      // number that describes neither.
+      surface: 'wizard',
       ...event,
       eventId: createOnboardingEventId(),
     } as OnboardingTelemetryEvent)
@@ -348,13 +357,27 @@ function ReadySetupPage({
   const [competitorsError, setCompetitorsError] = useState<string | null>(null)
   const [competitorsSaving, setCompetitorsSaving] = useState(false)
 
+  // A run THIS onboarding session launched for THIS project and never saw
+  // finish. The wizard otherwise treats an already-successful project as
+  // settled history and stops polling, so a reload during a multi-minute sweep
+  // permanently loses the run-step completion. Failures land in under a second
+  // and always emitted; the funnel could record a failure but not a success.
+  const pendingLaunchedRun = useRef(readOnboardingLaunchedRun(resumeProjectName)).current
+  const pendingLaunchedRunId = pendingLaunchedRun?.runId ?? null
+  // The run whose outcome this onboarding session is entitled to report: one it
+  // launched, in this mount or an earlier one. `latestPersistedRun` also drives
+  // the poll so the UI can show an in-flight sweep, but a run the user never
+  // launched here is somebody else's history, and emitting for it re-reported
+  // the same failure on every single remount.
+  const launchedThisSessionRunId = useRef<string | null>(pendingLaunchedRunId)
   const [runTriggered, setRunTriggered] = useState(
-    !!latestPersistedRun && !hasExistingSuccessfulBaseline,
+    !!pendingLaunchedRunId || (!!latestPersistedRun && !hasExistingSuccessfulBaseline),
   )
   const [runSaving, setRunSaving] = useState(false)
   const [runError, setRunError] = useState<string | null>(null)
   const [launchedRunId, setLaunchedRunId] = useState<string | null>(
-    hasExistingSuccessfulBaseline ? null : latestPersistedRun?.id ?? null,
+    pendingLaunchedRunId
+      ?? (hasExistingSuccessfulBaseline ? null : latestPersistedRun?.id ?? null),
   )
   const triggerRunMutation = useTriggerRun()
 
@@ -470,6 +493,9 @@ function ReadySetupPage({
   const polledSnapshotCount = launchedRun.data?.snapshots?.length ?? 0
   useEffect(() => {
     if (!runTriggered || !polledRunStatus) return
+    // Only a run this onboarding session actually launched.
+    const reportableRunId = launchedThisSessionRunId.current
+    if (!reportableRunId || reportableRunId !== launchedRunId) return
     if (isSuccessfulSetupRun(polledRunStatus, polledSnapshotCount)) {
       emitOnboardingEvent({
         flowVersion: ONBOARDING_FLOW_VERSION,
@@ -479,6 +505,7 @@ function ReadySetupPage({
         method: 'automatic',
         countBucket: bucketOnboardingCount(polledSnapshotCount),
       }, 'onboarding.step_completed:run')
+      markOnboardingRunHandled(reportableRunId)
       return
     }
 
@@ -497,8 +524,12 @@ function ReadySetupPage({
       action: 'retry_run',
       reasonCode,
     }, `onboarding.blocked:run:${reasonCode}`)
+    // Terminal either way: the run has been accounted for, so a later mount
+    // must not re-open the poll and emit the same outcome twice.
+    markOnboardingRunHandled(reportableRunId)
   }, [
     emitOnboardingEvent,
+    launchedRunId,
     onboardingSessionId,
     polledRunStatus,
     polledSnapshotCount,
@@ -722,6 +753,8 @@ function ReadySetupPage({
       })
       setLaunchedRunId(run.id)
       setRunTriggered(true)
+      markOnboardingRunLaunched(createdProjectName, run.id)
+      launchedThisSessionRunId.current = run.id
       emitOnboardingEvent({
         flowVersion: ONBOARDING_FLOW_VERSION,
         onboardingSessionId,

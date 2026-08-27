@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   bucketOnboardingCount,
   isGhostTelemetryEvent,
+  normalizeOnboardingEventForCollection,
   onboardingTelemetryEventSchema,
 } from '../src/telemetry.js'
 
@@ -72,6 +73,115 @@ describe('onboardingTelemetryEventSchema', () => {
       domain: 'customer.example',
       error: 'raw provider response',
     }).success).toBe(false)
+  })
+
+  it('carries the surface that produced the event, and treats absence as the wizard', () => {
+    const platform = onboardingTelemetryEventSchema.parse({
+      event: 'onboarding.started',
+      eventId,
+      flowVersion: 1,
+      onboardingSessionId,
+      surface: 'platform',
+      step: 'project',
+      resumed: false,
+    })
+    expect(platform).toMatchObject({ surface: 'platform' })
+
+    // An older client that never heard of `surface` must stay VALID: making the
+    // field required would have been a breaking change to the request schema.
+    // The historical default is applied at collection, not at parse.
+    const legacy = onboardingTelemetryEventSchema.parse({
+      event: 'onboarding.started',
+      eventId,
+      flowVersion: 1,
+      onboardingSessionId,
+      step: 'project',
+      resumed: false,
+    })
+    expect(legacy.surface).toBeUndefined()
+    expect(normalizeOnboardingEventForCollection(legacy)).toMatchObject({ surface: 'wizard' })
+
+    expect(onboardingTelemetryEventSchema.safeParse({
+      event: 'onboarding.started',
+      eventId,
+      flowVersion: 1,
+      onboardingSessionId,
+      surface: 'dashboard',
+      step: 'project',
+      resumed: false,
+    }).success).toBe(false)
+  })
+
+  it('separates a site-health crawl from a misconfigured visibility sweep', () => {
+    // Both carry zero providers and zero queries. Only `kind` says which zero
+    // is correct and which is a broken setup.
+    expect(onboardingTelemetryEventSchema.parse({
+      event: 'run.requested',
+      eventId,
+      flowVersion: 1,
+      onboardingSessionId,
+      surface: 'platform',
+      origin: 'dashboard_setup',
+      result: 'queued',
+      kind: 'site_health',
+      providerCountBucket: '0',
+      queryCountBucket: '0',
+    })).toMatchObject({ kind: 'site_health' })
+
+    expect(onboardingTelemetryEventSchema.safeParse({
+      event: 'run.requested',
+      eventId,
+      flowVersion: 1,
+      onboardingSessionId,
+      origin: 'dashboard_setup',
+      result: 'queued',
+      kind: 'gsc_sync',
+      providerCountBucket: '0',
+      queryCountBucket: '0',
+    }).success).toBe(false)
+
+    // An event from before `kind` existed was an answer-visibility sweep, and
+    // collection says so rather than storing a null the reader must interpret.
+    const legacyRun = onboardingTelemetryEventSchema.parse({
+      event: 'run.requested',
+      eventId,
+      flowVersion: 1,
+      onboardingSessionId,
+      origin: 'dashboard_setup',
+      result: 'queued',
+      providerCountBucket: '2-3',
+      queryCountBucket: '6-10',
+    })
+    expect(normalizeOnboardingEventForCollection(legacyRun))
+      .toMatchObject({ kind: 'answer_visibility', surface: 'wizard' })
+
+    // Normalizing never overwrites what the client actually said.
+    expect(normalizeOnboardingEventForCollection(onboardingTelemetryEventSchema.parse({
+      event: 'run.requested',
+      eventId,
+      flowVersion: 1,
+      onboardingSessionId,
+      surface: 'platform',
+      origin: 'dashboard_setup',
+      result: 'queued',
+      kind: 'site_health',
+      providerCountBucket: '0',
+      queryCountBucket: '0',
+    }))).toMatchObject({ kind: 'site_health', surface: 'platform' })
+  })
+
+  it('accepts the provider-side block reasons the queries step actually hits', () => {
+    for (const reasonCode of ['rate_limited', 'provider_auth', 'network'] as const) {
+      expect(onboardingTelemetryEventSchema.safeParse({
+        event: 'onboarding.blocked',
+        eventId,
+        flowVersion: 1,
+        onboardingSessionId,
+        step: 'queries',
+        action: 'generate_queries',
+        reasonCode,
+      }).success).toBe(true)
+    }
   })
 
   it('rejects unknown flow versions', () => {
