@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState, type FormEvent } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useSearch } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, ChevronDown, Copy, ExternalLink, LoaderCircle } from 'lucide-react'
@@ -9,11 +9,22 @@ import {
   createOnboardingProject,
   getOnboardingMode,
   heyClient,
+  recordOnboardingEvent,
   type ApiProject,
   type OnboardingMode,
 } from '../api.js'
+import {
+  ONBOARDING_FLOW_VERSION,
+  type OnboardingSurface as OnboardingTelemetrySurface,
+  type OnboardingTelemetryEvent,
+} from '@ainyc/canonry-contracts'
 import { asyncHandler } from '../lib/async-handler.js'
 import { addToast } from '../lib/toast-store.js'
+import {
+  createOnboardingEventId,
+  getOrCreateOnboardingSessionId,
+  onboardingErrorReason,
+} from '../lib/onboarding-telemetry.js'
 import { useTriggerSiteAudit } from '../queries/mutations.js'
 import { AdminOnly } from '../components/shared/AccessControls.js'
 import { OnboardingProgress } from '../components/shared/OnboardingProgress.js'
@@ -176,6 +187,36 @@ export function watchTimedOutSiteHealthDispatch(
   })
 }
 
+type PendingOnboardingTelemetryEvent<T> = T extends unknown ? Omit<T, 'eventId' | 'surface'> : never
+
+/**
+ * Emit onboarding telemetry from a non-wizard surface.
+ *
+ * The first-run launchpad shipped with no instrumentation at all, so the
+ * `/setup` funnel measured only the returning-user wizard — the one surface a
+ * first-run user never sees. Same event vocabulary and same session id as the
+ * wizard, tagged with the surface so the two funnels stay separable.
+ */
+function useOnboardingTelemetry(surface: OnboardingTelemetrySurface) {
+  const onboardingSessionId = useRef(getOrCreateOnboardingSessionId()).current
+  const recorded = useRef(new Set<string>())
+  const emit = useCallback((
+    event: PendingOnboardingTelemetryEvent<OnboardingTelemetryEvent>,
+    dedupeKey?: string,
+  ) => {
+    if (dedupeKey) {
+      if (recorded.current.has(dedupeKey)) return
+      recorded.current.add(dedupeKey)
+    }
+    void recordOnboardingEvent({
+      ...event,
+      surface,
+      eventId: createOnboardingEventId(),
+    } as OnboardingTelemetryEvent)
+  }, [surface])
+  return { onboardingSessionId, emit }
+}
+
 function onboardingError(error: unknown, fallback: string): string {
   if (error instanceof ApiError && error.statusCode === 409) {
     return 'A project with this name already exists. Change the project name, or open the existing project.'
@@ -248,6 +289,21 @@ function SiteHealthOnboardingPageBody({
     retry: false,
     refetchOnMount: 'always',
   })
+  const { onboardingSessionId, emit } = useOnboardingTelemetry('site_health')
+
+  // Before every early return below, so the funnel records that the handoff
+  // from the launchpad actually landed. Reaching this page without a project
+  // name is a broken link, not an onboarding step.
+  useEffect(() => {
+    if (!projectName) return
+    emit({
+      flowVersion: ONBOARDING_FLOW_VERSION,
+      onboardingSessionId,
+      event: 'onboarding.started',
+      step: 'run',
+      resumed: Boolean(initialRunId),
+    }, 'onboarding.started')
+  }, [emit, initialRunId, onboardingSessionId, projectName])
 
   if (!projectName) {
     return (
@@ -449,6 +505,17 @@ function PlatformSetupPageBody({ onActivationStarted }: { onActivationStarted: (
   const [dispatchError, setDispatchError] = useState<string | null>(null)
   const [agentRequestCopied, setAgentRequestCopied] = useState(false)
   const errorRef = useRef<HTMLDivElement>(null)
+  const { onboardingSessionId, emit } = useOnboardingTelemetry('platform')
+
+  useEffect(() => {
+    emit({
+      flowVersion: ONBOARDING_FLOW_VERSION,
+      onboardingSessionId,
+      event: 'onboarding.started',
+      step: 'project',
+      resumed: false,
+    }, 'onboarding.started')
+  }, [emit, onboardingSessionId])
 
   const identity = deriveLaunchpadIdentity(domain)
   const resolvedProjectName = projectName || identity?.projectName || ''
@@ -484,9 +551,26 @@ function PlatformSetupPageBody({ onActivationStarted }: { onActivationStarted: (
       })
       const settlement = await settleSiteHealthDispatch(dispatch)
       if (settlement.state === 'queued') {
+        // A site-health crawl has no providers and no tracked queries, so the
+        // zero buckets are the honest values; `kind` is what keeps them from
+        // reading as a misconfigured visibility sweep.
+        emit({
+          flowVersion: ONBOARDING_FLOW_VERSION,
+          onboardingSessionId,
+          event: 'run.requested',
+          origin: 'dashboard_setup',
+          result: 'queued',
+          kind: 'site_health',
+          providerCountBucket: '0',
+          queryCountBucket: '0',
+        })
         await openSiteHealthSetup(project, settlement.run.runId)
         return
       }
+      // Timed out is "we stopped waiting", not "it queued" and not "it failed".
+      // The request is still in flight, so claiming either outcome here would
+      // be a number we cannot back. The site-health page's own
+      // `onboarding.started` records that the handoff landed.
 
       // Do not leave a valid project pinned to the form while the request is
       // still settling. Site Health's normal persisted run list will pick up
@@ -496,6 +580,26 @@ function PlatformSetupPageBody({ onActivationStarted }: { onActivationStarted: (
     } catch (error) {
       setPhase('recovery')
       setDispatchError(onboardingError(error, 'The project was created, but the Site Health scan could not be started.'))
+      const reasonCode = onboardingErrorReason(error, 'run_rejected')
+      emit({
+        flowVersion: ONBOARDING_FLOW_VERSION,
+        onboardingSessionId,
+        event: 'run.requested',
+        origin: 'dashboard_setup',
+        result: 'rejected',
+        kind: 'site_health',
+        providerCountBucket: '0',
+        queryCountBucket: '0',
+        reasonCode,
+      })
+      emit({
+        flowVersion: ONBOARDING_FLOW_VERSION,
+        onboardingSessionId,
+        event: 'onboarding.blocked',
+        step: 'run',
+        action: 'retry_run',
+        reasonCode,
+      }, `onboarding.blocked:run:${reasonCode}`)
     }
   }
 
@@ -519,6 +623,13 @@ function PlatformSetupPageBody({ onActivationStarted }: { onActivationStarted: (
       // the authoritative project list non-empty, unmounting dispatch recovery.
       onActivationStarted()
       setCreatedProject(project)
+      emit({
+        flowVersion: ONBOARDING_FLOW_VERSION,
+        onboardingSessionId,
+        event: 'onboarding.step_completed',
+        step: 'project',
+        method: 'manual',
+      }, 'onboarding.step_completed:project')
       await queryClient.invalidateQueries({
         queryKey: getApiV1ProjectsQueryKey({ client: heyClient }),
       })
@@ -528,6 +639,14 @@ function PlatformSetupPageBody({ onActivationStarted }: { onActivationStarted: (
       const conflict = error instanceof ApiError && error.statusCode === 409
       setCreateConflict(conflict)
       setCreateError(onboardingError(error, 'Could not create the project. Try again.'))
+      emit({
+        flowVersion: ONBOARDING_FLOW_VERSION,
+        onboardingSessionId,
+        event: 'onboarding.blocked',
+        step: 'project',
+        action: 'save',
+        reasonCode: onboardingErrorReason(error, 'project_create_failed'),
+      }, 'onboarding.blocked:project')
       if (conflict) {
         // Keep the actionable collision recovery visible while `auto`
         // refreshes and discovers the project that won the create race.

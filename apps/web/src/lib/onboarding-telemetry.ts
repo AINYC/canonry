@@ -2,6 +2,7 @@ import type { OnboardingBlockReason, OnboardingStep } from '@ainyc/canonry-contr
 import type { HealthSnapshot } from '../view-models.js'
 
 const SESSION_KEY = 'canonry.onboarding-session.v1'
+const LAUNCHED_RUN_KEY = 'canonry.onboarding-launched-run.v1'
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 const STEP_NAMES: readonly OnboardingStep[] = [
@@ -34,6 +35,29 @@ export function isOnboardingHealthSettled(snapshot: HealthSnapshot): boolean {
     && snapshot.workerStatus.state !== 'checking'
 }
 
+/**
+ * Every error code the onboarding steps can actually surface, mapped to the
+ * block reason an analysis can act on.
+ *
+ * The query-generation step calls a provider, so its failures are provider
+ * failures: rate limits, bad keys, dropped connections. Mapping only
+ * `NO_PROVIDER` / `NO_QUERIES` sent all of those to `unknown`, which made the
+ * one step with zero recovery the one step nobody could diagnose.
+ */
+const BLOCK_REASON_BY_ERROR_CODE: Readonly<Record<string, OnboardingBlockReason>> = {
+  NO_PROVIDER: 'no_provider',
+  NO_QUERIES: 'no_queries',
+  RATE_LIMITED: 'rate_limited',
+  QUOTA_EXCEEDED: 'rate_limited',
+  PROVIDER_AUTH: 'provider_auth',
+  AUTH_INVALID: 'provider_auth',
+  FORBIDDEN: 'provider_auth',
+  NETWORK: 'network',
+  CONNECTION_ERROR: 'network',
+  RUN_IN_PROGRESS: 'run_rejected',
+  RUN_CANCELLED: 'run_cancelled',
+}
+
 export function onboardingErrorReason(
   error: unknown,
   fallback: OnboardingBlockReason,
@@ -41,9 +65,7 @@ export function onboardingErrorReason(
   const code = error && typeof error === 'object' && 'code' in error
     ? String(error.code)
     : ''
-  if (code === 'NO_PROVIDER') return 'no_provider'
-  if (code === 'NO_QUERIES') return 'no_queries'
-  return fallback
+  return BLOCK_REASON_BY_ERROR_CODE[code] ?? fallback
 }
 
 export function getOrCreateOnboardingSessionId(): string {
@@ -65,6 +87,51 @@ export function getOrCreateOnboardingSessionId(): string {
 
 export function createOnboardingEventId(): string {
   return createUuid()
+}
+
+/**
+ * The run the wizard launched in this onboarding session, remembered across
+ * remounts.
+ *
+ * `runTriggered` and `launchedRunId` are component state, and the resume path
+ * deliberately clears both once the project has a successful baseline. A sweep
+ * takes 30 seconds to several minutes; anyone who reloads, navigates, or closes
+ * the tab in that window comes back to a page that has already decided the run
+ * is old news, so the run-step completion never fires. Failures, which land in
+ * under a second, always fired. The funnel could record a failure and not a
+ * success, which is exactly backwards.
+ *
+ * Persisting the id in `sessionStorage` (same scope as the onboarding session
+ * itself) lets the poll resume and the completion emit exactly once.
+ */
+export function markOnboardingRunLaunched(runId: string): void {
+  try {
+    if (typeof window !== 'undefined') {
+      window.sessionStorage.setItem(LAUNCHED_RUN_KEY, runId)
+    }
+  } catch {
+    // A telemetry marker must never break a launch.
+  }
+}
+
+export function readOnboardingLaunchedRunId(): string | null {
+  try {
+    if (typeof window === 'undefined') return null
+    const value = window.sessionStorage.getItem(LAUNCHED_RUN_KEY)
+    return value && value.length > 0 ? value : null
+  } catch {
+    return null
+  }
+}
+
+export function clearOnboardingRunLaunched(): void {
+  try {
+    if (typeof window !== 'undefined') {
+      window.sessionStorage.removeItem(LAUNCHED_RUN_KEY)
+    }
+  } catch {
+    // Same as above: best effort.
+  }
 }
 
 function createUuid(): string {

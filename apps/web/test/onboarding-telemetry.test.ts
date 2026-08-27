@@ -1,11 +1,14 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 
 import {
+  clearOnboardingRunLaunched,
   getOrCreateOnboardingSessionId,
   isOnboardingHealthSettled,
+  markOnboardingRunLaunched,
   onboardingErrorReason,
   onboardingStepFromIndex,
   onboardingSystemBlockReason,
+  readOnboardingLaunchedRunId,
 } from '../src/lib/onboarding-telemetry.js'
 
 describe('onboarding telemetry classification', () => {
@@ -65,5 +68,48 @@ describe('onboarding telemetry classification', () => {
     expect(onboardingErrorReason({ code: 'NO_PROVIDER' }, 'run_rejected')).toBe('no_provider')
     expect(onboardingErrorReason({ code: 'NO_QUERIES' }, 'run_rejected')).toBe('no_queries')
     expect(onboardingErrorReason(new Error('secret'), 'run_rejected')).toBe('run_rejected')
+  })
+
+  it('names the provider failures the query-generation step actually hits', () => {
+    // Generating queries calls a provider, so its failures are provider
+    // failures. Reporting all of them as `unknown` made the step with the worst
+    // recovery the one step nobody could diagnose.
+    expect(onboardingErrorReason({ code: 'RATE_LIMITED' }, 'unknown')).toBe('rate_limited')
+    expect(onboardingErrorReason({ code: 'QUOTA_EXCEEDED' }, 'unknown')).toBe('rate_limited')
+    expect(onboardingErrorReason({ code: 'PROVIDER_AUTH' }, 'unknown')).toBe('provider_auth')
+    expect(onboardingErrorReason({ code: 'AUTH_INVALID' }, 'unknown')).toBe('provider_auth')
+    expect(onboardingErrorReason({ code: 'CONNECTION_ERROR' }, 'unknown')).toBe('network')
+    expect(onboardingErrorReason({ code: 'NETWORK' }, 'unknown')).toBe('network')
+    // A code we have never seen still falls back rather than guessing.
+    expect(onboardingErrorReason({ code: 'SOMETHING_NEW' }, 'unknown')).toBe('unknown')
+  })
+})
+
+describe('onboarding launched-run marker', () => {
+  beforeEach(() => {
+    window.sessionStorage.clear()
+  })
+
+  it('remembers the launched run across a remount and clears exactly once', () => {
+    // The wizard's run-step completion depends on the component still polling
+    // when a 30-second-plus sweep lands. Component state does not survive a
+    // reload, so without this marker a slow SUCCESS is unrecordable while a
+    // sub-second FAILURE always records: the funnel could only count failures.
+    expect(readOnboardingLaunchedRunId()).toBeNull()
+
+    markOnboardingRunLaunched('run-42')
+    expect(readOnboardingLaunchedRunId()).toBe('run-42')
+
+    clearOnboardingRunLaunched()
+    expect(readOnboardingLaunchedRunId()).toBeNull()
+  })
+
+  it('survives a page reload but not a new browser session', () => {
+    markOnboardingRunLaunched('run-42')
+    // sessionStorage is the same scope the onboarding session id uses, so the
+    // marker and the session it belongs to expire together.
+    expect(window.sessionStorage.getItem('canonry.onboarding-launched-run.v1')).toBe('run-42')
+    window.sessionStorage.clear()
+    expect(readOnboardingLaunchedRunId()).toBeNull()
   })
 })

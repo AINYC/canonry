@@ -74,6 +74,84 @@ describe('onboardingTelemetryEventSchema', () => {
     }).success).toBe(false)
   })
 
+  it('carries the surface that produced the event, and treats absence as the wizard', () => {
+    const platform = onboardingTelemetryEventSchema.parse({
+      event: 'onboarding.started',
+      eventId,
+      flowVersion: 1,
+      onboardingSessionId,
+      surface: 'platform',
+      step: 'project',
+      resumed: false,
+    })
+    expect(platform).toMatchObject({ surface: 'platform' })
+
+    // Pre-surface events are all wizard events; absence must stay valid rather
+    // than becoming an "unknown surface" bucket.
+    const legacy = onboardingTelemetryEventSchema.parse({
+      event: 'onboarding.started',
+      eventId,
+      flowVersion: 1,
+      onboardingSessionId,
+      step: 'project',
+      resumed: false,
+    })
+    expect(legacy).not.toHaveProperty('surface')
+
+    expect(onboardingTelemetryEventSchema.safeParse({
+      event: 'onboarding.started',
+      eventId,
+      flowVersion: 1,
+      onboardingSessionId,
+      surface: 'dashboard',
+      step: 'project',
+      resumed: false,
+    }).success).toBe(false)
+  })
+
+  it('separates a site-health crawl from a misconfigured visibility sweep', () => {
+    // Both carry zero providers and zero queries. Only `kind` says which zero
+    // is correct and which is a broken setup.
+    expect(onboardingTelemetryEventSchema.parse({
+      event: 'run.requested',
+      eventId,
+      flowVersion: 1,
+      onboardingSessionId,
+      surface: 'platform',
+      origin: 'dashboard_setup',
+      result: 'queued',
+      kind: 'site_health',
+      providerCountBucket: '0',
+      queryCountBucket: '0',
+    })).toMatchObject({ kind: 'site_health' })
+
+    expect(onboardingTelemetryEventSchema.safeParse({
+      event: 'run.requested',
+      eventId,
+      flowVersion: 1,
+      onboardingSessionId,
+      origin: 'dashboard_setup',
+      result: 'queued',
+      kind: 'gsc_sync',
+      providerCountBucket: '0',
+      queryCountBucket: '0',
+    }).success).toBe(false)
+  })
+
+  it('accepts the provider-side block reasons the queries step actually hits', () => {
+    for (const reasonCode of ['rate_limited', 'provider_auth', 'network'] as const) {
+      expect(onboardingTelemetryEventSchema.safeParse({
+        event: 'onboarding.blocked',
+        eventId,
+        flowVersion: 1,
+        onboardingSessionId,
+        step: 'queries',
+        action: 'generate_queries',
+        reasonCode,
+      }).success).toBe(true)
+    }
+  })
+
   it('rejects unknown flow versions', () => {
     expect(onboardingTelemetryEventSchema.safeParse({
       event: 'onboarding.started',

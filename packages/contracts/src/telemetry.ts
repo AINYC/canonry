@@ -52,14 +52,40 @@ export const onboardingBlockReasonSchema = z.enum([
   'run_rejected',
   'run_failed',
   'run_cancelled',
+  // Provider-side failures the query-generation step actually hits. Without
+  // these every one of them reported `unknown`, which is why the queries step
+  // was the only blocker nobody could diagnose.
+  'rate_limited',
+  'provider_auth',
+  'network',
   'unknown',
 ])
 export type OnboardingBlockReason = z.infer<typeof onboardingBlockReasonSchema>
+
+/**
+ * Which onboarding surface produced the event.
+ *
+ * `wizard` is the original five-step `SetupPage` flow. `platform` is the
+ * first-run launchpad that `/setup` resolves to when the install has no
+ * projects, and `site_health` is the scan-first continuation it hands off to.
+ * The three are different funnels with different drop-off shapes, so an
+ * analysis that pools them measures nothing.
+ *
+ * Optional because events emitted before this field existed are all `wizard`;
+ * absence reads as `wizard`, never as "unknown surface".
+ */
+export const onboardingSurfaceSchema = z.enum([
+  'wizard',
+  'platform',
+  'site_health',
+])
+export type OnboardingSurface = z.infer<typeof onboardingSurfaceSchema>
 
 const onboardingEventBaseSchema = z.object({
   eventId: z.string().uuid(),
   flowVersion: z.literal(ONBOARDING_FLOW_VERSION),
   onboardingSessionId: z.string().uuid(),
+  surface: onboardingSurfaceSchema.optional(),
 })
 
 /**
@@ -90,6 +116,14 @@ export const onboardingTelemetryEventSchema = z.discriminatedUnion('event', [
     event: z.literal('run.requested'),
     origin: z.literal('dashboard_setup'),
     result: z.enum(['queued', 'rejected']),
+    /**
+     * What kind of run was asked for. A site-health crawl has no providers and
+     * no tracked queries, so its buckets are legitimately `0`; without this
+     * field that is indistinguishable from a misconfigured visibility sweep.
+     * Absent reads as `answer_visibility`, which is what every event emitted
+     * before this field existed was.
+     */
+    kind: z.enum(['answer_visibility', 'site_health']).optional(),
     providerCountBucket: onboardingCountBucketSchema,
     queryCountBucket: onboardingCountBucketSchema,
     reasonCode: onboardingBlockReasonSchema.optional(),

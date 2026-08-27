@@ -33,12 +33,15 @@ import { buildSetupModel, serviceStatusTooltip } from '../lib/health-helpers.js'
 import { asyncHandler } from '../lib/async-handler.js'
 import { summarizeRunError } from '../lib/format-helpers.js'
 import {
+  clearOnboardingRunLaunched,
   createOnboardingEventId,
   getOrCreateOnboardingSessionId,
   isOnboardingHealthSettled,
+  markOnboardingRunLaunched,
   onboardingErrorReason,
   onboardingStepFromIndex,
   onboardingSystemBlockReason,
+  readOnboardingLaunchedRunId,
 } from '../lib/onboarding-telemetry.js'
 import type { DashboardVm, HealthSnapshot, ProjectCommandCenterVm, RunListItemVm } from '../view-models.js'
 
@@ -261,6 +264,10 @@ function ReadySetupPage({
       recordedOnboardingEvents.current.add(dedupeKey)
     }
     void recordOnboardingEvent({
+      // Stamped centrally so no call site can forget it. Without a surface the
+      // wizard's funnel and the first-run launchpad's funnel pool into one
+      // number that describes neither.
+      surface: 'wizard',
       ...event,
       eventId: createOnboardingEventId(),
     } as OnboardingTelemetryEvent)
@@ -348,13 +355,20 @@ function ReadySetupPage({
   const [competitorsError, setCompetitorsError] = useState<string | null>(null)
   const [competitorsSaving, setCompetitorsSaving] = useState(false)
 
+  // A run this onboarding session launched but never saw finish. The wizard
+  // otherwise treats an already-successful project as settled history and stops
+  // polling, so a reload during a multi-minute sweep permanently loses the
+  // run-step completion. Failures land in under a second and always emitted;
+  // the funnel could record a failure but not a success.
+  const pendingLaunchedRunId = useRef(readOnboardingLaunchedRunId()).current
   const [runTriggered, setRunTriggered] = useState(
-    !!latestPersistedRun && !hasExistingSuccessfulBaseline,
+    !!pendingLaunchedRunId || (!!latestPersistedRun && !hasExistingSuccessfulBaseline),
   )
   const [runSaving, setRunSaving] = useState(false)
   const [runError, setRunError] = useState<string | null>(null)
   const [launchedRunId, setLaunchedRunId] = useState<string | null>(
-    hasExistingSuccessfulBaseline ? null : latestPersistedRun?.id ?? null,
+    pendingLaunchedRunId
+      ?? (hasExistingSuccessfulBaseline ? null : latestPersistedRun?.id ?? null),
   )
   const triggerRunMutation = useTriggerRun()
 
@@ -479,6 +493,7 @@ function ReadySetupPage({
         method: 'automatic',
         countBucket: bucketOnboardingCount(polledSnapshotCount),
       }, 'onboarding.step_completed:run')
+      clearOnboardingRunLaunched()
       return
     }
 
@@ -497,6 +512,9 @@ function ReadySetupPage({
       action: 'retry_run',
       reasonCode,
     }, `onboarding.blocked:run:${reasonCode}`)
+    // Terminal either way: the run has been accounted for, so a later mount
+    // must not re-open the poll and emit the same outcome twice.
+    clearOnboardingRunLaunched()
   }, [
     emitOnboardingEvent,
     onboardingSessionId,
@@ -722,6 +740,7 @@ function ReadySetupPage({
       })
       setLaunchedRunId(run.id)
       setRunTriggered(true)
+      markOnboardingRunLaunched(run.id)
       emitOnboardingEvent({
         flowVersion: ONBOARDING_FLOW_VERSION,
         onboardingSessionId,
