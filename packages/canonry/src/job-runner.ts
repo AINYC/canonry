@@ -5,8 +5,8 @@ import os from 'node:os'
 import { and, eq, inArray, ne, sql } from 'drizzle-orm'
 import type { DatabaseClient } from '@ainyc/canonry-db'
 import { runs, queries, competitors, projects, querySnapshots, siteCrawlAttempts, usageCounters } from '@ainyc/canonry-db'
-import type { ProviderName, LocationContext, MeasurementRunManifestV1 } from '@ainyc/canonry-contracts'
-import { CITED_URL_CAPTURE_VERSION, ONBOARDING_FLOW_VERSION, RunKinds, bucketOnboardingCount, buildRunErrorFromMessages, determineAnswerMentioned, effectiveBrandNames, effectiveDomains, isBrowserProvider, normalizeMeasurementExecutionQueryText, parseMeasurementRunManifestV1, providerSupportsLocationContext, serializeRunError, describeError } from '@ainyc/canonry-contracts'
+import type { ProviderErrorCode, ProviderName, LocationContext, MeasurementRunManifestV1 } from '@ainyc/canonry-contracts'
+import { CITED_URL_CAPTURE_VERSION, ONBOARDING_FLOW_VERSION, RunKinds, bucketOnboardingCount, classifyProviderErrorMessages, buildRunErrorFromMessages, determineAnswerMentioned, effectiveBrandNames, effectiveDomains, isBrowserProvider, normalizeMeasurementExecutionQueryText, parseMeasurementRunManifestV1, providerSupportsLocationContext, serializeRunError, describeError } from '@ainyc/canonry-contracts'
 import type { ProviderRegistry, RegisteredProvider } from './provider-registry.js'
 import { trackEvent } from './telemetry.js'
 import { buildRunCompletedProps, hashDomain, type RunPhaseTimings } from './run-telemetry.js'
@@ -176,54 +176,12 @@ function classifyRunAbortReason(message: string): RunAbortReason | undefined {
  * just a histogram bucket so dashboards can answer "why are real audit
  * failures happening?" without reading raw error strings.
  */
-type ProviderErrorCode =
-  | 'PROVIDER_AUTH'
-  | 'RATE_LIMITED'
-  | 'NETWORK'
-  | 'TIMEOUT'
-  | 'PARSE_ERROR'
-  | 'UNKNOWN'
-
 function classifyProviderErrors(
   errors: ReadonlyMap<ProviderName, string>,
 ): ProviderErrorCode {
-  // If every provider failed with the same category, report it. Otherwise
-  // report the most-severe-looking one with a documented priority order.
-  const codes = new Set<ProviderErrorCode>()
-  for (const message of errors.values()) {
-    codes.add(classifyOneProviderError(message))
-  }
-  const priority: ProviderErrorCode[] = [
-    'PROVIDER_AUTH',
-    'RATE_LIMITED',
-    'TIMEOUT',
-    'NETWORK',
-    'PARSE_ERROR',
-    'UNKNOWN',
-  ]
-  for (const code of priority) {
-    if (codes.has(code)) return code
-  }
-  return 'UNKNOWN'
-}
-
-function classifyOneProviderError(message: string): ProviderErrorCode {
-  if (/\b401\b|\b403\b|unauthorized|forbidden|invalid[_ -]?api[_ -]?key|missing[_ -]?api[_ -]?key|authentication/i.test(message)) {
-    return 'PROVIDER_AUTH'
-  }
-  if (/\b429\b|rate[_ -]?limit|too many requests|quota[_ -]?exceeded/i.test(message)) {
-    return 'RATE_LIMITED'
-  }
-  if (/timeout|timed out|ETIMEDOUT/i.test(message)) {
-    return 'TIMEOUT'
-  }
-  if (/ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|network|fetch failed|socket hang up/i.test(message)) {
-    return 'NETWORK'
-  }
-  if (/parse|unexpected token|invalid json|malformed|JSON\.parse/i.test(message)) {
-    return 'PARSE_ERROR'
-  }
-  return 'UNKNOWN'
+  // Shared with the query-generation route so the two never drift on what a
+  // rate limit or an auth failure looks like.
+  return classifyProviderErrorMessages(errors.values())
 }
 
 export class JobRunner {

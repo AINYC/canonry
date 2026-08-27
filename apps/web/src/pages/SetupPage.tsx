@@ -33,15 +33,15 @@ import { buildSetupModel, serviceStatusTooltip } from '../lib/health-helpers.js'
 import { asyncHandler } from '../lib/async-handler.js'
 import { summarizeRunError } from '../lib/format-helpers.js'
 import {
-  clearOnboardingRunLaunched,
   createOnboardingEventId,
   getOrCreateOnboardingSessionId,
   isOnboardingHealthSettled,
+  markOnboardingRunHandled,
   markOnboardingRunLaunched,
   onboardingErrorReason,
   onboardingStepFromIndex,
   onboardingSystemBlockReason,
-  readOnboardingLaunchedRunId,
+  readOnboardingLaunchedRun,
 } from '../lib/onboarding-telemetry.js'
 import type { DashboardVm, HealthSnapshot, ProjectCommandCenterVm, RunListItemVm } from '../view-models.js'
 
@@ -54,7 +54,9 @@ const SETUP_STEPS = [
 ] as const
 
 type SetupStep = 0 | 1 | 2 | 3 | 4
-type PendingOnboardingTelemetryEvent<T> = T extends unknown ? Omit<T, 'eventId'> : never
+// `surface` is stamped centrally in `emitOnboardingEvent`, so no call site
+// supplies it.
+type PendingOnboardingTelemetryEvent<T> = T extends unknown ? Omit<T, 'eventId' | 'surface'> : never
 
 export function isSuccessfulSetupRun(
   status: RunListItemVm['status'],
@@ -355,12 +357,19 @@ function ReadySetupPage({
   const [competitorsError, setCompetitorsError] = useState<string | null>(null)
   const [competitorsSaving, setCompetitorsSaving] = useState(false)
 
-  // A run this onboarding session launched but never saw finish. The wizard
-  // otherwise treats an already-successful project as settled history and stops
-  // polling, so a reload during a multi-minute sweep permanently loses the
-  // run-step completion. Failures land in under a second and always emitted;
-  // the funnel could record a failure but not a success.
-  const pendingLaunchedRunId = useRef(readOnboardingLaunchedRunId()).current
+  // A run THIS onboarding session launched for THIS project and never saw
+  // finish. The wizard otherwise treats an already-successful project as
+  // settled history and stops polling, so a reload during a multi-minute sweep
+  // permanently loses the run-step completion. Failures land in under a second
+  // and always emitted; the funnel could record a failure but not a success.
+  const pendingLaunchedRun = useRef(readOnboardingLaunchedRun(resumeProjectName)).current
+  const pendingLaunchedRunId = pendingLaunchedRun?.runId ?? null
+  // The run whose outcome this onboarding session is entitled to report: one it
+  // launched, in this mount or an earlier one. `latestPersistedRun` also drives
+  // the poll so the UI can show an in-flight sweep, but a run the user never
+  // launched here is somebody else's history, and emitting for it re-reported
+  // the same failure on every single remount.
+  const launchedThisSessionRunId = useRef<string | null>(pendingLaunchedRunId)
   const [runTriggered, setRunTriggered] = useState(
     !!pendingLaunchedRunId || (!!latestPersistedRun && !hasExistingSuccessfulBaseline),
   )
@@ -484,6 +493,9 @@ function ReadySetupPage({
   const polledSnapshotCount = launchedRun.data?.snapshots?.length ?? 0
   useEffect(() => {
     if (!runTriggered || !polledRunStatus) return
+    // Only a run this onboarding session actually launched.
+    const reportableRunId = launchedThisSessionRunId.current
+    if (!reportableRunId || reportableRunId !== launchedRunId) return
     if (isSuccessfulSetupRun(polledRunStatus, polledSnapshotCount)) {
       emitOnboardingEvent({
         flowVersion: ONBOARDING_FLOW_VERSION,
@@ -493,7 +505,7 @@ function ReadySetupPage({
         method: 'automatic',
         countBucket: bucketOnboardingCount(polledSnapshotCount),
       }, 'onboarding.step_completed:run')
-      clearOnboardingRunLaunched()
+      markOnboardingRunHandled(reportableRunId)
       return
     }
 
@@ -514,9 +526,10 @@ function ReadySetupPage({
     }, `onboarding.blocked:run:${reasonCode}`)
     // Terminal either way: the run has been accounted for, so a later mount
     // must not re-open the poll and emit the same outcome twice.
-    clearOnboardingRunLaunched()
+    markOnboardingRunHandled(reportableRunId)
   }, [
     emitOnboardingEvent,
+    launchedRunId,
     onboardingSessionId,
     polledRunStatus,
     polledSnapshotCount,
@@ -740,7 +753,8 @@ function ReadySetupPage({
       })
       setLaunchedRunId(run.id)
       setRunTriggered(true)
-      markOnboardingRunLaunched(run.id)
+      markOnboardingRunLaunched(createdProjectName, run.id)
+      launchedThisSessionRunId.current = run.id
       emitOnboardingEvent({
         flowVersion: ONBOARDING_FLOW_VERSION,
         onboardingSessionId,

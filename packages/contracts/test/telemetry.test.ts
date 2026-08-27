@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   bucketOnboardingCount,
   isGhostTelemetryEvent,
+  normalizeOnboardingEventForCollection,
   onboardingTelemetryEventSchema,
 } from '../src/telemetry.js'
 
@@ -86,8 +87,9 @@ describe('onboardingTelemetryEventSchema', () => {
     })
     expect(platform).toMatchObject({ surface: 'platform' })
 
-    // Pre-surface events are all wizard events; absence must stay valid rather
-    // than becoming an "unknown surface" bucket.
+    // An older client that never heard of `surface` must stay VALID: making the
+    // field required would have been a breaking change to the request schema.
+    // The historical default is applied at collection, not at parse.
     const legacy = onboardingTelemetryEventSchema.parse({
       event: 'onboarding.started',
       eventId,
@@ -96,7 +98,8 @@ describe('onboardingTelemetryEventSchema', () => {
       step: 'project',
       resumed: false,
     })
-    expect(legacy).not.toHaveProperty('surface')
+    expect(legacy.surface).toBeUndefined()
+    expect(normalizeOnboardingEventForCollection(legacy)).toMatchObject({ surface: 'wizard' })
 
     expect(onboardingTelemetryEventSchema.safeParse({
       event: 'onboarding.started',
@@ -136,6 +139,35 @@ describe('onboardingTelemetryEventSchema', () => {
       providerCountBucket: '0',
       queryCountBucket: '0',
     }).success).toBe(false)
+
+    // An event from before `kind` existed was an answer-visibility sweep, and
+    // collection says so rather than storing a null the reader must interpret.
+    const legacyRun = onboardingTelemetryEventSchema.parse({
+      event: 'run.requested',
+      eventId,
+      flowVersion: 1,
+      onboardingSessionId,
+      origin: 'dashboard_setup',
+      result: 'queued',
+      providerCountBucket: '2-3',
+      queryCountBucket: '6-10',
+    })
+    expect(normalizeOnboardingEventForCollection(legacyRun))
+      .toMatchObject({ kind: 'answer_visibility', surface: 'wizard' })
+
+    // Normalizing never overwrites what the client actually said.
+    expect(normalizeOnboardingEventForCollection(onboardingTelemetryEventSchema.parse({
+      event: 'run.requested',
+      eventId,
+      flowVersion: 1,
+      onboardingSessionId,
+      surface: 'platform',
+      origin: 'dashboard_setup',
+      result: 'queued',
+      kind: 'site_health',
+      providerCountBucket: '0',
+      queryCountBucket: '0',
+    }))).toMatchObject({ kind: 'site_health', surface: 'platform' })
   })
 
   it('accepts the provider-side block reasons the queries step actually hits', () => {

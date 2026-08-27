@@ -7,6 +7,7 @@ export type ErrorCode =
   | 'FORBIDDEN'
   | 'QUOTA_EXCEEDED'
   | 'PROVIDER_ERROR'
+  | 'PROVIDER_AUTH'
   | 'NO_PROVIDER'
   | 'NO_QUERIES'
   | 'RUN_IN_PROGRESS'
@@ -86,6 +87,20 @@ export function quotaExceeded(metric: string, details?: Record<string, unknown>)
 
 export function providerError(message: string, details?: Record<string, unknown>): AppError {
   return new AppError('PROVIDER_ERROR', message, 502, details)
+}
+
+/**
+ * An upstream answer provider rejected our credentials.
+ *
+ * Deliberately NOT `authInvalid`: that is 401 and means the CALLER's canonry
+ * key is bad, and the dashboard's response interceptor treats any 401 as an
+ * expired session and signs the user out. A stale Gemini key must never log
+ * someone out of their own instance, so this is a 502 like every other
+ * upstream failure, with its own code so callers can tell it apart from a
+ * network blip.
+ */
+export function providerAuthError(message: string, details?: Record<string, unknown>): AppError {
+  return new AppError('PROVIDER_AUTH', message, 502, details)
 }
 
 export function noProvider(projectName: string, details?: Record<string, unknown>): AppError {

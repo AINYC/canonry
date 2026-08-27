@@ -101,26 +101,80 @@ export function createOnboardingEventId(): string {
  * under a second, always fired. The funnel could record a failure and not a
  * success, which is exactly backwards.
  *
- * Persisting the id in `sessionStorage` (same scope as the onboarding session
- * itself) lets the poll resume and the completion emit exactly once.
+ * Three fields, and each one is load-bearing:
+ *
+ * - `projectName` scopes the marker. A bare run id would let a user who
+ *   launched a run for project A and then opened setup for project B poll A's
+ *   run and attribute its outcome to B's onboarding.
+ * - `runId` is what the poll resumes.
+ * - `handled` records that the run-step outcome was already emitted, so a
+ *   remount cannot double-count it. The per-mount dedupe ref cannot: it is
+ *   born empty on every mount, which is the whole problem.
  */
-export function markOnboardingRunLaunched(runId: string): void {
+export interface OnboardingLaunchedRun {
+  projectName: string
+  runId: string
+  handled: boolean
+}
+
+function isLaunchedRun(value: unknown): value is OnboardingLaunchedRun {
+  if (!value || typeof value !== 'object') return false
+  const candidate = value as Partial<OnboardingLaunchedRun>
+  return typeof candidate.projectName === 'string' && candidate.projectName.length > 0
+    && typeof candidate.runId === 'string' && candidate.runId.length > 0
+    && typeof candidate.handled === 'boolean'
+}
+
+export function markOnboardingRunLaunched(projectName: string, runId: string): void {
   try {
     if (typeof window !== 'undefined') {
-      window.sessionStorage.setItem(LAUNCHED_RUN_KEY, runId)
+      window.sessionStorage.setItem(
+        LAUNCHED_RUN_KEY,
+        JSON.stringify({ projectName, runId, handled: false } satisfies OnboardingLaunchedRun),
+      )
     }
   } catch {
     // A telemetry marker must never break a launch.
   }
 }
 
-export function readOnboardingLaunchedRunId(): string | null {
+/**
+ * The pending run for `projectName`, or null.
+ *
+ * Returns null for another project's run, for an already-handled run, and for
+ * anything that does not parse — a marker we cannot read is not a marker we
+ * should act on.
+ */
+export function readOnboardingLaunchedRun(projectName: string | undefined): OnboardingLaunchedRun | null {
+  if (!projectName) return null
   try {
     if (typeof window === 'undefined') return null
-    const value = window.sessionStorage.getItem(LAUNCHED_RUN_KEY)
-    return value && value.length > 0 ? value : null
+    const raw = window.sessionStorage.getItem(LAUNCHED_RUN_KEY)
+    if (!raw) return null
+    const parsed: unknown = JSON.parse(raw)
+    if (!isLaunchedRun(parsed)) return null
+    if (parsed.projectName !== projectName) return null
+    if (parsed.handled) return null
+    return parsed
   } catch {
     return null
+  }
+}
+
+/** Record that this run's outcome has been emitted. Idempotent. */
+export function markOnboardingRunHandled(runId: string): void {
+  try {
+    if (typeof window === 'undefined') return
+    const raw = window.sessionStorage.getItem(LAUNCHED_RUN_KEY)
+    if (!raw) return
+    const parsed: unknown = JSON.parse(raw)
+    if (!isLaunchedRun(parsed) || parsed.runId !== runId) return
+    window.sessionStorage.setItem(
+      LAUNCHED_RUN_KEY,
+      JSON.stringify({ ...parsed, handled: true } satisfies OnboardingLaunchedRun),
+    )
+  } catch {
+    // Same as above: best effort.
   }
 }
 

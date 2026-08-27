@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import {
   notImplemented,
+  normalizeOnboardingEventForCollection,
   onboardingTelemetryEventSchema,
   validationError,
   type OnboardingTelemetryEvent,
@@ -57,7 +58,7 @@ export async function telemetryRoutes(app: FastifyInstance, opts: TelemetryRoute
     // Missing wiring is a supported deployment posture. The dashboard should
     // never fail onboarding because its host does not collect product
     // telemetry (for example, apps/api or an opted-out local instance).
-    opts.recordOnboardingEvent?.(parsed.data)
+    opts.recordOnboardingEvent?.(normalizeOnboardingEventForCollection(parsed.data))
     return reply.status(202).send({ accepted: Boolean(opts.recordOnboardingEvent) })
   })
 }

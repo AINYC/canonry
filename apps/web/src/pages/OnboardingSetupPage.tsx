@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState, type FormEven
 import { Link, useNavigate, useSearch } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, ChevronDown, Copy, ExternalLink, LoaderCircle } from 'lucide-react'
-import { getApiV1ProjectsOptions, getApiV1ProjectsQueryKey } from '@ainyc/canonry-api-client/react-query'
+import { getApiV1ProjectsOptions, getApiV1ProjectsQueryKey, getApiV1RunsByIdOptions } from '@ainyc/canonry-api-client/react-query'
 
 import {
   ApiError,
@@ -23,7 +23,10 @@ import { addToast } from '../lib/toast-store.js'
 import {
   createOnboardingEventId,
   getOrCreateOnboardingSessionId,
+  markOnboardingRunHandled,
+  markOnboardingRunLaunched,
   onboardingErrorReason,
+  readOnboardingLaunchedRun,
 } from '../lib/onboarding-telemetry.js'
 import { useTriggerSiteAudit } from '../queries/mutations.js'
 import { AdminOnly } from '../components/shared/AccessControls.js'
@@ -305,6 +308,60 @@ function SiteHealthOnboardingPageBody({
     }, 'onboarding.started')
   }, [emit, initialRunId, onboardingSessionId, projectName])
 
+  // Claim the handed-off scan for this onboarding session, so its outcome is
+  // reported once rather than on every remount of a page whose run is already
+  // terminal.
+  useEffect(() => {
+    if (!projectName || !initialRunId) return
+    if (readOnboardingLaunchedRun(projectName)?.runId === initialRunId) return
+    markOnboardingRunLaunched(projectName, initialRunId)
+  }, [initialRunId, projectName])
+
+  // The scan's lifecycle lives inside SiteHealthSection, which is also rendered
+  // on the project page where onboarding telemetry would be wrong. Polling the
+  // run here keeps the terminal funnel event with the onboarding surface that
+  // owns it, instead of pushing onboarding concerns into a shared component.
+  const scanRun = useQuery({
+    ...getApiV1RunsByIdOptions({ client: heyClient, path: { id: initialRunId ?? '' } }),
+    enabled: Boolean(initialRunId),
+    refetchInterval: ({ state }) => {
+      const status = state.data?.status
+      const terminal = status === 'completed' || status === 'partial' || status === 'failed' || status === 'cancelled'
+      return terminal ? false : 2000
+    },
+    // Same reason as the wizard's poll: without this, react-query suppresses
+    // interval refetches whenever the tab loses focus, and a crawl outruns a
+    // user's attention span.
+    refetchIntervalInBackground: true,
+  })
+  const scanStatus = scanRun.data?.status
+  useEffect(() => {
+    if (!projectName || !initialRunId || !scanStatus) return
+    // A crawl has no snapshots, so status alone is the terminal signal.
+    if (scanStatus === 'completed' || scanStatus === 'partial') {
+      emit({
+        flowVersion: ONBOARDING_FLOW_VERSION,
+        onboardingSessionId,
+        event: 'onboarding.step_completed',
+        step: 'run',
+        method: 'automatic',
+      }, 'onboarding.step_completed:run')
+      markOnboardingRunHandled(initialRunId)
+      return
+    }
+    if (scanStatus !== 'failed' && scanStatus !== 'cancelled') return
+    const reasonCode = scanStatus === 'cancelled' ? 'run_cancelled' : 'run_failed'
+    emit({
+      flowVersion: ONBOARDING_FLOW_VERSION,
+      onboardingSessionId,
+      event: 'onboarding.blocked',
+      step: 'run',
+      action: 'retry_run',
+      reasonCode,
+    }, `onboarding.blocked:run:${reasonCode}`)
+    markOnboardingRunHandled(initialRunId)
+  }, [emit, initialRunId, onboardingSessionId, projectName, scanStatus])
+
   if (!projectName) {
     return (
       <div className="page-container max-w-3xl">
@@ -390,6 +447,15 @@ function SiteHealthOnboardingPageBody({
     })
   }
   const skipOnboarding = () => {
+    // Leaving on purpose is an outcome, not an absence of one. Without this the
+    // funnel cannot tell a user who chose to stop from one who vanished.
+    emit({
+      flowVersion: ONBOARDING_FLOW_VERSION,
+      onboardingSessionId,
+      event: 'onboarding.step_completed',
+      step: 'run',
+      method: 'skipped',
+    }, 'onboarding.step_completed:run')
     void navigate({
       to: '/projects/$projectName',
       params: { projectName: project.name },
@@ -567,10 +633,38 @@ function PlatformSetupPageBody({ onActivationStarted }: { onActivationStarted: (
         await openSiteHealthSetup(project, settlement.run.runId)
         return
       }
-      // Timed out is "we stopped waiting", not "it queued" and not "it failed".
-      // The request is still in flight, so claiming either outcome here would
-      // be a number we cannot back. The site-health page's own
-      // `onboarding.started` records that the handoff landed.
+      // Timed out is "we stopped waiting", not "it queued" and not "it failed",
+      // so nothing is claimed HERE. But the request is still in flight and will
+      // settle, and dropping that outcome would make every slow dispatch vanish
+      // from the funnel — reading as "nobody started a scan" rather than "we
+      // navigated on". Report it when it actually resolves.
+      void dispatch.then(
+        () => {
+          emit({
+            flowVersion: ONBOARDING_FLOW_VERSION,
+            onboardingSessionId,
+            event: 'run.requested',
+            origin: 'dashboard_setup',
+            result: 'queued',
+            kind: 'site_health',
+            providerCountBucket: '0',
+            queryCountBucket: '0',
+          })
+        },
+        (error: unknown) => {
+          emit({
+            flowVersion: ONBOARDING_FLOW_VERSION,
+            onboardingSessionId,
+            event: 'run.requested',
+            origin: 'dashboard_setup',
+            result: 'rejected',
+            kind: 'site_health',
+            providerCountBucket: '0',
+            queryCountBucket: '0',
+            reasonCode: onboardingErrorReason(error, 'run_rejected'),
+          })
+        },
+      )
 
       // Do not leave a valid project pinned to the form while the request is
       // still settling. Site Health's normal persisted run list will pick up

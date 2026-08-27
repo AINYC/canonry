@@ -64,13 +64,24 @@ describe('onboarding surfaces are instrumented', () => {
     expect(onboarding).toContain("useOnboardingTelemetry('site_health')")
   })
 
-  it('keeps the run step recordable after a reload', () => {
+  it('keeps the run step recordable after a reload, and scoped to one project', () => {
     // The success branch needs the component mounted when the run lands; the
     // failure branch does not. Persisting the launched run is what stops the
-    // funnel from being able to record only failures.
+    // funnel from being able to record only failures. The marker is read BY
+    // PROJECT so a run launched for one project is never reported against
+    // another's onboarding, and marked handled so a remount cannot re-report it.
     const setup = read('pages/SetupPage.tsx')
-    expect(setup).toContain('markOnboardingRunLaunched')
-    expect(setup).toContain('readOnboardingLaunchedRunId')
-    expect(setup).toContain('clearOnboardingRunLaunched')
+    expect(setup).toContain('markOnboardingRunLaunched(createdProjectName, run.id)')
+    expect(setup).toContain('readOnboardingLaunchedRun(resumeProjectName)')
+    expect(setup).toContain('markOnboardingRunHandled')
+  })
+
+  it('gives the site-health surface a terminal event, not just a start', () => {
+    // A funnel whose last surface only ever emits `onboarding.started` cannot
+    // distinguish a scan that finished from one that died.
+    const onboarding = read('pages/OnboardingSetupPage.tsx')
+    expect(onboarding).toContain("event: 'onboarding.started'")
+    expect(onboarding).toContain("event: 'onboarding.step_completed'")
+    expect(onboarding).toContain("event: 'onboarding.blocked'")
   })
 })

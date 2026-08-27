@@ -33,11 +33,17 @@ describe('onboarding telemetry route', () => {
 
     expect(response.statusCode).toBe(202)
     expect(response.json()).toEqual({ accepted: true })
+    // `surface` is absent from the payload and present on the forwarded event:
+    // the wire keeps it optional so an older client stays valid, and the
+    // historical default is applied HERE, at the one boundary every onboarding
+    // event passes through, so the collector stores `wizard` rather than a null
+    // every reader has to re-interpret.
     expect(events).toEqual([{
       event: 'onboarding.started',
       eventId,
       flowVersion: 1,
       onboardingSessionId,
+      surface: 'wizard',
       step: 'project',
       resumed: true,
     }])

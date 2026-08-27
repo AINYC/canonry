@@ -71,8 +71,14 @@ export type OnboardingBlockReason = z.infer<typeof onboardingBlockReasonSchema>
  * The three are different funnels with different drop-off shapes, so an
  * analysis that pools them measures nothing.
  *
- * Optional because events emitted before this field existed are all `wizard`;
- * absence reads as `wizard`, never as "unknown surface".
+ * Optional ON THE WIRE, because events emitted before this field existed are all
+ * `wizard` and an older client must stay valid. Making it required here would
+ * have been a breaking change to the published request schema.
+ *
+ * The historical default is therefore applied where the event is FORWARDED to
+ * the collector (`normalizeOnboardingEventForCollection`), not left to each
+ * reader: an undefined that reaches the collector is stored as null, and every
+ * analysis then has to re-derive the same fallback. One of them will forget.
  */
 export const onboardingSurfaceSchema = z.enum([
   'wizard',
@@ -120,8 +126,9 @@ export const onboardingTelemetryEventSchema = z.discriminatedUnion('event', [
      * What kind of run was asked for. A site-health crawl has no providers and
      * no tracked queries, so its buckets are legitimately `0`; without this
      * field that is indistinguishable from a misconfigured visibility sweep.
-     * Absent reads as `answer_visibility`, which is what every event emitted
-     * before this field existed was.
+     * Optional on the wire and defaulted at collection for the same reason as
+     * `surface`: a documented fallback that nothing applies becomes a null
+     * bucket downstream.
      */
     kind: z.enum(['answer_visibility', 'site_health']).optional(),
     providerCountBucket: onboardingCountBucketSchema,
@@ -130,6 +137,25 @@ export const onboardingTelemetryEventSchema = z.discriminatedUnion('event', [
   }).strict(),
 ])
 export type OnboardingTelemetryEvent = z.infer<typeof onboardingTelemetryEventSchema>
+
+/**
+ * Apply the documented historical defaults on the way to the collector.
+ *
+ * The wire schema leaves `surface` and `kind` optional so an older client stays
+ * valid, but "absent means wizard / answer_visibility" is only true if someone
+ * actually applies it. Nothing did: the route forwarded the parsed event
+ * unchanged, so the collector stored nulls and every downstream reader had to
+ * re-derive the same fallback. Do it once, here, at the single point every
+ * onboarding event passes through.
+ */
+export function normalizeOnboardingEventForCollection(
+  event: OnboardingTelemetryEvent,
+): OnboardingTelemetryEvent {
+  const surfaced = { ...event, surface: event.surface ?? 'wizard' }
+  return surfaced.event === 'run.requested'
+    ? { ...surfaced, kind: surfaced.kind ?? 'answer_visibility' }
+    : surfaced
+}
 
 export const telemetryEventAcceptedDtoSchema = z.object({
   accepted: z.boolean(),

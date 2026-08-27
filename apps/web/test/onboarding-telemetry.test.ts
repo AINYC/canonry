@@ -4,11 +4,12 @@ import {
   clearOnboardingRunLaunched,
   getOrCreateOnboardingSessionId,
   isOnboardingHealthSettled,
+  markOnboardingRunHandled,
   markOnboardingRunLaunched,
   onboardingErrorReason,
   onboardingStepFromIndex,
   onboardingSystemBlockReason,
-  readOnboardingLaunchedRunId,
+  readOnboardingLaunchedRun,
 } from '../src/lib/onboarding-telemetry.js'
 
 describe('onboarding telemetry classification', () => {
@@ -90,26 +91,65 @@ describe('onboarding launched-run marker', () => {
     window.sessionStorage.clear()
   })
 
-  it('remembers the launched run across a remount and clears exactly once', () => {
+  it('remembers the launched run across a remount', () => {
     // The wizard's run-step completion depends on the component still polling
     // when a 30-second-plus sweep lands. Component state does not survive a
     // reload, so without this marker a slow SUCCESS is unrecordable while a
     // sub-second FAILURE always records: the funnel could only count failures.
-    expect(readOnboardingLaunchedRunId()).toBeNull()
+    expect(readOnboardingLaunchedRun('acme')).toBeNull()
 
-    markOnboardingRunLaunched('run-42')
-    expect(readOnboardingLaunchedRunId()).toBe('run-42')
+    markOnboardingRunLaunched('acme', 'run-42')
+    expect(readOnboardingLaunchedRun('acme')).toEqual({
+      projectName: 'acme',
+      runId: 'run-42',
+      handled: false,
+    })
 
     clearOnboardingRunLaunched()
-    expect(readOnboardingLaunchedRunId()).toBeNull()
+    expect(readOnboardingLaunchedRun('acme')).toBeNull()
+  })
+
+  it('never hands one project the run of another', () => {
+    // Launch a sweep for acme, then open setup for globex. A bare run id would
+    // poll acme's run here and attribute its outcome to globex's onboarding.
+    markOnboardingRunLaunched('acme', 'run-42')
+
+    expect(readOnboardingLaunchedRun('globex')).toBeNull()
+    expect(readOnboardingLaunchedRun(undefined)).toBeNull()
+    expect(readOnboardingLaunchedRun('acme')?.runId).toBe('run-42')
+  })
+
+  it('stops offering a run whose outcome was already reported', () => {
+    // The per-mount dedupe ref is born empty on every mount, so it cannot stop
+    // a remount from re-reporting a terminal run. This is what does.
+    markOnboardingRunLaunched('acme', 'run-42')
+    markOnboardingRunHandled('run-42')
+
+    expect(readOnboardingLaunchedRun('acme')).toBeNull()
+  })
+
+  it('ignores a handled mark for a different run', () => {
+    markOnboardingRunLaunched('acme', 'run-42')
+    markOnboardingRunHandled('run-99')
+
+    expect(readOnboardingLaunchedRun('acme')?.handled).toBe(false)
+  })
+
+  it('treats an unreadable marker as no marker', () => {
+    // A marker we cannot parse is not a marker we should act on.
+    window.sessionStorage.setItem('canonry.onboarding-launched-run.v1', 'not json')
+    expect(readOnboardingLaunchedRun('acme')).toBeNull()
+
+    window.sessionStorage.setItem('canonry.onboarding-launched-run.v1', JSON.stringify({ runId: 'run-42' }))
+    expect(readOnboardingLaunchedRun('acme')).toBeNull()
   })
 
   it('survives a page reload but not a new browser session', () => {
-    markOnboardingRunLaunched('run-42')
+    markOnboardingRunLaunched('acme', 'run-42')
     // sessionStorage is the same scope the onboarding session id uses, so the
     // marker and the session it belongs to expire together.
-    expect(window.sessionStorage.getItem('canonry.onboarding-launched-run.v1')).toBe('run-42')
+    expect(window.sessionStorage.getItem('canonry.onboarding-launched-run.v1')).toContain('run-42')
     window.sessionStorage.clear()
-    expect(readOnboardingLaunchedRunId()).toBeNull()
+    expect(readOnboardingLaunchedRun('acme')).toBeNull()
   })
 })
