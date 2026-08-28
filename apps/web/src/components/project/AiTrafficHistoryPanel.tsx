@@ -15,6 +15,7 @@ import {
   CartesianGrid,
   ComposedChart,
   Line,
+  Legend,
   RechartsTooltip,
   ResponsiveContainer,
   XAxis,
@@ -64,6 +65,11 @@ interface Point {
 }
 
 /** Coerce a wire number that an older API may not send at all. */
+const LEGEND_STYLE = { fontSize: 11, paddingTop: 6 } as const
+/** Trend lines are the same colour as their series; naming them again in the
+ *  legend doubles its length and says nothing new. */
+const HIDDEN_FROM_LEGEND = new Set(['Pages crawled trend', 'Page fetches trend', 'Visits trend'])
+
 const num = (v: number | undefined): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
 
 interface Trend { start: number; end: number; startIndex: number; endIndex: number }
@@ -274,7 +280,7 @@ export function AiTrafficHistoryPanel({
         </label>
         </div>
       </div>
-      <ResponsiveContainer width="100%" height={180}>
+      <ResponsiveContainer width="100%" height={206}>
         <ComposedChart data={chartRows} margin={{ top: 4, right: 8, left: -18, bottom: 0 }}>
           <CartesianGrid stroke={CHART_GRID_STROKE} vertical={false} />
           <XAxis dataKey="bucket" tick={CHART_AXIS_TICK} stroke={CHART_AXIS_STROKE}
@@ -289,6 +295,8 @@ export function AiTrafficHistoryPanel({
                            fillOpacity={0.5} stroke="none"
                            label={{ value: 'not measured', position: 'insideTop', fontSize: 10, fill: 'var(--chart-neutral-text-dim, #71717a)' }} />
           )}
+          <Legend wrapperStyle={LEGEND_STYLE} iconType="plainline" iconSize={14}
+                  formatter={(value: string) => (HIDDEN_FROM_LEGEND.has(value) ? '' : value)} />
           <Area type="monotone" dataKey="crawlerContentHits" name="Pages crawled"
                 stroke={CRAWLER_COLOR} fill={CRAWLER_COLOR} fillOpacity={0.22} strokeWidth={1.8} />
           {showFetches && (
@@ -325,7 +333,7 @@ export function AiTrafficHistoryPanel({
           ))}
         </div>
       </div>
-      <ResponsiveContainer width="100%" height={150}>
+      <ResponsiveContainer width="100%" height={176}>
         <ComposedChart data={chartRows} margin={{ top: 4, right: 8, left: -18, bottom: 0 }}>
           <CartesianGrid stroke={CHART_GRID_STROKE} vertical={false} />
           <XAxis dataKey="bucket" tick={CHART_AXIS_TICK} stroke={CHART_AXIS_STROKE}
@@ -340,6 +348,8 @@ export function AiTrafficHistoryPanel({
                            fillOpacity={0.5} stroke="none"
                            label={{ value: 'not measured', position: 'insideTop', fontSize: 10, fill: 'var(--chart-neutral-text-dim, #71717a)' }} />
           )}
+          <Legend wrapperStyle={LEGEND_STYLE} iconType="plainline" iconSize={14}
+                  formatter={(value: string) => (HIDDEN_FROM_LEGEND.has(value) ? '' : value)} />
           {visitSource !== 'ga4' && (
             <Line type="monotone" dataKey="aiReferralLandedHits" name="Visits, server"
                   stroke={VISIT_COLOR} strokeWidth={2} dot={false} />

@@ -997,8 +997,77 @@ export function ClickThroughActivity({ projectName, window: windowProp }: {
               </h2>
             </div>
 
-            {socialChartData.length > 0 && (
-              <Card className="surface-card p-5 mb-4">
+
+            {/* Stacked, not side by side. The breakdown is a six-column table
+                (source, medium, channel, sessions, share, users) and at ~60% of
+                the row it wrapped or truncated the source names, which are the
+                column a reader actually scans. Full width also matches the
+                approved mock. The summary tiles above it are already a 3-up
+                grid, so they fill the width without changes. */}
+            <div className="grid gap-4">
+              <Card className="surface-card p-5">
+                <div className="mb-4">
+                  <p className="eyebrow eyebrow-soft">Summary</p>
+                  <h3 className="text-sm font-semibold text-heading">Visits from social</h3>
+                </div>
+
+                {traffic.socialReferrals.length > 0 ? (
+                  <>
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      <AttributionStat
+                        label="Social Sessions"
+                        value={formatCompact(socialSessions)}
+                        hint={`${socialSessions.toLocaleString()} sessions`}
+                        tone="positive"
+                        tooltip="Total sessions classified as Organic Social or Paid Social by GA4's default channel grouping."
+                      />
+                      <AttributionStat
+                        label="Share of Traffic"
+                        value={socialSharePctDisplay}
+                        hint="of total sessions"
+                        tone="neutral"
+                        tooltip="Percentage of your total site sessions that originated from social media platforms."
+                      />
+                      <AttributionStat
+                        label="Platforms"
+                        value={String(socialSourceCount)}
+                        hint={`${traffic.socialReferrals.length} source rows`}
+                        tone="neutral"
+                        tooltip="Number of distinct social media platforms detected. Each unique source/medium combination counts as one source row."
+                      />
+                    </div>
+
+                    {topSocialSource && (
+                      <div className="mt-4 rounded-lg border border-info-800/40 bg-info-500/6 px-4 py-3 text-sm text-info-100">
+                        <p className="text-xs uppercase tracking-wider text-info-300/70 mb-1">Top social source</p>
+                        <p
+                          className="font-medium truncate"
+                          title={`${topSocialSource.source} via ${topSocialSource.medium}`}
+                        >
+                          {truncateLabel(decodeSocialSourceLabel(topSocialSource.source), 64)}
+                        </p>
+                        <p className="text-xs text-info-200/70 mt-0.5 truncate" title={topSocialSource.medium}>
+                          via {decodeSocialSourceLabel(topSocialSource.medium)} · {topSocialSource.sessions.toLocaleString()} sessions
+                        </p>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      <AttributionStat label="Social Sessions" value="0" hint="0 sessions" tone="neutral" tooltip="Total sessions attributed to social media platforms." />
+                      <AttributionStat label="Share of Traffic" value="0%" hint="of total sessions" tone="neutral" tooltip="Percentage of your total site sessions from social media." />
+                      <AttributionStat label="Platforms" value="0" hint="known platforms" tone="neutral" tooltip="Number of distinct social media platforms detected." />
+                    </div>
+                    <div className="rounded-lg border border-default bg-surface px-4 py-3 text-sm text-secondary">
+                      <p className="mb-1.5 text-neutral">Monitoring social media traffic via GA4 channel grouping</p>
+                      <p className="text-xs text-muted">Sessions classified as Organic Social or Paid Social by GA4 will appear here. Google maintains the source-to-channel mapping, which includes Facebook, Instagram, X/Twitter, LinkedIn, Reddit, Pinterest, Snapchat, and other platforms.</p>
+                    </div>
+                  </div>
+                )}
+              </Card>
+              {socialChartData.length > 0 && (
+              <Card className="surface-card p-5">
                 <div className="mb-4 flex items-end justify-between gap-3">
                   <div>
                     <p className="eyebrow eyebrow-soft">Trend</p>
@@ -1072,76 +1141,7 @@ export function ClickThroughActivity({ projectName, window: windowProp }: {
 
                 <SocialChartLegend sources={socialChartSources} otherCount={socialOtherCount} />
               </Card>
-            )}
-
-            {/* Stacked, not side by side. The breakdown is a six-column table
-                (source, medium, channel, sessions, share, users) and at ~60% of
-                the row it wrapped or truncated the source names, which are the
-                column a reader actually scans. Full width also matches the
-                approved mock. The summary tiles above it are already a 3-up
-                grid, so they fill the width without changes. */}
-            <div className="grid gap-4">
-              <Card className="surface-card p-5">
-                <div className="mb-4">
-                  <p className="eyebrow eyebrow-soft">Summary</p>
-                  <h3 className="text-sm font-semibold text-heading">Visits from social</h3>
-                </div>
-
-                {traffic.socialReferrals.length > 0 ? (
-                  <>
-                    <div className="grid gap-3 sm:grid-cols-3">
-                      <AttributionStat
-                        label="Social Sessions"
-                        value={formatCompact(socialSessions)}
-                        hint={`${socialSessions.toLocaleString()} sessions`}
-                        tone="positive"
-                        tooltip="Total sessions classified as Organic Social or Paid Social by GA4's default channel grouping."
-                      />
-                      <AttributionStat
-                        label="Share of Traffic"
-                        value={socialSharePctDisplay}
-                        hint="of total sessions"
-                        tone="neutral"
-                        tooltip="Percentage of your total site sessions that originated from social media platforms."
-                      />
-                      <AttributionStat
-                        label="Platforms"
-                        value={String(socialSourceCount)}
-                        hint={`${traffic.socialReferrals.length} source rows`}
-                        tone="neutral"
-                        tooltip="Number of distinct social media platforms detected. Each unique source/medium combination counts as one source row."
-                      />
-                    </div>
-
-                    {topSocialSource && (
-                      <div className="mt-4 rounded-lg border border-info-800/40 bg-info-500/6 px-4 py-3 text-sm text-info-100">
-                        <p className="text-xs uppercase tracking-wider text-info-300/70 mb-1">Top social source</p>
-                        <p
-                          className="font-medium truncate"
-                          title={`${topSocialSource.source} via ${topSocialSource.medium}`}
-                        >
-                          {truncateLabel(decodeSocialSourceLabel(topSocialSource.source), 64)}
-                        </p>
-                        <p className="text-xs text-info-200/70 mt-0.5 truncate" title={topSocialSource.medium}>
-                          via {decodeSocialSourceLabel(topSocialSource.medium)} · {topSocialSource.sessions.toLocaleString()} sessions
-                        </p>
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <div className="space-y-3">
-                    <div className="grid gap-3 sm:grid-cols-3">
-                      <AttributionStat label="Social Sessions" value="0" hint="0 sessions" tone="neutral" tooltip="Total sessions attributed to social media platforms." />
-                      <AttributionStat label="Share of Traffic" value="0%" hint="of total sessions" tone="neutral" tooltip="Percentage of your total site sessions from social media." />
-                      <AttributionStat label="Platforms" value="0" hint="known platforms" tone="neutral" tooltip="Number of distinct social media platforms detected." />
-                    </div>
-                    <div className="rounded-lg border border-default bg-surface px-4 py-3 text-sm text-secondary">
-                      <p className="mb-1.5 text-neutral">Monitoring social media traffic via GA4 channel grouping</p>
-                      <p className="text-xs text-muted">Sessions classified as Organic Social or Paid Social by GA4 will appear here. Google maintains the source-to-channel mapping, which includes Facebook, Instagram, X/Twitter, LinkedIn, Reddit, Pinterest, Snapchat, and other platforms.</p>
-                    </div>
-                  </div>
-                )}
-              </Card>
+              )}
 
               <Card className="surface-card p-5">
                 <div className="mb-4 flex items-end justify-between gap-3">

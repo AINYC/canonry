@@ -21,7 +21,9 @@ vi.mock('recharts', () => {
     XAxis: () => null,
     YAxis: () => null,
     Tooltip: () => null,
-    Legend: () => null,
+    // Rendered as a marker so a test can prove the legend exists at all. The
+    // real Legend draws to canvas-ish SVG that jsdom cannot meaningfully assert.
+    Legend: () => <div data-testid="chart-legend" />,
   }
 })
 
@@ -752,4 +754,43 @@ test('AI traffic history survives an API older than the client', async () => {
 
   // A missing `measured` must not paint the whole range as unmeasured.
   expect(screen.queryByText('not measured')).toBeNull()
+})
+
+/**
+ * Two things the mock specified that shipped late, pinned so they cannot quietly
+ * revert: every chart carries a legend, and social reads tiles -> chart -> table.
+ * Without a legend the only thing naming a series is the hover tooltip, so a
+ * glance cannot tell the lines apart.
+ */
+test('AI traffic charts carry a legend', async () => {
+  const restoreFetch = mockFetch((url) => {
+    if (url.split('?')[0]!.endsWith('/ga/ai-referral-daily')) return jsonResponse({ days: [], sources: [], totalSessions: 0, totalPaidSessions: 0, totalOrganicSessions: 0 })
+    if (url.split('?')[0]!.endsWith('/projects/test-project/traffic/events')) {
+      return jsonResponse({
+        events: [], eventRows: { total: 0, returned: 0, truncated: false },
+        totals: { crawlerHits: 20, crawlerContentHits: 12, aiUserFetchHits: 7, aiReferralHits: 5, aiReferralLandedHits: 4 },
+        series: {
+          granularity: 'day', coverageStart: '2026-08-01',
+          points: [
+            { bucket: '2026-08-01', crawlerHits: 10, crawlerContentHits: 8, aiUserFetchHits: 3, aiReferralHits: 3, aiReferralLandedHits: 2, measured: true },
+            { bucket: '2026-08-02', crawlerHits: 10, crawlerContentHits: 4, aiUserFetchHits: 4, aiReferralHits: 2, aiReferralLandedHits: 2, measured: true },
+          ],
+          trends: { crawlerContentHits: null, aiUserFetchHits: null, aiReferralLandedHits: null },
+        },
+      })
+    }
+    throw new Error(`unexpected fetch: ${url}`)
+  })
+  onTestFinished(restoreFetch)
+
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(
+    <QueryClientProvider client={queryClient}>
+      <AiTrafficHistoryPanel projectName="test-project" sinceMinutes={43200} />
+    </QueryClientProvider>,
+  )
+
+  await screen.findByText('AI crawlers')
+  // One per chart: machines, and people arriving.
+  expect(screen.getAllByTestId('chart-legend').length).toBe(2)
 })
