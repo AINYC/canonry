@@ -34,16 +34,13 @@ const GONE = 'https://example.com/gone'
 const FLAKY = 'https://example.com/flaky'
 
 /**
- * The regression: `canonry technical-aeo dead-links` reported 15 broken links
- * across 6 URLs on a live site, every one `statusCode: null`, and every one of
- * those 6 served a 200 in under a second on a manual check. The crawler had
- * simply failed to fetch them, and a failed fetch was being classified as a
- * dead link.
- *
  * The invariant these lock down: a row in `site_crawl_findings` means the
- * target ANSWERED with an error status. Nothing without a status code may reach
- * that table, because every reader of it — the API route, the CLI, the
- * dashboard — renders a row as a broken link.
+ * target ANSWERED with an error status. The engine (6.0.0+) makes the
+ * broken-vs-unverified split itself — `findings` always carry a real status,
+ * `unverified` carries the targets the crawl could not check — and the
+ * platform must persist exactly that split, because every reader of the
+ * findings table — the API route, the CLI, the dashboard — renders a row as a
+ * broken link.
  */
 function pageRow(key: string, url: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -104,9 +101,9 @@ function anchorEdge(key: string, to: string) {
 
 function crawlSummary() {
   return {
-    crawlSchemaVersion: '1.2',
-    engineVersion: '4.7.0',
-    crawlEngineVersion: '1.2.0',
+    crawlSchemaVersion: '2.0',
+    engineVersion: '7.1.0',
+    crawlEngineVersion: '2.2.0',
     urlNormalizationVersion: '1.1.0',
     indexabilityRulesetVersion: '1.0.0',
     linkScoreAlgorithmVersion: 'pagerank-1.0.0',
@@ -184,33 +181,25 @@ describe('site audit persists broken links and unfetchable links as different th
     return { snapshot, findings }
   }
 
-  /** How the pinned 4.7.0 engine reports it: both kinds in one `findings` array. */
-  const legacyEngineDeadLinks = {
-    state: 'complete',
-    findings: [
-      { key: 'dead-link:gone', from: ROOT, to: GONE, statusCode: 404, reason: 'http-error' },
-      { key: 'dead-link:flaky', from: ROOT, to: FLAKY, statusCode: null, reason: 'fetch-error' },
-    ],
-  }
-
-  /** How the 6.0.0 engine reports it: the split already made upstream. */
+  /** How the engine reports it from 6.0.0: the split already made upstream. */
   const splitEngineDeadLinks = {
     state: 'complete',
     findings: [
       { key: 'dead-link:gone', from: ROOT, to: GONE, statusCode: 404, reason: 'http-error' },
     ],
     unverified: [
-      { key: 'unverified-link:flaky', from: ROOT, to: FLAKY, reason: 'fetch-error', error: 'Target URL could not be reached.' },
+      { key: 'unverified-link:flaky', from: ROOT, to: FLAKY, reason: 'unreachable', error: 'Target URL could not be reached.', statusCode: null },
     ],
   }
 
-  it('a null-status finding is never written as a dead link (legacy engine shape)', async () => {
-    const { snapshot, findings } = await run(legacyEngineDeadLinks)
+  it('persists a finding as a broken link and an unverified target as a count only', async () => {
+    const { snapshot, findings } = await run(splitEngineDeadLinks)
 
     expect(findings).toHaveLength(1)
     expect(findings[0]).toMatchObject({ findingType: 'dead-link', targetUrl: GONE })
     expect(findings[0]!.evidence).toMatchObject({ statusCode: 404, reason: 'http-error' })
-    // The exact bug: no row may carry a null status.
+    // The original regression: no persisted row may carry a null status,
+    // because every reader renders a row as a broken link.
     expect(findings.some((row) => (row.evidence as { statusCode?: unknown }).statusCode === null)).toBe(false)
 
     expect(snapshot.deadLinksFound).toBe(1)
@@ -218,25 +207,16 @@ describe('site audit persists broken links and unfetchable links as different th
     expect(snapshot.findingsCount).toBe(1)
   })
 
-  it('produces the identical split when the engine already separated the buckets', async () => {
-    const { snapshot, findings } = await run(splitEngineDeadLinks)
-
-    expect(findings).toHaveLength(1)
-    expect(findings[0]).toMatchObject({ targetUrl: GONE })
-    expect(snapshot.deadLinksFound).toBe(1)
-    expect(snapshot.deadLinksUnverified).toBe(1)
-  })
-
   it('does not count an unfetchable target as checked', async () => {
     // Two internal anchor targets, one of which never answered. Calling both
     // "checked" is the second half of the overstatement: it makes 1 broken out
     // of 2 checked look like full coverage of the link graph.
-    const { snapshot } = await run(legacyEngineDeadLinks)
+    const { snapshot } = await run(splitEngineDeadLinks)
     expect(snapshot.deadLinksChecked).toBe(1)
   })
 
   it('found + unverified never exceeds checked + unverified, and neither double-counts', async () => {
-    const { snapshot } = await run(legacyEngineDeadLinks)
+    const { snapshot } = await run(splitEngineDeadLinks)
     // The 404 target is both checked and found; the flaky target is neither.
     expect(snapshot.deadLinksFound).toBeLessThanOrEqual(snapshot.deadLinksChecked)
     expect(snapshot.deadLinksChecked + snapshot.deadLinksUnverified).toBe(2)
@@ -254,9 +234,9 @@ describe('site audit persists broken links and unfetchable links as different th
       state: 'complete',
       findings: [],
       unverified: [
-        { key: 'unverified-link:a', from: ROOT, to: FLAKY, reason: 'fetch-error', error: 'timeout' },
-        { key: 'unverified-link:b', from: GONE, to: FLAKY, reason: 'fetch-error', error: 'timeout' },
-        { key: 'unverified-link:c', from: 'https://example.com/other', to: FLAKY, reason: 'fetch-error', error: 'timeout' },
+        { key: 'unverified-link:a', from: ROOT, to: FLAKY, reason: 'unreachable', error: 'timeout', statusCode: null },
+        { key: 'unverified-link:b', from: GONE, to: FLAKY, reason: 'unreachable', error: 'timeout', statusCode: null },
+        { key: 'unverified-link:c', from: 'https://example.com/other', to: FLAKY, reason: 'unreachable', error: 'timeout', statusCode: null },
       ],
     })
 
@@ -264,15 +244,17 @@ describe('site audit persists broken links and unfetchable links as different th
   })
 
   it('a throttled target is unchecked, not broken', async () => {
-    // 429 is the server describing OUR request rate. It is the one error status
-    // that says nothing about the resource, so filing it as a broken link
-    // blames the site for how hard we crawled it — the same mistake as filing a
-    // timeout, arriving with a status code attached.
+    // 429 is the server describing OUR request rate, so the engine reports it
+    // `unverified` with `reason: 'throttled'` rather than as a finding. The
+    // platform must keep that reading: counted as unchecked, never persisted
+    // as a broken link.
     const { snapshot, findings } = await run({
       state: 'complete',
       findings: [
         { key: 'dead-link:gone', from: ROOT, to: GONE, statusCode: 404, reason: 'http-error' },
-        { key: 'dead-link:busy', from: ROOT, to: FLAKY, statusCode: 429, reason: 'http-error' },
+      ],
+      unverified: [
+        { key: 'unverified-link:busy', from: ROOT, to: FLAKY, reason: 'throttled', error: 'HTTP 429', statusCode: 429 },
       ],
     })
 
@@ -283,9 +265,9 @@ describe('site audit persists broken links and unfetchable links as different th
     expect(snapshot.deadLinksUnverified).toBe(1)
   })
 
-  it('keeps every other 4xx and 5xx a dead link, so 429 is a carve-out and not a hole', async () => {
-    // The risk of special-casing a status is over-reaching into ones that ARE
-    // evidence. 404/410/500/503 all stay findings.
+  it('keeps every 4xx and 5xx finding a dead link', async () => {
+    // The engine's split must not cost us real evidence: 404/410/500/503 all
+    // arrive as findings and all persist as findings.
     const { snapshot, findings } = await run({
       state: 'complete',
       findings: [404, 410, 500, 503].map((statusCode, index) => ({
@@ -295,6 +277,7 @@ describe('site audit persists broken links and unfetchable links as different th
         statusCode,
         reason: 'http-error',
       })),
+      unverified: [],
     })
 
     expect(findings).toHaveLength(4)
@@ -310,13 +293,14 @@ describe('site audit persists broken links and unfetchable links as different th
   })
 
   it('an all-unfetchable crawl reports zero broken links, not one per link', async () => {
-    // The reported shape exactly: every finding null-status, nothing genuinely
-    // broken. The output must be "we could not check these", never "6 broken".
+    // Every target unverified, nothing genuinely broken. The output must be
+    // "we could not check these", never "2 broken".
     const { snapshot, findings } = await run({
       state: 'complete',
-      findings: [
-        { key: 'dead-link:a', from: ROOT, to: FLAKY, statusCode: null, reason: 'fetch-error' },
-        { key: 'dead-link:b', from: GONE, to: FLAKY, statusCode: null, reason: 'fetch-error' },
+      findings: [],
+      unverified: [
+        { key: 'unverified-link:a', from: ROOT, to: FLAKY, reason: 'unreachable', error: 'timeout', statusCode: null },
+        { key: 'unverified-link:b', from: GONE, to: FLAKY, reason: 'unreachable', error: 'timeout', statusCode: null },
       ],
     })
 

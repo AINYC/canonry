@@ -169,7 +169,7 @@ async function emitCompleteGraph(
     ...(complete ? {} : { complete: false, terminationReason: 'max-pages' }),
   })
   await options.onEvent?.({ type: 'summary', sequence: 4, batchId: 'summary-1', checksum: complete ? 'summary-ok' : 'summary-partial', summary: endSummary })
-  return { mode: 'summary', summary: endSummary, deadLinks: { state: 'disabled', findings: [] } }
+  return { mode: 'summary', summary: endSummary, deadLinks: { state: 'disabled', findings: [], unverified: [] } }
 }
 
 describe('computeFactorAverages', () => {
@@ -293,7 +293,7 @@ describe('executeSiteAudit', () => {
       })
       const endSummary = summary({ edgesObserved: 1, linkPlacementRulesetVersion: '1.0.0' })
       await options.onEvent?.({ type: 'summary', sequence: 3, batchId: 'summary-1', checksum: 'summary-ok', summary: endSummary })
-      return { mode: 'summary', summary: endSummary, deadLinks: { state: 'disabled', findings: [] } }
+      return { mode: 'summary', summary: endSummary, deadLinks: { state: 'disabled', findings: [], unverified: [] } }
     })
     const runId = seedRun()
     await executeSiteAudit(db, runId, projectId, {})
@@ -374,7 +374,7 @@ describe('executeSiteAudit', () => {
       })
       const endSummary = summary()
       await options.onEvent?.({ type: 'summary', sequence: 4, batchId: 'summary', checksum: 'summary', summary: endSummary })
-      return { mode: 'summary', summary: endSummary, deadLinks: { state: 'disabled', findings: [] } }
+      return { mode: 'summary', summary: endSummary, deadLinks: { state: 'disabled', findings: [], unverified: [] } }
     })
     const runId = seedRun()
     await executeSiteAudit(db, runId, projectId)
@@ -477,7 +477,7 @@ describe('executeSiteAudit', () => {
         auditRollup: { auditedPages: 1, aggregateScore: 88, factors: [] },
       })
       await options.onEvent?.({ type: 'summary', sequence: 2, batchId: 'redirected-root-summary', checksum: 'redirected-root-summary', summary: endSummary })
-      return { mode: 'summary', summary: endSummary, deadLinks: { state: 'disabled', findings: [] } }
+      return { mode: 'summary', summary: endSummary, deadLinks: { state: 'disabled', findings: [], unverified: [] } }
     })
     const runId = seedRun()
 
@@ -502,7 +502,7 @@ describe('executeSiteAudit', () => {
       await options.onEvent?.({ type: 'pages', sequence: 1, batchId: 'pages', checksum: 'pages', rows })
       const endSummary = summary({ auditRollup: { auditedPages: 1, aggregateScore: 88, factors: [] } })
       await options.onEvent?.({ type: 'summary', sequence: 2, batchId: 'summary', checksum: 'summary', summary: endSummary })
-      return { mode: 'summary', summary: endSummary, deadLinks: { state: 'disabled', findings: [] } }
+      return { mode: 'summary', summary: endSummary, deadLinks: { state: 'disabled', findings: [], unverified: [] } }
     })
     const runId = seedRun()
     await executeSiteAudit(db, runId, projectId)
@@ -544,7 +544,7 @@ describe('executeSiteAudit', () => {
         auditRollup: { auditedPages: 1, aggregateScore: 88, factors: [] },
       })
       await options.onEvent?.({ type: 'summary', sequence: 2, batchId: 'summary', checksum: 'summary', summary: endSummary })
-      return { mode: 'summary', summary: endSummary, deadLinks: { state: 'disabled', findings: [] } }
+      return { mode: 'summary', summary: endSummary, deadLinks: { state: 'disabled', findings: [], unverified: [] } }
     })
     const runId = seedRun()
 
@@ -581,7 +581,7 @@ describe('executeSiteAudit', () => {
       })
       const endSummary = summary()
       await options.onEvent?.({ type: 'summary', sequence: 4, batchId: 'summary', checksum: 'summary', summary: endSummary })
-      return { mode: 'summary', summary: endSummary, deadLinks: { state: 'disabled', findings: [] } }
+      return { mode: 'summary', summary: endSummary, deadLinks: { state: 'disabled', findings: [], unverified: [] } }
     })
     const runId = seedRun()
     await executeSiteAudit(db, runId, projectId)
@@ -614,7 +614,7 @@ describe('executeSiteAudit', () => {
       })
       const endSummary = summary()
       await options.onEvent?.({ type: 'summary', sequence: 4, batchId: 'summary', checksum: 'summary', summary: endSummary })
-      return { mode: 'summary', summary: endSummary, deadLinks: { state: 'disabled', findings: [] } }
+      return { mode: 'summary', summary: endSummary, deadLinks: { state: 'disabled', findings: [], unverified: [] } }
     })
     const runId = seedRun()
     await executeSiteAudit(db, runId, projectId)
@@ -670,7 +670,7 @@ describe('executeSiteAudit', () => {
       })
       const endSummary = summary({ pagesDiscovered: 5, pagesFetched: 4, pagesObserved: 5, edgesObserved: 4, auditRollup: { auditedPages: 3, aggregateScore: 88, factors: [] } })
       await options.onEvent?.({ type: 'summary', sequence: 3, batchId: 'summary', checksum: 'summary', summary: endSummary })
-      return { mode: 'summary', summary: endSummary, deadLinks: { state: 'complete', findings: [] } }
+      return { mode: 'summary', summary: endSummary, deadLinks: { state: 'complete', findings: [], unverified: [] } }
     })
     const runId = seedRun()
     await executeSiteAudit(db, runId, projectId, { checkDeadLinks: true })
@@ -716,7 +716,7 @@ describe('executeSiteAudit', () => {
         auditRollup: { auditedPages: 0, aggregateScore: null, factors: [] },
       })
       await options.onEvent?.({ type: 'summary', sequence: 2, batchId: 'summary', checksum: 'summary', summary: endSummary })
-      return { mode: 'summary', summary: endSummary, deadLinks: { state: 'partial', findings: [] } }
+      return { mode: 'summary', summary: endSummary, deadLinks: { state: 'partial', findings: [], unverified: [] } }
     })
     const runId = seedRun()
 
@@ -756,7 +756,7 @@ describe('executeSiteAudit', () => {
         auditRollup: { auditedPages: 0, aggregateScore: null, factors: [] },
       })
       await options.onEvent?.({ type: 'summary', sequence: 2, batchId: 'summary', checksum: 'summary', summary: endSummary })
-      return { mode: 'summary', summary: endSummary, deadLinks: { state: 'disabled', findings: [] } }
+      return { mode: 'summary', summary: endSummary, deadLinks: { state: 'disabled', findings: [], unverified: [] } }
     })
     const runId = seedRun()
 
@@ -791,7 +791,7 @@ describe('executeSiteAudit', () => {
         auditRollup: { auditedPages: 0, aggregateScore: null, factors: [] },
       })
       await options.onEvent?.({ type: 'summary', sequence: 3, batchId: 'summary', checksum: 'summary', summary: endSummary })
-      return { mode: 'summary', summary: endSummary, deadLinks: { state: 'partial', findings: [] } }
+      return { mode: 'summary', summary: endSummary, deadLinks: { state: 'partial', findings: [], unverified: [] } }
     })
     const runId = seedRun()
 
@@ -814,7 +814,7 @@ describe('executeSiteAudit', () => {
       await options.onEvent?.({ type: 'pages', sequence: 2, batchId: 'fetched-update', checksum: 'fetched-update', rows: [fetched] })
       const endSummary = summary({ pagesDiscovered: 1, pagesFetched: 1, pagesObserved: 1, edgesObserved: 0, auditRollup: { auditedPages: 1, aggregateScore: 88, factors: [] } })
       await options.onEvent?.({ type: 'summary', sequence: 3, batchId: 'summary', checksum: 'summary', summary: endSummary })
-      return { mode: 'summary', summary: endSummary, deadLinks: { state: 'disabled', findings: [] } }
+      return { mode: 'summary', summary: endSummary, deadLinks: { state: 'disabled', findings: [], unverified: [] } }
     })
     const runId = seedRun()
 
@@ -834,7 +834,7 @@ describe('executeSiteAudit', () => {
       await expect(options.onEvent?.({ ...event, checksum: 'different' })).rejects.toThrow(/checksum/i)
       const endSummary = summary({ pagesDiscovered: 1, pagesFetched: 1, pagesObserved: 1, edgesObserved: 0, auditRollup: { auditedPages: 1, aggregateScore: 88, factors: [] } })
       await options.onEvent?.({ type: 'summary', sequence: 2, batchId: 'summary', checksum: 'summary', summary: endSummary })
-      return { mode: 'summary', summary: endSummary, deadLinks: { state: 'disabled', findings: [] } }
+      return { mode: 'summary', summary: endSummary, deadLinks: { state: 'disabled', findings: [], unverified: [] } }
     })
     const runId = seedRun()
     await executeSiteAudit(db, runId, projectId)
