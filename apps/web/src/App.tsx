@@ -477,7 +477,7 @@ export function RootLayout() {
   // Derive breadcrumb label from current location
   const breadcrumbLabel = (() => {
     const path = location.pathname
-    if (path === '/') return 'Portfolio'
+    if (path === '/') return null
     if (path === '/projects') return 'Projects'
     if (path === '/runs') return 'Runs'
     if (path === '/history') return 'History'
@@ -491,8 +491,10 @@ export function RootLayout() {
       const segments = path.split('/').filter(Boolean)
       const projectId = segments[1]
       if (projectId && safeDashboard) {
-        const projectVm = safeDashboard.projects.find(p => p.project.id === projectId)
-        if (projectVm) return projectVm.project.name
+        const projectVm = safeDashboard.projects.find(
+          (p) => p.project.name === projectId || p.project.id === projectId,
+        )
+        if (projectVm) return projectVm.project.displayName || projectVm.project.name
       }
       return 'Project'
     }
@@ -703,7 +705,7 @@ export function RootLayout() {
       )}
 
       {/* ── Main area ── */}
-      <div className="main-area">
+      <div className={agentBarVisible ? 'main-area pb-24' : 'main-area'}>
         {/* Topbar */}
         <header className="topbar">
           <div className="topbar-left">
@@ -731,10 +733,14 @@ export function RootLayout() {
             </div>
             <nav className="breadcrumb" aria-label="Breadcrumb">
               <Link to="/">
-                Home
+                Portfolio
               </Link>
-              <ChevronRight className="breadcrumb-sep size-3" />
-              <span className="breadcrumb-current">{breadcrumbLabel}</span>
+              {breadcrumbLabel ? (
+                <>
+                  <ChevronRight className="breadcrumb-sep size-3" />
+                  <span className="breadcrumb-current">{breadcrumbLabel}</span>
+                </>
+              ) : null}
             </nav>
           </div>
 
@@ -755,7 +761,7 @@ export function RootLayout() {
               </span>
             </div>
             <Button
-              className="nav-toggle"
+              className="nav-toggle lg:hidden"
               variant="secondary"
               size="icon"
               type="button"

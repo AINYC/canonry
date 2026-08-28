@@ -64,10 +64,12 @@ export function mentionClassFigures(
   if (breakdown.snapshotsWithAnswerText === 0) {
     return { headline: 'No answers', numeric: false, detail: 'no answer text in this run', showRows: false }
   }
-  // A project-only denominator is never rendered as a 100% share chart.
+  // A project-only denominator is never rendered as a 100% share chart. The
+  // headline states the situation; it is not a control, so it never carries
+  // the action's name — the panel's "+ Add competitor" button owns that.
   if (!opts.hasCompetitors) {
     return {
-      headline: 'Add competitors',
+      headline: 'No competitors tracked',
       numeric: false,
       detail: `you were named in ${breakdown.projectMentionSnapshots} of ${breakdown.snapshotsWithAnswerText} answers`,
       showRows: false,

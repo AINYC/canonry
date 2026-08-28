@@ -56,6 +56,9 @@ interface ToolTrail {
 
 interface AeroBarProps {
   projectName: string
+  /** Pretty label for visible copy (sidebar-style `displayName || name`).
+   *  `projectName` stays the slug — it keys API routes and localStorage. */
+  displayName?: string
 }
 
 const STARTER_PROMPTS: Array<{ label: string; prompt: string }> = [
@@ -127,7 +130,7 @@ const SLASH_COMMANDS: Array<SlashCommand> = [
 const PROVIDER_PREF_KEY = (project: string) => `canonry:aero:provider:${project}`
 const SCOPE_PREF_KEY = (project: string) => `canonry:aero:scope:${project}`
 
-export function AeroBar({ projectName }: AeroBarProps) {
+export function AeroBar({ projectName, displayName }: AeroBarProps) {
   const [open, setOpen] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const [messages, setMessages] = useState<AeroMessage[]>([])
@@ -584,7 +587,7 @@ export function AeroBar({ projectName }: AeroBarProps) {
           >
             <span className="flex items-center gap-2">
               <Radio className="h-4 w-4 text-positive-400" aria-hidden="true" />
-              Ask Aero about {projectName}…
+              Ask Aero about {displayName ?? projectName}…
             </span>
           </button>
         )}
@@ -1207,5 +1210,11 @@ export function AeroBarHost() {
     projects.find((p) => p.id === urlSegment) ?? projects.find((p) => p.name === urlSegment)
 
   if (!resolved) return null
-  return <AeroBar key={resolved.name} projectName={resolved.name} />
+  return (
+    <AeroBar
+      key={resolved.name}
+      projectName={resolved.name}
+      displayName={resolved.displayName || resolved.name}
+    />
+  )
 }

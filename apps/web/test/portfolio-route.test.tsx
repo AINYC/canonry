@@ -363,6 +363,38 @@ test('a Simple project keeps the existing Overview without advertising advanced 
   expect(html).not.toContain('Latest measurement')
 })
 
+test('zero tracked competitors collapses the competitive panel to one state row', async () => {
+  const fixture = createDashboardFixture({})
+  const entry = fixture.dashboard.projects.find(project => project.project.id === 'project_citypoint')!
+  entry.competitors = []
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  queryClient.setQueryData(
+    getApiV1ProjectsByNameQueriesQueryKey({ client: heyClient, path: { name: entry.project.name } }),
+    [],
+  )
+  queryClient.setQueryData(
+    getApiV1ProjectsByNameMeasurementPlanQueryKey({ client: heyClient, path: { name: entry.project.name } }),
+    { active: null },
+  )
+  const router = createAppRouter(queryClient, { initialEntries: ['/projects/project_citypoint'] })
+  await router.load()
+  const html = renderToStaticMarkup(
+    <QueryClientProvider client={queryClient}>
+      <DashboardProvider value={{ dashboard: fixture.dashboard, health: fixture.health }}>
+        <RouterProvider router={router} />
+      </DashboardProvider>
+    </QueryClientProvider>,
+  )
+
+  // The scaffolding (gap meters at "0 / N", class toggle, share figure) implies
+  // an all-clear that nothing measured; a single state row replaces it.
+  expect(html).toContain('No competitors tracked')
+  expect(html).not.toContain('Mention gaps')
+  expect(html).not.toContain('Citation gaps')
+  // The section header's button stays the only owner of the add action.
+  expect(html).toContain('+ Add competitor')
+})
+
 test('project navigation ignores stale Site Health onboarding markers', async () => {
   const html = await renderAt('/projects/project_citypoint/technical-aeo?onboarding=site-health')
   const doc = new DOMParser().parseFromString(html, 'text/html')

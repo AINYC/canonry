@@ -1342,6 +1342,13 @@
     @apply mt-1 max-w-3xl text-xl font-semibold tracking-[-0.02em] text-primary sm:text-2xl;
   }
 
+  /* MUST stay after `.overview-brief-title`: equal specificity, the later
+     font-size wins. Routine status lines (baseline captured, no comparison
+     yet) speak at body scale; the hero face is reserved for real movement. */
+  .overview-brief-title-quiet {
+    @apply text-base sm:text-lg;
+  }
+
   .overview-brief-updated {
     @apply shrink-0 text-[13px] tabular-nums text-secondary sm:pt-2;
   }
@@ -1672,6 +1679,30 @@
 
   .overview-disclosure-body > .page-section-divider:first-child {
     @apply mt-0 border-t-0 pt-0;
+  }
+
+  /* A closed disclosure is one compact row, so a run of them reads as a
+     divided list instead of three consecutive empty section heroes. The
+     eyebrow and the full `.page-section-divider` spacing return when open;
+     `:not([open])` out-specifies `.page-section-divider` regardless of order. */
+  .overview-disclosure:not([open]) {
+    @apply mt-6 pt-0;
+  }
+
+  .overview-disclosure:not([open]) + .overview-disclosure:not([open]) {
+    @apply mt-0;
+  }
+
+  .overview-disclosure:not([open]) > .overview-disclosure-summary {
+    @apply py-3;
+  }
+
+  .overview-disclosure:not([open]) > .overview-disclosure-summary .eyebrow {
+    @apply hidden;
+  }
+
+  .overview-disclosure:not([open]) > .overview-disclosure-summary .overview-disclosure-title {
+    @apply mt-0;
   }
 
   .inline-disclosure {

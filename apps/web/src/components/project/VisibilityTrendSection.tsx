@@ -23,6 +23,7 @@ import {
 } from '../shared/ChartPrimitives.js'
 import { InfoTooltip } from '../shared/InfoTooltip.js'
 import { fetchAnalyticsMetrics } from '../../api.js'
+import { formatWholePercent } from '../../lib/format-helpers.js'
 import { STATIC_VISIBILITY_STALE_MS } from '../../queries/query-client.js'
 import {
   buildSelectedTrendRows,
@@ -590,7 +591,7 @@ export function VisibilityTrendSection({
       : CHART_SERIES_COLORS[1]!
   // In by-engine mode the headline is the blended rate across every engine,
   // which no single line on the chart matches — neutralize the swatch (so it
-  // doesn't read as one engine's color) and tag it "avg".
+  // doesn't read as one engine's color) and tag it "engine avg".
   const headlineDotColor = byProviderMode ? CHART_NEUTRAL.textDim : metricColor
   // The x-axis KEY stays `startDate` (monotonic, and what the model-evidence
   // reference lines are positioned by), but the tick a reader sees is resolved
@@ -641,8 +642,8 @@ export function VisibilityTrendSection({
           <div className="visibility-trend-current">
             <span className="visibility-trend-current-dot" style={{ backgroundColor: headlineDotColor }} aria-hidden="true" />
             <span className="visibility-trend-current-label">{currentMetricLabel}</span>
-            {byProviderMode && <span className="visibility-trend-current-qualifier">avg</span>}
-            <span className="visibility-trend-current-value">{latestPct}%</span>
+            {byProviderMode && <span className="visibility-trend-current-qualifier">engine avg</span>}
+            <span className="visibility-trend-current-value">{formatWholePercent(latestPct)}</span>
             {deltaPts !== null && (
               <span
                 className={`visibility-trend-current-delta ${
@@ -675,7 +676,7 @@ export function VisibilityTrendSection({
   } else if (!data || !trend) {
     body = null
   } else {
-    const { rows, series, hasData } = trend
+    const { rows, series, hasData, singleBucket } = trend
     const caption = formatQueryChangeCaption(data.queryChanges)
     if (!hasData) {
       body = (
@@ -692,7 +693,7 @@ export function VisibilityTrendSection({
         </p>
       )
     } else {
-      const srSummary = `${currentMetricLabel} rate across ${rows.length} ${rows.length === 1 ? 'sweep' : 'sweeps'}. Latest ${latestPct}%${
+      const srSummary = `${currentMetricLabel} rate across ${rows.length} ${rows.length === 1 ? 'sweep' : 'sweeps'}. Latest ${latestPct === null ? 'unavailable' : formatWholePercent(latestPct)}${
         deltaPts !== null ? `, ${deltaPts >= 0 ? 'up' : 'down'} ${Math.abs(deltaPts).toFixed(1)} points over the period` : ''
       }.`
       body = (
@@ -723,72 +724,81 @@ export function VisibilityTrendSection({
                       <span className="trend-legend-name">{seriesLabel(key)}</span>
                       <span className="trend-legend-model"><span aria-hidden="true">· </span>{evidenceLabel}</span>
                     </span>
-                    {value !== null && <span className="trend-legend-value">{value}%</span>}
+                    {value !== null && <span className="trend-legend-value">{formatWholePercent(value)}</span>}
                   </li>
                 )
               })}
             </ul>
           )}
-          <div
-            className="visibility-trend-chart"
-            role="img"
-            aria-label={`${currentMetricLabel} trend chart over ${rows.length} ${rows.length === 1 ? 'bucket' : 'buckets'}`}
-          >
-            <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-                <CartesianGrid stroke={CHART_GRID_STROKE} vertical={false} />
-                <XAxis
-                  dataKey="date"
-                  tick={CHART_AXIS_TICK}
-                  tickLine={false}
-                  axisLine={{ stroke: CHART_AXIS_STROKE }}
-                  tickFormatter={bucketTickFormatter}
-                  minTickGap={24}
-                />
-                <YAxis
-                  domain={[0, 100]}
-                  ticks={[0, 25, 50, 75, 100]}
-                  tickFormatter={(v: number) => `${v}%`}
-                  tick={CHART_AXIS_TICK}
-                  tickLine={false}
-                  axisLine={false}
-                  width={40}
-                />
-                <RechartsTooltip
-                  cursor={{ stroke: CHART_AXIS_STROKE, strokeWidth: 1 }}
-                  content={<TrendTooltip metric={metric} mode={effectiveMode} buckets={buckets} />}
-                />
-                {modelEvents.buckets.map(({ bucketStartDate, events }) => (
-                  <ReferenceLine
-                    key={`model-evidence-${bucketStartDate}`}
-                    x={bucketStartDate}
-                    stroke={modelEventMarkerColor(events)}
-                    strokeDasharray="4 4"
-                    strokeWidth={1.5}
-                    ifOverflow="extendDomain"
+          {/* One plotted point cannot make a line: a full-height grid with a
+              stranded dot or two reads as a broken chart, not a baseline. Say
+              what the reader has and what fills it in instead of drawing it. */}
+          {rows.length < 2 || singleBucket ? (
+            <p className="text-sm text-secondary">
+              Baseline captured. The trend line appears after the next sweep.
+            </p>
+          ) : (
+            <div
+              className="visibility-trend-chart"
+              role="img"
+              aria-label={`${currentMetricLabel} trend chart over ${rows.length} ${rows.length === 1 ? 'bucket' : 'buckets'}`}
+            >
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+                  <CartesianGrid stroke={CHART_GRID_STROKE} vertical={false} />
+                  <XAxis
+                    dataKey="date"
+                    tick={CHART_AXIS_TICK}
+                    tickLine={false}
+                    axisLine={{ stroke: CHART_AXIS_STROKE }}
+                    tickFormatter={bucketTickFormatter}
+                    minTickGap={24}
                   />
-                ))}
-                {series.map((key, i) => (
-                  <Line
-                    key={key}
-                    type="monotone"
-                    dataKey={key}
-                    name={key}
-                    stroke={seriesColor(key, i)}
-                    strokeDasharray={key === MENTION_SHARE_KEY ? '5 4' : undefined}
-                    strokeWidth={isOverallSeries(key) ? 2.5 : 2}
-                    // A solid marker on every run/bucket point so the readings are visible.
-                    dot={key === MENTION_SHARE_KEY
-                      ? { r: 2.75, fill: 'var(--chart-tooltip-bg)', stroke: seriesColor(key, i), strokeWidth: 1.5 }
-                      : { r: 2.5, fill: seriesColor(key, i), strokeWidth: 0 }}
-                    activeDot={{ r: 4, strokeWidth: 2, stroke: ACTIVE_DOT_RING }}
-                    connectNulls={key !== MENTION_SHARE_KEY}
-                    isAnimationActive={false}
+                  <YAxis
+                    domain={[0, 100]}
+                    ticks={[0, 25, 50, 75, 100]}
+                    tickFormatter={(v: number) => `${v}%`}
+                    tick={CHART_AXIS_TICK}
+                    tickLine={false}
+                    axisLine={false}
+                    width={40}
                   />
-                ))}
-              </ComposedChart>
-            </ResponsiveContainer>
-          </div>
+                  <RechartsTooltip
+                    cursor={{ stroke: CHART_AXIS_STROKE, strokeWidth: 1 }}
+                    content={<TrendTooltip metric={metric} mode={effectiveMode} buckets={buckets} />}
+                  />
+                  {modelEvents.buckets.map(({ bucketStartDate, events }) => (
+                    <ReferenceLine
+                      key={`model-evidence-${bucketStartDate}`}
+                      x={bucketStartDate}
+                      stroke={modelEventMarkerColor(events)}
+                      strokeDasharray="4 4"
+                      strokeWidth={1.5}
+                      ifOverflow="extendDomain"
+                    />
+                  ))}
+                  {series.map((key, i) => (
+                    <Line
+                      key={key}
+                      type="monotone"
+                      dataKey={key}
+                      name={key}
+                      stroke={seriesColor(key, i)}
+                      strokeDasharray={key === MENTION_SHARE_KEY ? '5 4' : undefined}
+                      strokeWidth={isOverallSeries(key) ? 2.5 : 2}
+                      // A solid marker on every run/bucket point so the readings are visible.
+                      dot={key === MENTION_SHARE_KEY
+                        ? { r: 2.75, fill: 'var(--chart-tooltip-bg)', stroke: seriesColor(key, i), strokeWidth: 1.5 }
+                        : { r: 2.5, fill: seriesColor(key, i), strokeWidth: 0 }}
+                      activeDot={{ r: 4, strokeWidth: 2, stroke: ACTIVE_DOT_RING }}
+                      connectNulls={key !== MENTION_SHARE_KEY}
+                      isAnimationActive={false}
+                    />
+                  ))}
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+          )}
           <ModelEvidenceSummary
             partition={modelEvents}
             available={modelAttribution !== null}

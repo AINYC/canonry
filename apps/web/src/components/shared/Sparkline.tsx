@@ -50,9 +50,10 @@ export function Sparkline({ points, tone }: { points: number[]; tone: MetricTone
   // of the box rather than being stretched across it.
   const span = Math.max(max - min, MIN_SPAN)
   const low = (max + min) / 2 - span / 2
-  const coordinates = points
-    .map((point, index) => `${xOf(index)},${padding + (1 - (point - low) / span) * plotHeight}`)
-    .join(' ')
+  const yOf = (point: number): number => padding + (1 - (point - low) / span) * plotHeight
+  const coordinates = points.map((point, index) => `${xOf(index)},${yOf(point)}`).join(' ')
+  // Single-reading dot position (see the render branch below).
+  const dotY = yOf(points[0])
 
   return (
     <svg
@@ -66,7 +67,23 @@ export function Sparkline({ points, tone }: { points: number[]; tone: MetricTone
         </clipPath>
       </defs>
       <line className="sparkline-guide" x1={padding} x2={width - padding} y1={height - padding} y2={height - padding} />
-      <polyline clipPath={`url(#${clipId})`} points={coordinates} vectorEffect="non-scaling-stroke" />
+      {points.length === 1 ? (
+        // A one-coordinate polyline draws nothing, so a first-sweep row showed
+        // only the guide line — a blank rectangle with a stray dash. Render the
+        // single reading as a dot instead: a zero-length segment with a round
+        // cap, centred horizontally, at the value's y. The stroke colour still
+        // comes from the `.sparkline-<tone> polyline` CSS, so the tone class
+        // keeps working; the inline style only widens the cap into a visible
+        // marker and defeats the provisional dash pattern (a dashed dot can
+        // render as nothing).
+        <polyline
+          clipPath={`url(#${clipId})`}
+          points={`${width / 2},${dotY} ${width / 2},${dotY}`}
+          style={{ strokeWidth: 7, strokeDasharray: 'none' }}
+        />
+      ) : (
+        <polyline clipPath={`url(#${clipId})`} points={coordinates} vectorEffect="non-scaling-stroke" />
+      )}
     </svg>
   )
 }
