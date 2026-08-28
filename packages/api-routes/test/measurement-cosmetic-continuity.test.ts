@@ -250,6 +250,37 @@ describe('cosmetic-publish continuity', () => {
     expect(harbor?.mentionCoverage).toMatchObject({ state: 'available', value: 1, numerator: 2, denominator: 2 })
   })
 
+  it('keeps measurement-setup out of awaiting_first_run after a cosmetic republish', async () => {
+    const versionOne = seedVersion(1)
+    seedMeasuredRun(versionOne)
+    activate(seedVersion(2, renamedPlan(), versionOne))
+
+    const setup = await app.inject({ method: 'GET', url: '/api/v1/projects/northstar/measurement-setup' })
+    expect(setup.statusCode).toBe(200)
+    const body = setup.json()
+    // The overview keeps serving the prior run; setup must agree rather than
+    // demanding a first run that already happened.
+    expect(body.state).not.toBe('awaiting_first_run')
+    expect(body.nextAction).not.toBe('run_measurement')
+  })
+
+  it('revision-addressed reports never borrow a predecessor run through the chain', async () => {
+    const versionOne = seedVersion(1)
+    seedMeasuredRun(versionOne)
+    activate(seedVersion(2, renamedPlan(), versionOne))
+
+    // The explicit --revision surface promises the revision AS-WAS. Revision 2
+    // has no run of its own, and the comparable chain must not lend it one.
+    const rev2 = await app.inject({ method: 'GET', url: '/api/v1/projects/northstar/measurement-report?revision=2' })
+    expect(rev2.statusCode).toBe(200)
+    expect(rev2.json().run).toBeNull()
+
+    // Revision 1 still reports its own run, exactly as measured.
+    const rev1 = await app.inject({ method: 'GET', url: '/api/v1/projects/northstar/measurement-report?revision=1' })
+    expect(rev1.statusCode).toBe(200)
+    expect(rev1.json().run).not.toBeNull()
+  })
+
   it('still blanks after an execution-changing publish', async () => {
     const versionOne = seedVersion(1)
     seedMeasuredRun(versionOne)

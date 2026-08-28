@@ -522,10 +522,17 @@ export function latestMeasurementRun(
   versionId: string,
   statuses: readonly RunStatus[],
   window: { from?: string; to?: string } = {},
+  opts: { exactVersion?: boolean } = {},
 ): typeof runs.$inferSelect | undefined {
   const conditions = [
     eq(runs.projectId, projectId),
-    inArray(runs.measurementPlanVersionId, comparableMeasurementVersionIds(db, projectId, versionId)),
+    // The revision-addressed report surface promises the revision AS-WAS and
+    // must never borrow a predecessor's run through the comparable chain; the
+    // active-dashboard surfaces want the chain so a label-only republish does
+    // not blank them. exactVersion selects the contract.
+    opts.exactVersion
+      ? eq(runs.measurementPlanVersionId, versionId)
+      : inArray(runs.measurementPlanVersionId, comparableMeasurementVersionIds(db, projectId, versionId)),
     eq(runs.kind, RunKinds['answer-visibility']),
     inArray(runs.status, [...statuses]),
     ne(runs.trigger, RunTriggers.probe),
@@ -542,11 +549,14 @@ function pinnedMeasurementRun(
   projectId: string,
   versionId: string,
   runId: string,
+  opts: { exactVersion?: boolean } = {},
 ): typeof runs.$inferSelect | undefined {
   return db.select().from(runs).where(and(
     eq(runs.id, runId),
     eq(runs.projectId, projectId),
-    inArray(runs.measurementPlanVersionId, comparableMeasurementVersionIds(db, projectId, versionId)),
+    opts.exactVersion
+      ? eq(runs.measurementPlanVersionId, versionId)
+      : inArray(runs.measurementPlanVersionId, comparableMeasurementVersionIds(db, projectId, versionId)),
     eq(runs.kind, RunKinds['answer-visibility']),
     inArray(runs.status, [RunStatuses.completed, RunStatuses.partial]),
     ne(runs.trigger, RunTriggers.probe),
@@ -576,8 +586,8 @@ function storedMeasurementPlanV2Report(
   runId?: string,
 ): StoredMeasurementReport {
   const run = runId
-    ? pinnedMeasurementRun(db, projectId, version.id, runId)
-    : latestMeasurementRun(db, projectId, version.id, [RunStatuses.completed, RunStatuses.partial])
+    ? pinnedMeasurementRun(db, projectId, version.id, runId, { exactVersion: true })
+    : latestMeasurementRun(db, projectId, version.id, [RunStatuses.completed, RunStatuses.partial], {}, { exactVersion: true })
   if (!run) {
     const empty = buildMeasurementPlanV2ReportInput(version.revision, plan, { schemaVersion: 1, expectedSlots: [] }, [])
     return {
@@ -620,7 +630,7 @@ export function buildStoredMeasurementReport(
   const plan = stored
 
   const run = runId
-    ? pinnedMeasurementRun(db, projectId, version.id, runId)
+    ? pinnedMeasurementRun(db, projectId, version.id, runId, { exactVersion: true })
     : db.select().from(runs).where(and(
         eq(runs.projectId, projectId),
         eq(runs.measurementPlanVersionId, version.id),
