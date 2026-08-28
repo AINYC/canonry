@@ -4023,6 +4023,21 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
          ON insight_notify_state(project_id)`,
     ],
   },
+  {
+    version: 149,
+    name: 'measurement-plan-version-continuity',
+    // Every measurement read pins to the active plan version row id, but a
+    // publish mints a new row for ANY compiled-checksum change — labels
+    // included — so renaming a group blanked the dashboard until the next full
+    // sweep. This column records, at publish time, the superseded version a
+    // cosmetic (execution-identical) revision stays comparable with, so reads
+    // can keep serving the previous run. Historic rows stay NULL on purpose:
+    // their execution equality was never verified at publish time, and
+    // backfilling one would claim a comparison nobody made.
+    statements: [
+      `ALTER TABLE measurement_plan_versions ADD COLUMN comparable_to_version_id TEXT`,
+    ],
+  },
 ]
 
 function addRunsMeasurementPlanVersionForeignKey(tx: MigrationDb): void {

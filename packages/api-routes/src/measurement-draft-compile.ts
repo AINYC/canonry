@@ -1,5 +1,6 @@
 import {
   brandKeyFromText,
+  canonicalMeasurementPlanV2,
   compileBrandAliases,
   matcherMatchesText,
   measurementPlanV2ChecksumJson,
@@ -575,4 +576,24 @@ export function diffCompiledPlans(
       removedNodeKeys: [...beforeNodes].filter(key => !afterNodes.has(key)).sort(compareText),
     },
   }
+}
+
+/**
+ * True when two compiled revisions froze the IDENTICAL execution surface: same
+ * node keys, and byte-identical canonical node content (question text, frozen
+ * location context, provider roster, model map, expected slot counts).
+ *
+ * This is deliberately stricter than "added and removed node keys both empty".
+ * A node's stable key hashes queryId/location/providers/models but NOT the
+ * query text, so a tracked query edited in place could keep its key while the
+ * frozen text moved — and a prior run served under the new revision would then
+ * fail manifest validation as corruption. Whole-node equality is exactly the
+ * condition under which a run pinned to the superseded revision satisfies the
+ * new revision's manifest checks, which is what publish-time continuity
+ * (`measurement_plan_versions.comparable_to_version_id`) promises the reads.
+ */
+export function plansShareExecutionSurface(active: MeasurementPlanV2, candidate: MeasurementPlanV2): boolean {
+  const surface = (plan: MeasurementPlanV2): string =>
+    JSON.stringify(canonicalJsonValue(canonicalMeasurementPlanV2(plan).executionNodes))
+  return surface(active) === surface(candidate)
 }
