@@ -21,7 +21,7 @@ function readText(relativePath: string): string {
 
 function semverCore(version: string): [number, number, number] {
   const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version)
-  if (!match) throw new Error(`Expected an exact semver, received ${version}`)
+  if (!match) throw new Error(`Expected an exact semver pin, received ${version}`)
   return [Number(match[1]), Number(match[2]), Number(match[3])]
 }
 

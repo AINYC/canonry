@@ -294,8 +294,8 @@ importers:
         specifier: ^0.91.1
         version: 0.91.1(zod@4.3.6)
       '@canonry/aeo-audit':
-        specifier: 4.7.0
-        version: 4.7.0
+        specifier: 7.1.0
+        version: 7.1.0
       '@fastify/rate-limit':
         specifier: ^11.2.0
         version: 11.2.0
@@ -925,8 +925,8 @@ packages:
     resolution: {integrity: sha512-ctxtJ/eA+t+6q2++vj5j7FYX3nRu311q1wfYH3xjlLOsczhlhxAg2FWNUXhpGvAw3BWo1xBcvOV6/YLc2r5FJw==}
     hasBin: true
 
-  '@canonry/aeo-audit@4.7.0':
-    resolution: {integrity: sha512-wirUewfvejdxJ4qsEly3NOSE3KdM/QDHkhHkG0NnMa7DgCJRF9b5VoOlFJ62BWgb34EIp0infb8C4zSIuZH67A==}
+  '@canonry/aeo-audit@7.1.0':
+    resolution: {integrity: sha512-XwWEfzVqrzBkaCCAe4ficJW52LUhpxzsNF3uB3v3u2RsUHD3nRhv03jSgyTpj7hILTUNJTt8Xqn5HNMgDqX19w==}
     engines: {node: '>=20'}
     hasBin: true
 
@@ -5525,7 +5525,7 @@ snapshots:
     dependencies:
       css-tree: 3.2.1
 
-  '@canonry/aeo-audit@4.7.0':
+  '@canonry/aeo-audit@7.1.0':
     dependencies:
       cheerio: 1.2.0
       ipaddr.js: 2.3.0

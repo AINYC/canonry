@@ -22,7 +22,6 @@ import type {
   SiteCrawlReport,
 } from '@canonry/aeo-audit'
 import {
-  SITE_AUDIT_DEFAULT_EDGE_LIMIT,
   SITE_AUDIT_DEFAULT_PAGE_LIMIT,
   SITE_AUDIT_MAX_EDGE_LIMIT,
   SITE_AUDIT_MAX_PAGE_LIMIT,
@@ -93,8 +92,15 @@ export function clampSiteAuditLimit(limit: number | undefined): number {
   return Math.max(1, Math.min(SITE_AUDIT_MAX_PAGE_LIMIT, Math.floor(limit)))
 }
 
-export function clampSiteAuditEdgeLimit(limit: number | undefined): number {
-  if (limit == null || !Number.isFinite(limit)) return SITE_AUDIT_DEFAULT_EDGE_LIMIT
+export function clampSiteAuditEdgeLimit(limit: number | undefined): number | undefined {
+  /**
+   * An unset edge limit stays unset. The engine derives maxEdges from the
+   * resolved page count (7.1.0: pages x 50, floored at 100,000), and a flat
+   * default passed from here would CAP BELOW that derivation for any crawl
+   * over 2,000 pages, quietly recreating the ceiling the derivation removed.
+   * An operator's explicit value is clamped and honoured exactly.
+   */
+  if (limit == null || !Number.isFinite(limit)) return undefined
   return Math.max(1, Math.min(SITE_AUDIT_MAX_EDGE_LIMIT, Math.floor(limit)))
 }
 
@@ -271,58 +277,6 @@ function deadLinkCheckedCount(edges: Iterable<CrawlEdgeObservation>, pages: Iter
 }
 
 /**
- * "Too Many Requests" is the server describing OUR request rate, not the
- * resource. It is the one error status that is never evidence about the link,
- * so reporting it as broken blames a site for how hard we crawled it — the
- * same mistake as reporting a timeout, arriving with a status code attached.
- *
- * The engine classifies this correctly from 6.0.0 (`reason: 'throttled'`), but
- * this repo pins 4.7.0 and the published 5.0.0 carries the bug too, so the
- * platform has to make the call itself. Redundant once the dependency moves,
- * exactly like the null-status branch beside it.
- */
-const RATE_LIMITED_STATUS = 429
-
-/** One dead-link row as the engine reports it, across engine versions. */
-interface EngineLinkFinding {
-  key: string
-  from: string
-  to: string
-  statusCode?: number | null
-  reason?: string
-}
-
-/**
- * Split what the engine returns into links that are BROKEN and links we could
- * not CHECK. Those are different claims and only the first may be shown to a
- * client: a 4xx is the site saying the link is dead, while a timeout or a reset
- * socket is our crawler failing to ask, and the URL is very often healthy.
- *
- * Engine-version tolerant on purpose. From 6.0.0 the engine makes the split
- * itself and `deadLinks.unverified` carries the second bucket; the pinned
- * 4.7.0 engine puts everything in `findings` tagged `reason: 'fetch-error'`.
- * Reading both sources means the platform is correct on either, and the filter
- * degrades to a no-op guard once the dependency moves.
- */
-function partitionDeadLinks(deadLinks: SiteCrawlReport['deadLinks']): {
-  dead: EngineLinkFinding[]
-  unverified: EngineLinkFinding[]
-} {
-  const reported: EngineLinkFinding[] = deadLinks.findings
-  const engineUnverified = (deadLinks as { unverified?: EngineLinkFinding[] }).unverified ?? []
-  // `typeof` rather than `!== null` so this keeps compiling once the engine
-  // narrows `statusCode` to a plain number.
-  const answeredWithError = (finding: EngineLinkFinding): boolean =>
-    typeof finding.statusCode === 'number' && finding.statusCode >= 400
-  const dead = reported.filter((finding) => answeredWithError(finding) && finding.statusCode !== RATE_LIMITED_STATUS)
-  const unverified = [
-    ...reported.filter((finding) => !answeredWithError(finding) || finding.statusCode === RATE_LIMITED_STATUS),
-    ...engineUnverified,
-  ]
-  return { dead, unverified }
-}
-
-/**
  * Local full-crawl executor.
  *
  * Events update an attempt-local graph durably as they arrive.  A distinct
@@ -330,82 +284,6 @@ function partitionDeadLinks(deadLinks: SiteCrawlReport['deadLinks']): {
  * reads publish only complete snapshots as current; an explicitly selected
  * partial run remains inspectable without replacing the last known-good graph.
  */
-
-/**
- * The crawl budgets that go with a page budget.
- *
- * The engine defaults are sized for a general-purpose crawl and are the reason
- * asking for 1,000 pages used to yield 140: `maxPages` bounds how many URLs are
- * ADMITTED to the frontier, while `maxBytes` bounds how many are actually
- * FETCHED out of it. A site serving ~745 KB of decompressed HTML per page
- * exhausts the 100 MB default after ~140 pages, whatever the page budget says,
- * and gzip does not help because the cap counts decompressed bytes.
- *
- * Two failures follow from that, and both are worse than the truncation:
- *
- * - The budget latch is first-write-wins, so a soft admission-side reason
- *   (`max-query-variants`, hit while seeding the sitemap) masks the real
- *   byte stop. `isHardFetchStop()` stays false and the crawler keeps issuing
- *   real requests at the audited site while discarding every response, until
- *   the duration cap ends the run. The "safe partial audit" was the LEAST
- *   polite mode we had.
- * - The run then records the masked reason, so the database misreports why it
- *   stopped.
- *
- * Sizing every budget from `maxPages` is what avoids both: with the byte cap
- * out of reach, the crawl ends because it ran out of admitted URLs, which is a
- * stop we can report honestly.
- */
-
-/**
- * Why the crawl actually stopped.
- *
- * `terminationReason` cannot be trusted on its own: the engine's budget latch
- * is first-write-wins, so a soft admission-side reason hit while seeding the
- * sitemap masks whatever really ended the fetch loop. A byte-capped run was
- * being recorded as `max-query-variants`, which sent anyone reading the row
- * looking at the wrong budget entirely.
- *
- * The summary carries the counters to settle it, so prefer the measurement
- * over the label and fall back to the label only when nothing was exhausted.
- */
-export function reportedTermination(summary: {
-  terminationReason: string | null
-  bytesRead?: number
-  elapsedMs?: number
-  fetchesStarted?: number
-  limits?: { maxBytes?: number; maxDurationMs?: number; maxFetches?: number }
-}): string {
-  const limits = summary.limits
-  if (limits) {
-    if (limits.maxBytes && (summary.bytesRead ?? 0) >= limits.maxBytes) return 'max-bytes'
-    if (limits.maxDurationMs && (summary.elapsedMs ?? 0) >= limits.maxDurationMs) return 'max-duration'
-    if (limits.maxFetches && (summary.fetchesStarted ?? 0) >= limits.maxFetches) return 'max-fetches'
-  }
-  return summary.terminationReason ?? 'complete'
-}
-
-export function crawlBudgetsFor(maxPages: number): {
-  maxBytes: number
-  maxDurationMs: number
-  maxFetches: number
-  maxQueryVariants: number
-} {
-  return {
-    // 2x the ~745 KB/page measured on a media-heavy production site, so the
-    // byte cap is headroom rather than the thing that stops the crawl.
-    maxBytes: maxPages * 1_500_000,
-    // ~5 pages/s at the engine's default concurrency of 5, doubled for slow
-    // origins, and never below the engine's own 2-minute floor.
-    maxDurationMs: Math.max(120_000, Math.ceil((maxPages / 5) * 1_000 * 2)),
-    // Redirects and dead-link probes cost fetches without producing pages.
-    maxFetches: Math.ceil(maxPages * 1.5),
-    // Raised off the default of 10 because it is an ADMISSION limit: a sitemap
-    // with many query-parameter variants trips it during seeding and latches a
-    // soft reason that then masks whatever really stops the crawl.
-    maxQueryVariants: Math.max(50, Math.ceil(maxPages / 10)),
-  }
-}
 
 export async function executeSiteAudit(
   db: DatabaseClient,
@@ -772,7 +650,11 @@ export async function executeSiteAudit(
       maxEdges,
       maxDepth: opts.maxDepth ?? null,
     })
-    const budgets = crawlBudgetsFor(maxPages)
+    // The engine (>= 7.1.0) derives maxFetches / maxDurationMs / maxBytes /
+    // maxEdges from the page budget natively, so passing only the two limits
+    // the operator actually chose is what keeps the page budget the one that
+    // binds. Setting any fetch-side budget here would pin it and fight that
+    // derivation — an explicit value is honoured exactly, even a bad one.
     const report: SiteCrawlReport = await runSiteCrawl(crawlRootUrl, {
       mode: 'summary',
       sitemapUrl: opts.sitemapUrl,
@@ -780,7 +662,6 @@ export async function executeSiteAudit(
       maxEdges,
       maxDepth: opts.maxDepth,
       checkDeadLinks: opts.checkDeadLinks ?? false,
-      ...budgets,
       signal: opts.signal,
       onEvent: persistEvent,
     })
@@ -823,7 +704,13 @@ export async function executeSiteAudit(
     const errorCount = observedErrorCount(observedPages.values())
     const terminalStatus: RunStatus = crawlSummary.complete ? 'completed' : 'partial'
     const deadLinksChecked = opts.checkDeadLinks ? deadLinkCheckedCount(observedEdges.values(), observedPages.values()) : 0
-    const { dead: deadLinkFindings, unverified: unverifiedLinks } = partitionDeadLinks(report.deadLinks)
+    // The engine makes the broken-vs-unverified split itself (6.0.0+): a
+    // finding always carries a real error status, and a target that never
+    // answered — or answered 429, which describes our crawl rate rather than
+    // the resource — lands in `unverified`. Those are different claims and
+    // only findings may be shown to a client as broken links.
+    const deadLinkFindings = report.deadLinks.findings
+    const unverifiedLinks = report.deadLinks.unverified
     const deadLinksFound = deadLinkFindings.length
     // Counted per TARGET, not per finding, because this number's partner is
     // `deadLinksChecked` — the two partition the internal anchor targets the
@@ -931,7 +818,7 @@ export async function executeSiteAudit(
         maxDepth: opts.maxDepth ?? null,
         checkDeadLinks: opts.checkDeadLinks ?? false,
         complete: crawlSummary.complete,
-        termination: reportedTermination(crawlSummary),
+        termination: crawlSummary.terminationReason ?? 'complete',
         detailsAvailable: true,
         pagesDiscovered: crawlSummary.pagesDiscovered,
         pagesFetched: crawlSummary.pagesFetched,
