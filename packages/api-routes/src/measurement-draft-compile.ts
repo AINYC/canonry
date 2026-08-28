@@ -1,5 +1,6 @@
 import {
   brandKeyFromText,
+  canonicalMeasurementPlanV2,
   compileBrandAliases,
   matcherMatchesText,
   measurementPlanV2ChecksumJson,
@@ -575,4 +576,51 @@ export function diffCompiledPlans(
       removedNodeKeys: [...beforeNodes].filter(key => !afterNodes.has(key)).sort(compareText),
     },
   }
+}
+
+/**
+ * True when two compiled revisions froze the IDENTICAL execution surface: same
+ * node keys, and byte-identical canonical node content (question text, frozen
+ * location context, provider roster, model map, expected slot counts).
+ *
+ * This is deliberately stricter than "added and removed node keys both empty".
+ * A node's stable key hashes queryId/location/providers/models but NOT the
+ * query text, so a tracked query edited in place could keep its key while the
+ * frozen text moved — and a prior run served under the new revision would then
+ * fail manifest validation as corruption. Whole-node equality is exactly the
+ * condition under which a run pinned to the superseded revision satisfies the
+ * new revision's manifest checks, which is what publish-time continuity
+ * (`measurement_plan_versions.comparable_to_version_id`) promises the reads.
+ */
+export function plansAreLabelOnlyVariants(active: MeasurementPlanV2, candidate: MeasurementPlanV2): boolean {
+  /**
+   * Continuity is promised ONLY for a label-only republish, so the comparison
+   * is the FULL canonical document with display labels neutralized - not the
+   * execution nodes alone. Execution-node equality looked sufficient and was
+   * not: queryClass lives on assignments, aliases and urlMatchers on targets,
+   * brand names on identities, competitors on groups - all invisible to the
+   * node comparison, and every one of them changes what stored evidence MEANS
+   * when the reads hand the active plan to the report adapter. Admitting any
+   * of them as "cosmetic" reinterprets old answers under new semantics with
+   * zero new measurement, which is exactly what the frozen-revision doctrine
+   * exists to prevent.
+   */
+  const surface = (plan: MeasurementPlanV2): string => {
+    const doc = canonicalMeasurementPlanV2(plan)
+    const stripped = {
+      ...doc,
+      // compiledChecksum is DERIVED over the full document, labels included,
+      // so keeping it would smuggle the stripped labels back into the
+      // comparison. Everything else in the doc is semantic and stays.
+      compiledChecksum: '',
+      targets: doc.targets.map((target) => ({ ...target, label: '' })),
+      groups: doc.groups.map((group) => ({
+        ...group,
+        label: '',
+        competitors: group.competitors.map((competitor) => ({ ...competitor, label: '' })),
+      })),
+    }
+    return JSON.stringify(canonicalJsonValue(stripped))
+  }
+  return surface(active) === surface(candidate)
 }

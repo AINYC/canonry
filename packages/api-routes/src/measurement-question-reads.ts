@@ -44,6 +44,7 @@ import {
   buildMeasurementPlanV2ReportInput,
   latestMeasurementRun,
   measurementRunExpectedSlots,
+  runVersionServesActiveVersion,
 } from './measurement-report-adapter.js'
 
 const DEFAULT_LIMIT = 50
@@ -185,7 +186,10 @@ export function selectMeasurementQuestionRun(
     eq(runs.projectId, projectId),
   )).get()
   if (!run) throw notFound('Run', runId)
-  if (run.measurementPlanVersionId !== active.version.id) {
+  // A run pinned to a comparable prior revision (a label-only republish chain)
+  // measured exactly the questions the active revision asks, so naming it is
+  // continuity, not cross-revision mixing.
+  if (!runVersionServesActiveVersion(db, projectId, active.version.id, run.measurementPlanVersionId)) {
     const pinned = run.measurementPlanVersionId === null
       ? null
       : db.select({ revision: measurementPlanVersions.revision }).from(measurementPlanVersions)

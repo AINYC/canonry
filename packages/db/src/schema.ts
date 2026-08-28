@@ -72,6 +72,17 @@ export const measurementPlanVersions = sqliteTable('measurement_plan_versions', 
    * never happened.
    */
   compiledChecksum: text('compiled_checksum'),
+  /**
+   * Continuity link written at publish time: the superseded active version this
+   * revision is measurement-comparable with. Set ONLY when the publish changed
+   * nothing about execution — the frozen execution nodes of both revisions are
+   * canonically identical — so a run pinned to the linked version answered
+   * exactly the questions this revision would ask. A label-only republish
+   * therefore keeps serving the previous run instead of blanking the dashboard
+   * until the next sweep. Null for the first revision, for every
+   * execution-changing publish, and on every historic row.
+   */
+  comparableToVersionId: text('comparable_to_version_id'),
   publishedBy: text('published_by'),
   sourceDraftId: text('source_draft_id'),
   createdAt: text('created_at').notNull(),

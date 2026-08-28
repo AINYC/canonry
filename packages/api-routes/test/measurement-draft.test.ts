@@ -1169,6 +1169,70 @@ describe('measurement draft publish', () => {
     expect(db.select().from(measurementPlanVersions).all()).toHaveLength(3)
   })
 
+  it('links a cosmetic publish to the revision it supersedes and withholds the link when execution changes', async () => {
+    const first = await readyDraft()
+    expect((await publish(first, null)).json()).toMatchObject({ published: true, active: { revision: 1 } })
+    const revisionOne = db.select().from(measurementPlanVersions)
+      .where(eq(measurementPlanVersions.revision, 1)).get()!
+    // A first revision supersedes nothing, so it has nothing to compare with.
+    expect(revisionOne.comparableToVersionId).toBeNull()
+
+    // A label-only rename changes the compiled checksum but not one provider
+    // call, so the new revision records the one it stays comparable with.
+    const second = await DraftSession.start(1)
+    await second.run('upsert-target', { target: { ...WIDGETS_TARGET, label: 'Widgets Renamed' } })
+    expect((await publish(second, 1)).json()).toMatchObject({ published: true, active: { revision: 2 } })
+    const revisionTwo = db.select().from(measurementPlanVersions)
+      .where(eq(measurementPlanVersions.revision, 2)).get()!
+    expect(revisionTwo.comparableToVersionId).toBe(revisionOne.id)
+
+    // A second label-only publish chains one step at a time: each link names
+    // the revision it directly superseded.
+    const third = await DraftSession.start(2)
+    await third.run('upsert-target', { target: { ...WIDGETS_TARGET, label: 'Widgets Renamed Again' } })
+    expect((await publish(third, 2)).json()).toMatchObject({ published: true, active: { revision: 3 } })
+    const revisionThree = db.select().from(measurementPlanVersions)
+      .where(eq(measurementPlanVersions.revision, 3)).get()!
+    expect(revisionThree.comparableToVersionId).toBe(revisionTwo.id)
+
+    // An ALIAS edit leaves every execution node byte-identical, but it changes
+    // what stored answers MEAN: the reads re-match mention against the active
+    // plan's aliases, so linking here would flip old evidence to "mentioned"
+    // with zero new measurement. Meaning changes never link.
+    const aliasEdit = await DraftSession.start(3)
+    await aliasEdit.run('upsert-target', {
+      target: { ...WIDGETS_TARGET, label: 'Widgets Renamed Again', aliases: ['Northwind Widgets', 'NW Widgets'] },
+    })
+    expect((await publish(aliasEdit, 3)).json()).toMatchObject({ published: true, active: { revision: 4 } })
+    const aliasRevision = db.select().from(measurementPlanVersions)
+      .where(eq(measurementPlanVersions.revision, 4)).get()!
+    expect(aliasRevision.comparableToVersionId).toBeNull()
+
+    // A queryClass flip is the same trap one field over: the class lives on
+    // the assignment, not the execution node, and repools the basket a stored
+    // answer counts against. Never linked.
+    const classFlip = await DraftSession.start(4)
+    await classFlip.run('classify-assignments', {
+      queryClass: 'branded',
+      assignments: [{ targetKey: 'widgets', queryId: queryId('best widget supplier') }],
+    })
+    expect((await publish(classFlip, 4)).json()).toMatchObject({ published: true, active: { revision: 5 } })
+    const classRevision = db.select().from(measurementPlanVersions)
+      .where(eq(measurementPlanVersions.revision, 5)).get()!
+    expect(classRevision.comparableToVersionId).toBeNull()
+
+    // Adding a Target with an assignment adds execution nodes. The prior runs
+    // did not measure them, so this publish keeps today's blank-until-swept
+    // semantics: no link.
+    const fourth = await DraftSession.start(5)
+    await fourth.run('upsert-target', { target: GADGETS_TARGET })
+    await fourth.run('apply-assignments', { targetKey: 'gadgets', queryIds: [queryId('widget delivery times')] })
+    expect((await publish(fourth, 5)).json()).toMatchObject({ published: true, active: { revision: 6 } })
+    const revisionSix = db.select().from(measurementPlanVersions)
+      .where(eq(measurementPlanVersions.revision, 6)).get()!
+    expect(revisionSix.comparableToVersionId).toBeNull()
+  })
+
   it('deletes only the active-plan pointer on deactivate', async () => {
     const session = await readyDraft()
     await publish(session, null)

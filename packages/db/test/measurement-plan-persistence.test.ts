@@ -190,7 +190,7 @@ test('execution context is nullable for legacy rows and unique per run, executio
 
 test('schema mirrors the Target plan persistence boundary', () => {
   const expectedTables = [
-    ['measurementPlanVersions', 'measurement_plan_versions', ['id', 'project_id', 'revision', 'canonical_json', 'checksum', 'schema_version', 'compiled_checksum', 'published_by', 'source_draft_id', 'created_at']],
+    ['measurementPlanVersions', 'measurement_plan_versions', ['id', 'project_id', 'revision', 'canonical_json', 'checksum', 'schema_version', 'compiled_checksum', 'comparable_to_version_id', 'published_by', 'source_draft_id', 'created_at']],
     ['measurementSegments', 'measurement_segments', ['id', 'project_id', 'stable_key', 'kind', 'retired_at', 'created_at']],
     ['measurementPlans', 'measurement_plans', ['project_id', 'active_version_id', 'created_at', 'updated_at']],
   ] as const

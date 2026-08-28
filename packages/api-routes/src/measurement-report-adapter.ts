@@ -451,11 +451,70 @@ function responseFromReport(
 }
 
 /**
+ * A cosmetic publish chain cannot realistically be deep, but the walk is still
+ * bounded so a corrupt or cyclic link column can never hang a read.
+ */
+export const MEASUREMENT_COMPARABLE_VERSION_WALK_LIMIT = 32
+
+/**
+ * The plan version ids whose runs may honestly serve a read pinned to
+ * `versionId`: the version itself, plus every predecessor reachable through
+ * the `comparable_to_version_id` continuity chain that publish records for an
+ * execution-identical (label-only) republish. Runs pinned to any of these
+ * versions answered exactly the questions `versionId` asks, so serving one is
+ * continuity rather than cross-revision mixing. The walk is backward-only,
+ * bounded, and cycle-safe.
+ */
+export function comparableMeasurementVersionIds(
+  db: DatabaseClient,
+  projectId: string,
+  versionId: string,
+): string[] {
+  const ids = [versionId]
+  const seen = new Set(ids)
+  let cursor = versionId
+  for (let step = 0; step < MEASUREMENT_COMPARABLE_VERSION_WALK_LIMIT; step++) {
+    const row = db.select({ comparableToVersionId: measurementPlanVersions.comparableToVersionId })
+      .from(measurementPlanVersions)
+      .where(and(
+        eq(measurementPlanVersions.projectId, projectId),
+        eq(measurementPlanVersions.id, cursor),
+      )).get()
+    const next = row?.comparableToVersionId ?? null
+    if (next === null || seen.has(next)) break
+    ids.push(next)
+    seen.add(next)
+    cursor = next
+  }
+  return ids
+}
+
+/**
+ * Whether a run's pinned version may serve a read of `activeVersionId`. Exact
+ * match, or membership in the comparable chain. A pre-plan run (null pin) never
+ * qualifies: it answered questions no revision froze.
+ */
+export function runVersionServesActiveVersion(
+  db: DatabaseClient,
+  projectId: string,
+  activeVersionId: string,
+  runVersionId: string | null,
+): boolean {
+  if (runVersionId === null) return false
+  if (runVersionId === activeVersionId) return true
+  return comparableMeasurementVersionIds(db, projectId, activeVersionId).includes(runVersionId)
+}
+
+/**
  * The default displayed run for one revision.
  *
  * A scoped spot check is excluded on purpose: it measured a slice the operator
  * named, so displaying it as the revision's result would report a subset as the
  * whole. It stays selectable by naming its id (§0.3).
+ *
+ * Selection accepts a run pinned to the named version OR to any prior version
+ * in its comparable chain, so a label-only republish keeps displaying the run
+ * it already had instead of blanking until the next sweep.
  */
 export function latestMeasurementRun(
   db: DatabaseClient,
@@ -463,10 +522,17 @@ export function latestMeasurementRun(
   versionId: string,
   statuses: readonly RunStatus[],
   window: { from?: string; to?: string } = {},
+  opts: { exactVersion?: boolean } = {},
 ): typeof runs.$inferSelect | undefined {
   const conditions = [
     eq(runs.projectId, projectId),
-    eq(runs.measurementPlanVersionId, versionId),
+    // The revision-addressed report surface promises the revision AS-WAS and
+    // must never borrow a predecessor's run through the comparable chain; the
+    // active-dashboard surfaces want the chain so a label-only republish does
+    // not blank them. exactVersion selects the contract.
+    opts.exactVersion
+      ? eq(runs.measurementPlanVersionId, versionId)
+      : inArray(runs.measurementPlanVersionId, comparableMeasurementVersionIds(db, projectId, versionId)),
     eq(runs.kind, RunKinds['answer-visibility']),
     inArray(runs.status, [...statuses]),
     ne(runs.trigger, RunTriggers.probe),
@@ -483,11 +549,14 @@ function pinnedMeasurementRun(
   projectId: string,
   versionId: string,
   runId: string,
+  opts: { exactVersion?: boolean } = {},
 ): typeof runs.$inferSelect | undefined {
   return db.select().from(runs).where(and(
     eq(runs.id, runId),
     eq(runs.projectId, projectId),
-    eq(runs.measurementPlanVersionId, versionId),
+    opts.exactVersion
+      ? eq(runs.measurementPlanVersionId, versionId)
+      : inArray(runs.measurementPlanVersionId, comparableMeasurementVersionIds(db, projectId, versionId)),
     eq(runs.kind, RunKinds['answer-visibility']),
     inArray(runs.status, [RunStatuses.completed, RunStatuses.partial]),
     ne(runs.trigger, RunTriggers.probe),
@@ -517,8 +586,8 @@ function storedMeasurementPlanV2Report(
   runId?: string,
 ): StoredMeasurementReport {
   const run = runId
-    ? pinnedMeasurementRun(db, projectId, version.id, runId)
-    : latestMeasurementRun(db, projectId, version.id, [RunStatuses.completed, RunStatuses.partial])
+    ? pinnedMeasurementRun(db, projectId, version.id, runId, { exactVersion: true })
+    : latestMeasurementRun(db, projectId, version.id, [RunStatuses.completed, RunStatuses.partial], {}, { exactVersion: true })
   if (!run) {
     const empty = buildMeasurementPlanV2ReportInput(version.revision, plan, { schemaVersion: 1, expectedSlots: [] }, [])
     return {
@@ -561,7 +630,7 @@ export function buildStoredMeasurementReport(
   const plan = stored
 
   const run = runId
-    ? pinnedMeasurementRun(db, projectId, version.id, runId)
+    ? pinnedMeasurementRun(db, projectId, version.id, runId, { exactVersion: true })
     : db.select().from(runs).where(and(
         eq(runs.projectId, projectId),
         eq(runs.measurementPlanVersionId, version.id),

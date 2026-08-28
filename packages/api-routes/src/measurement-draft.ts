@@ -1,5 +1,6 @@
 import crypto from 'node:crypto'
 import { and, asc, desc, eq, inArray } from 'drizzle-orm'
+import { comparableMeasurementVersionIds } from './measurement-report-adapter.js'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import {
   AppError,
@@ -63,6 +64,7 @@ import {
   compileMeasurementDraft,
   compileMeasurementDraftAssignmentExecution,
   diffCompiledPlans,
+  plansAreLabelOnlyVariants,
   proposeQueryClassForTarget,
   type MeasurementDraftCompileContext,
 } from './measurement-draft-compile.js'
@@ -473,7 +475,10 @@ export async function measurementDraftRoutes(app: FastifyInstance, opts: Measure
     const completedRun = active
       ? app.db.select({ id: runs.id }).from(runs).where(and(
           eq(runs.projectId, project.id),
-          eq(runs.measurementPlanVersionId, active.id),
+          // The comparable chain, not the bare active id: a label-only
+          // republish must not flip setup back to awaiting_first_run while
+          // the overview keeps serving the prior run.
+          inArray(runs.measurementPlanVersionId, comparableMeasurementVersionIds(app.db, project.id, active.id)),
           eq(runs.status, RunStatuses.completed),
         )).get()
       : undefined
@@ -967,6 +972,19 @@ export async function measurementDraftRoutes(app: FastifyInstance, opts: Measure
         }).run()
       }
 
+      // Publish-time continuity: when this publish changes NOTHING about
+      // execution — the superseded active revision froze the identical
+      // execution surface — record the link so reads keep serving the previous
+      // revision's runs instead of blanking until the next full sweep. An
+      // execution-changing publish leaves the link null and keeps today's
+      // refusal semantics exactly. A v1 active revision has no comparable
+      // execution model, so it never links.
+      const comparableToVersionId = active !== null
+        && active.schemaVersion === 2
+        && plansAreLabelOnlyVariants(parseV2Plan(active), compiled.plan)
+        ? active.id
+        : null
+
       tx.insert(measurementPlanVersions).values({
         id: versionId,
         projectId: gate.project.id,
@@ -975,6 +993,7 @@ export async function measurementDraftRoutes(app: FastifyInstance, opts: Measure
         checksum: sha256Hex(canonicalJson),
         schemaVersion: 2,
         compiledChecksum: compiled.plan.compiledChecksum,
+        comparableToVersionId,
         publishedBy: serializeActor(gate.actor),
         sourceDraftId: row.id,
         createdAt: now.toISOString(),
