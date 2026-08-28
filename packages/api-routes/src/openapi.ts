@@ -802,8 +802,8 @@ const routeCatalog: OpenApiOperation[] = [
   {
     method: 'put',
     path: '/api/v1/projects/{name}/measurement-plan',
-    summary: 'Publish a measurement-plan revision',
-    description: 'Compares the caller-observed active revision, then validates and canonicalizes the plan against current project domains, locations, and tracked queries. Identical active content is idempotent; restoring older content creates a new immutable revision.',
+    summary: 'Publish a measurement-plan revision (legacy schema v1)',
+    description: 'Legacy schema-v1 publish. Compares the caller-observed active revision, then validates and canonicalizes the plan against current project domains, locations, and tracked queries. Identical active content is idempotent; restoring older content creates a new immutable revision. Refuses when the active revision is schema v2 rather than downgrade it; publish v2 plans through the draft flow (POST .../measurement-plan/draft/actions/publish).',
     tags: ['measurement-plans'],
     parameters: [nameParameter],
     requestBody: {

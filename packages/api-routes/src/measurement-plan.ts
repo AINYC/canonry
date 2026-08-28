@@ -379,6 +379,17 @@ export async function measurementPlanRoutes(app: FastifyInstance, opts: Measurem
       if (activePlan && !activeVersion) {
         throw new Error(`Measurement plan ${project.id} points to missing version ${activePlan.activeVersionId}`)
       }
+      // This legacy endpoint compiles schema v1 only. Publishing over an
+      // active v2 revision would silently downgrade the plan: setup flips to
+      // republish_required and every v2 read surface goes unavailable. The
+      // honest answer is a refusal that names the draft flow.
+      if (activeVersion && activeVersion.schemaVersion !== 1) {
+        throw validationError(
+          `The active measurement plan is schema v${activeVersion.schemaVersion}; this legacy endpoint publishes only schema v1 and would downgrade it. `
+          + 'Publish through the draft flow instead: POST /projects/:name/measurement-plan/draft/actions/publish '
+          + '(CLI: canonry measurement-plan advanced <project> draft-action; MCP: canonry_measurement_draft_action).',
+        )
+      }
       // A lost-response retry is safe even when it carries the predecessor
       // pointer: the exact desired immutable content is already active.
       if (activeVersion && activeVersion.checksum === checksum) return { kind: 'existing' as const, version: activeVersion }

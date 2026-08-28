@@ -6,6 +6,7 @@ import Fastify from 'fastify'
 import { eq } from 'drizzle-orm'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  canonicalMeasurementPlanV2Json,
   measurementPlanCompilePreviewResponseSchema,
   measurementPlanDiffPreviewResponseSchema,
   type MeasurementGroup,
@@ -15,6 +16,7 @@ import {
 import {
   apiKeys,
   createClient,
+  measurementPlans,
   measurementPlanVersions,
   measurementSegments,
   projects,
@@ -25,6 +27,7 @@ import {
 } from '@ainyc/canonry-db'
 import { apiRoutes } from '../src/index.js'
 import { hashApiKey } from '../src/auth.js'
+import { measurementPlanV2Fixture } from './measurement-plan-v2-fixture.js'
 
 const ROOT_KEY = 'cnry_target_root'
 const PLAN_KEY = 'cnry_target_plan'
@@ -317,6 +320,46 @@ describe('Target measurement-plan API', () => {
         plan: { targets: expect.arrayContaining([expect.objectContaining({ label: 'Chelsea Current' })]) },
       },
     })
+  })
+
+  it('refuses the legacy v1 publish over an active schema-v2 revision without touching it', async () => {
+    const project = db.select().from(projects).where(eq(projects.name, 'example')).get()!
+    const now = new Date().toISOString()
+    const versionId = crypto.randomUUID()
+    const v2 = measurementPlanV2Fixture()
+    db.insert(measurementPlanVersions).values({
+      id: versionId,
+      projectId: project.id,
+      revision: 3,
+      canonicalJson: canonicalMeasurementPlanV2Json(v2),
+      checksum: 'a'.repeat(64),
+      schemaVersion: 2,
+      compiledChecksum: v2.compiledChecksum,
+      createdAt: now,
+    }).run()
+    db.insert(measurementPlans).values({
+      projectId: project.id,
+      activeVersionId: versionId,
+      createdAt: now,
+      updatedAt: now,
+    }).run()
+
+    // Even a caller holding the correct active revision is refused: the legacy
+    // endpoint compiles schema v1 only, so success would downgrade the plan.
+    const refused = await request('PUT', '/api/v1/projects/example/measurement-plan', PLAN_KEY, publishRequest(3))
+    expect(refused.statusCode).toBe(400)
+    const body = refused.json() as { error: { code: string; message: string } }
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.message).toContain('schema v2')
+    expect(body.error.message).toContain('draft/actions/publish')
+
+    // The refusal writes nothing: no candidate revision, no segments, and the
+    // active pointer still names the v2 revision.
+    expect(db.select().from(measurementPlanVersions).all()).toHaveLength(1)
+    expect(db.select().from(measurementSegments).all()).toHaveLength(0)
+    expect(db.select().from(measurementPlans).all()).toEqual([
+      expect.objectContaining({ projectId: project.id, activeVersionId: versionId }),
+    ])
   })
 
   it('returns a semantic Target/group/query-selection and execution diff without writing', async () => {

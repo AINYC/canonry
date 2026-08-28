@@ -252,7 +252,7 @@ describe('measurement-plan CLI commands', () => {
     expect(command('measurement-plan versions').usage)
       .toBe('canonry measurement-plan versions <project> [--format json]')
     expect(command('measurement-plan publish').usage)
-      .toBe('canonry measurement-plan publish <project> <yaml|json|-> [--format json]')
+      .toBe('canonry measurement-plan publish <project> <yaml|json|-> [--format json] (legacy schema v1 only; refuses over an active v2 plan; for Advanced Measurement use: canonry measurement-plan advanced <project> draft-action)')
     expect(command('measurement-plan retire').usage)
       .toBe('canonry measurement-plan retire <project> <stable-key> [--format json]')
     expect(command('measurement-plan advanced').usage)
