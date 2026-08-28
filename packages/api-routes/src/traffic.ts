@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from 'node:util'
 import { Agent as UndiciAgent } from 'undici'
 import { countableReferralCondition, referralLandedCondition } from './ai-referral-status.js'
 import { and, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm'
+import type { SQLiteColumn } from 'drizzle-orm/sqlite-core'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { CURRENT_CLOUDFLARE_WORKER_VERSION } from './cloudflare-worker-version.js'
 import {
@@ -4497,12 +4498,10 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
       // paths once (the bound the totals query already lives with), classify them
       // in JS, then aggregate per bucket with the non-content set pushed into SQL.
       // Rows returned are now (distinct paths + buckets), never their product.
-      const distinctPaths = app.db
-        .select({ pathNormalized: crawlerEventsHourly.pathNormalized })
-        .from(crawlerEventsHourly)
-        .where(crawlerWhere)
-        .groupBy(crawlerEventsHourly.pathNormalized)
-        .all()
+      // `pathTotals` above already grouped this exact table by this exact
+      // column under this exact predicate. Re-running it doubled the grouped
+      // scan and re-classified every path a second time.
+      const distinctPaths = pathTotals.map((r) => ({ pathNormalized: r.pathNormalized }))
       // Push whichever side is SMALLER into the IN list, so a site that is mostly
       // assets costs the same as one that is mostly pages.
       const contentPaths: string[] = []
@@ -4513,6 +4512,13 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
       }
       const useContentList = contentPaths.length <= infraPaths.length
       const listed = useContentList ? contentPaths : infraPaths
+      // `inArray` binds one parameter per element and better-sqlite3 compiles
+      // with SQLITE_MAX_VARIABLE_NUMBER = 32766, so an unbounded list makes the
+      // whole route throw on exactly the high-cardinality sites this rewrite
+      // exists to serve. Past the cap, fall back to classifying the grouped
+      // rows in JS: more rows returned, but a correct answer instead of a 500.
+      const IN_LIST_CAP = 20_000
+      const listFitsInSql = listed.length <= IN_LIST_CAP
       const contentExpr = listed.length === 0
         // An empty list means one side is empty: either every path is content, or none is.
         ? (useContentList ? sql`0` : sql`${crawlerEventsHourly.hits}`)
@@ -4520,20 +4526,41 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
           ? sql`CASE WHEN ${inArray(crawlerEventsHourly.pathNormalized, listed)} THEN ${crawlerEventsHourly.hits} ELSE 0 END`
           : sql`CASE WHEN ${inArray(crawlerEventsHourly.pathNormalized, listed)} THEN 0 ELSE ${crawlerEventsHourly.hits} END`
 
-      const crawlerSeries = app.db
-        .select({
-          bucket: crawlerSeriesBucket,
-          hits: sql<number>`COALESCE(SUM(${crawlerEventsHourly.hits}), 0)`,
-          content: sql<number>`COALESCE(SUM(${contentExpr}), 0)`,
-        })
-        .from(crawlerEventsHourly)
-        .where(crawlerWhere)
-        .groupBy(crawlerSeriesBucket)
-        .all()
-      for (const row of crawlerSeries) {
-        const point = trafficSeriesPoint(seriesByBucket, String(row.bucket))
-        point.crawlerHits = Number(row.hits)
-        point.crawlerContentHits = Number(row.content)
+      if (listFitsInSql) {
+        const crawlerSeries = app.db
+          .select({
+            bucket: crawlerSeriesBucket,
+            hits: sql<number>`COALESCE(SUM(${crawlerEventsHourly.hits}), 0)`,
+            content: sql<number>`COALESCE(SUM(${contentExpr}), 0)`,
+          })
+          .from(crawlerEventsHourly)
+          .where(crawlerWhere)
+          .groupBy(crawlerSeriesBucket)
+          .all()
+        for (const row of crawlerSeries) {
+          const point = trafficSeriesPoint(seriesByBucket, String(row.bucket))
+          point.crawlerHits = Number(row.hits)
+          point.crawlerContentHits = Number(row.content)
+        }
+      } else {
+        const contentSet = new Set(useContentList ? contentPaths : infraPaths)
+        const grouped = app.db
+          .select({
+            bucket: crawlerSeriesBucket,
+            pathNormalized: crawlerEventsHourly.pathNormalized,
+            hits: sql<number>`COALESCE(SUM(${crawlerEventsHourly.hits}), 0)`,
+          })
+          .from(crawlerEventsHourly)
+          .where(crawlerWhere)
+          .groupBy(crawlerSeriesBucket, crawlerEventsHourly.pathNormalized)
+          .all()
+        for (const row of grouped) {
+          const point = trafficSeriesPoint(seriesByBucket, String(row.bucket))
+          const hits = Number(row.hits)
+          point.crawlerHits += hits
+          const inList = contentSet.has(row.pathNormalized)
+          if (useContentList ? inList : !inList) point.crawlerContentHits += hits
+        }
       }
 
       const rows = app.db
@@ -4729,18 +4756,36 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
       windowEnd: untilIso,
       series: (() => {
         const points = completeTrafficSeries(since, until, granularity, seriesByBucket)
-        // Earliest observation across EVERY lane and EVERY source for the
-        // project. Deliberately not window-bound: the question is when
-        // recording began, which does not change with the range being viewed.
+        // Earliest observation for the SELECTION being charted. Scoped to the
+        // request's sourceId, because a per-source view that inherits another
+        // source's coverage marks pre-connection buckets measured and then fits
+        // a confident slope through zeros that were never recorded.
+        // Still not window-bound: when recording began does not change with the
+        // range being viewed.
+        const coverageScope = (col: SQLiteColumn, srcCol: SQLiteColumn) =>
+          sourceIdParam ? and(eq(col, project.id), eq(srcCol, sourceIdParam))! : eq(col, project.id)
         const firsts = [
           app.db.select({ v: sql<string>`MIN(${crawlerEventsHourly.tsHour})` })
-            .from(crawlerEventsHourly).where(eq(crawlerEventsHourly.projectId, project.id)).get()?.v,
+            .from(crawlerEventsHourly)
+            .where(coverageScope(crawlerEventsHourly.projectId, crawlerEventsHourly.sourceId)).get()?.v,
           app.db.select({ v: sql<string>`MIN(${aiUserFetchEventsHourly.tsHour})` })
-            .from(aiUserFetchEventsHourly).where(eq(aiUserFetchEventsHourly.projectId, project.id)).get()?.v,
+            .from(aiUserFetchEventsHourly)
+            .where(coverageScope(aiUserFetchEventsHourly.projectId, aiUserFetchEventsHourly.sourceId)).get()?.v,
           app.db.select({ v: sql<string>`MIN(${aiReferralEventsHourly.tsHour})` })
-            .from(aiReferralEventsHourly).where(eq(aiReferralEventsHourly.projectId, project.id)).get()?.v,
+            .from(aiReferralEventsHourly)
+            .where(coverageScope(aiReferralEventsHourly.projectId, aiReferralEventsHourly.sourceId)).get()?.v,
         ].filter((v): v is string => typeof v === 'string' && v.length > 0)
         const coverageStart = firsts.length ? firsts.slice().sort()[0]! : null
+        // The newest bucket is partial whenever `until` lands inside it rather
+        // than on its boundary, which is the default case (`until` = now).
+        const bucketMs = granularity === TrafficSeriesGranularities.day ? 86_400_000 : 3_600_000
+        const lastBucket = points.length ? points[points.length - 1]!.bucket : null
+        const lastBucketStartMs = lastBucket === null
+          ? null
+          : Date.parse(granularity === TrafficSeriesGranularities.day ? `${lastBucket}T00:00:00.000Z` : `${lastBucket}:00:00.000Z`)
+        const trailingBucketIsPartial = lastBucketStartMs !== null
+          && Number.isFinite(lastBucketStartMs)
+          && until.getTime() < lastBucketStartMs + bucketMs
         // A bucket before coverage reads 0 because nothing was recording, not
         // because nothing happened. Compare on the bucket's own granularity so
         // the day coverage began is measured, not half-measured.
@@ -4759,15 +4804,32 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
           granularity,
           points,
           coverageStart,
-          // Unmeasured buckets are passed as null, NOT as their stored 0. They
-          // are the absence of a reading, and linearTrend skips nulls while
-          // keeping surviving points at their true index, so the line is fitted
-          // only over the period that was actually recorded.
-          trends: {
-            crawlerContentHits: linearTrend(points.map((pt) => (pt.measured ? pt.crawlerContentHits : null))),
-            aiUserFetchHits: linearTrend(points.map((pt) => (pt.measured ? pt.aiUserFetchHits : null))),
-            aiReferralLandedHits: linearTrend(points.map((pt) => (pt.measured ? pt.aiReferralLandedHits : null))),
-          },
+          // Two edges are excluded from the fit, both for the same reason: a
+          // bucket that is not a full reading must not be treated as one.
+          //
+          // Leading: unmeasured buckets predate recording, so they are the
+          // ABSENCE of a reading, not a reading of zero.
+          //
+          // Trailing: `until` defaults to now, so the newest bucket holds only
+          // the elapsed fraction of the current period. A site flat at 500/day
+          // read at 02:00 UTC gives [...500, 500, 40] and the fit returns a
+          // confident decline for a site that is not declining. Same class of
+          // error as the leading edge, and the one the leading guard alone
+          // would have left in place.
+          //
+          // linearTrend skips nulls while surviving points keep their true
+          // index, so dropping an edge does not compress the x-axis.
+          trends: (() => {
+            const usable = (pt: TrafficSeriesPoint, i: number) =>
+              pt.measured && !(i === points.length - 1 && trailingBucketIsPartial)
+            const series = (pick: (pt: TrafficSeriesPoint) => number) =>
+              linearTrend(points.map((pt, i) => (usable(pt, i) ? pick(pt) : null)))
+            return {
+              crawlerContentHits: series((pt) => pt.crawlerContentHits),
+              aiUserFetchHits: series((pt) => pt.aiUserFetchHits),
+              aiReferralLandedHits: series((pt) => pt.aiReferralLandedHits),
+            }
+          })(),
         }
       })(),
       totals: {

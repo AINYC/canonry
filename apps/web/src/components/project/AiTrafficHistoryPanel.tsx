@@ -30,9 +30,16 @@ import {
   formatChartDateTick,
 } from '../shared/ChartPrimitives.js'
 import { InfoTooltip } from '../shared/InfoTooltip.js'
+import { MetricsWindowPicker } from '../shared/MetricsWindowPicker.js'
 import { Card } from '../ui/card.js'
 import { useServerTrafficEvents } from '../../queries/server-traffic.js'
-import { getApiV1ProjectsByNameGaAiReferralDailyOptions } from '@ainyc/canonry-api-client/react-query'
+import { TRAFFIC_STALE_MS } from '../../queries/query-client.js'
+// The canonical compact formatter, from contracts. A local copy with a different
+// threshold made the same magnitude read "5,000" in one tile and "5.0K" in the
+// next. ActivitySection and TrafficPage still carry their own `formatCompact`
+// with identical behaviour; folding those into this import is a separate change.
+import { formatNumber } from '@ainyc/canonry-contracts'
+import { getApiV1ProjectsByNameGaAiReferralDailyOptions, getApiV1ProjectsByNameGaStatusOptions } from '@ainyc/canonry-api-client/react-query'
 import { useQuery } from '@tanstack/react-query'
 import { heyClient } from '../../api.js'
 import type { GA4AiReferralDailyDto } from '../../api.js'
@@ -42,11 +49,10 @@ const FETCH_COLOR = CHART_SERIES_COLORS[1]
 const VISIT_COLOR = CHART_SERIES_COLORS[2]
 const GA4_COLOR = CHART_SERIES_COLORS[3]
 
-type VisitSource = 'both' | 'server' | 'ga4'
-
-function compact(n: number): string {
-  return n >= 10_000 ? `${(n / 1000).toFixed(1)}k` : n.toLocaleString()
-}
+// The shared segmented control is not window-specific; it takes any token
+// list. Hand-rolling it again is how the control drifted between tabs before.
+const VISIT_SOURCES = ['both', 'server', 'ga4'] as const
+type VisitSource = (typeof VISIT_SOURCES)[number]
 
 /**
  * Every numeric field is optional on the wire even though the schema requires
@@ -64,12 +70,12 @@ interface Point {
   aiReferralLandedHits?: number
 }
 
-/** Coerce a wire number that an older API may not send at all. */
 const LEGEND_STYLE = { fontSize: 11, paddingTop: 6 } as const
 /** Trend lines are the same colour as their series; naming them again in the
  *  legend doubles its length and says nothing new. */
 const HIDDEN_FROM_LEGEND = new Set(['Pages crawled trend', 'Page fetches trend', 'Visits trend'])
 
+/** Coerce a wire number that an older API may not send at all. */
 const num = (v: number | undefined): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
 
 interface Trend { start: number; end: number; startIndex: number; endIndex: number }
@@ -118,14 +124,28 @@ export function AiTrafficHistoryPanel({
   const [showFetches, setShowFetches] = useState(true)
   const [showTrend, setShowTrend] = useState(true)
   const [visitSource, setVisitSource] = useState<VisitSource>('both')
-  const events = useServerTrafficEvents(projectName, { sinceMinutes, granularity: 'day' })
+  // limit: 1 because this panel reads `series` and never `events`. The default
+  // 500 built and shipped ~1,500 event objects per lane that are discarded.
+  const events = useServerTrafficEvents(projectName, { sinceMinutes, granularity: 'day', limit: 1 })
+  // The route requires a bound GA4 property and throws without one, so firing
+  // unconditionally guaranteed a failed request on every mount for every
+  // project with no GA4. `staleTime` matches the sibling panel's, which fetches
+  // the same operation under the same key: without it this remounted straight
+  // through the shared cache entry.
+  const gaStatus = useQuery({
+    ...getApiV1ProjectsByNameGaStatusOptions({ client: heyClient, path: { name: projectName } }),
+    enabled: Boolean(projectName),
+    staleTime: TRAFFIC_STALE_MS,
+  })
+  const gaConnected = (gaStatus.data as { connected?: boolean } | undefined)?.connected === true
   const gaDaily = useQuery({
     ...getApiV1ProjectsByNameGaAiReferralDailyOptions({
       client: heyClient,
       path: { name: projectName },
       query: { window: sinceMinutes >= 90 * 24 * 60 ? '90d' : sinceMinutes >= 30 * 24 * 60 ? '30d' : '7d' },
     }),
-    enabled: Boolean(projectName),
+    enabled: Boolean(projectName) && gaConnected,
+    staleTime: TRAFFIC_STALE_MS,
   })
 
   const points: Point[] = useMemo(() => {
@@ -152,6 +172,8 @@ export function AiTrafficHistoryPanel({
     return { from: points[0]!.bucket, to: points[lastUnmeasured]!.bucket }
   }, [points])
 
+  const coverageStart = (events.data as { series?: { coverageStart?: string | null } } | undefined)?.series?.coverageStart ?? null
+
   const trends = (events.data as { series?: { trends?: Record<string, Trend | null> } } | undefined)?.series?.trends
 
   const chartRows = useMemo(() => {
@@ -160,6 +182,12 @@ export function AiTrafficHistoryPanel({
     const visitTrend = trendSeries(trends?.aiReferralLandedHits, points.length)
     return points.map((pt, i) => ({
       ...pt,
+      // Null, not the stored 0. An unmeasured day is the absence of a reading,
+      // and spreading `...pt` unchanged drew a solid area flat on zero across
+      // the whole pre-coverage band — the exact thing `measured` exists to stop.
+      crawlerContentHits: pt.measured !== false ? num(pt.crawlerContentHits) : null,
+      aiUserFetchHits: pt.measured !== false ? num(pt.aiUserFetchHits) : null,
+      aiReferralLandedHits: pt.measured !== false ? num(pt.aiReferralLandedHits) : null,
       ga4Visits: gaByDate.get(pt.bucket) ?? null,
       crawlTrend: crawlTrend[i],
       fetchTrend: fetchTrend[i],
@@ -167,7 +195,16 @@ export function AiTrafficHistoryPanel({
     }))
   }, [points, gaByDate, trends])
 
-  const totals = useMemo(() => points.reduce(
+  // Read from the response rather than re-summed here. AGENTS.md UI/CLI parity:
+  // a component must not aggregate. The two also disagree — `totals` covers the
+  // exact [since, until] instants while a sum of buckets is UTC-day-floored.
+  const apiTotals = (events.data as { totals?: Record<string, number> } | undefined)?.totals
+  const totalsFromApi = apiTotals && {
+    crawlers: num(apiTotals.crawlerContentHits),
+    fetches: num(apiTotals.aiUserFetchHits),
+    visits: num(apiTotals.aiReferralLandedHits),
+  }
+  const summed = useMemo(() => points.reduce(
     (acc, p) => ({
       crawlers: acc.crawlers + num(p.crawlerContentHits),
       fetches: acc.fetches + num(p.aiUserFetchHits),
@@ -175,6 +212,8 @@ export function AiTrafficHistoryPanel({
     }),
     { crawlers: 0, fetches: 0, visits: 0 },
   ), [points])
+  // An API predating `totals.crawlerContentHits` falls back to the sum.
+  const totals = totalsFromApi ?? summed
 
   // A failed request and a quiet window are different facts and must not share a
   // message. The API densifies the window, so a successful empty range returns
@@ -197,15 +236,20 @@ export function AiTrafficHistoryPanel({
     )
   }
   if (!measuredAnything) {
+    // The densifier always emits at least one bucket, so an empty array never
+    // reaches here against a live API. "Nothing was ever recorded" is
+    // coverageStart === null, which is what a project with no traffic source
+    // actually returns.
+    const neverRecorded = coverageStart === null
     return (
       <Card className="surface-card p-5">
         <p className="text-sm text-secondary">
-          {points.length === 0
+          {neverRecorded
             ? 'No server-side traffic source connected yet.'
             : 'No AI activity recorded in this period.'}
         </p>
         <p className="text-xs text-muted mt-1">
-          {points.length === 0
+          {neverRecorded
             ? 'Connect a traffic source to see how AI engines read this site over time.'
             : 'The window was measured and nothing was recorded. Try a longer range.'}
         </p>
@@ -218,29 +262,31 @@ export function AiTrafficHistoryPanel({
       <div className="grid gap-3 sm:grid-cols-3 mb-5">
         <Tile
           label="AI crawlers"
-          value={compact(totals.crawlers)}
+          value={formatNumber(totals.crawlers)}
           caption="pages crawled"
           tooltip="Requests from AI crawlers for a real content page. Robots.txt and sitemap re-fetches are excluded, because they are not a page an engine read."
         />
         <Tile
           label="AI page fetches"
-          value={compact(totals.fetches)}
+          value={formatNumber(totals.fetches)}
           caption="reading a page to answer"
           tooltip="An AI engine fetching a page live while answering someone, rather than crawling it for an index."
         />
         <Tile
           label="AI visitors"
-          value={compact(totals.visits)}
+          value={formatNumber(totals.visits)}
           caption="arrived from an AI answer"
           tooltip="Visits your server answered that came from an AI engine. Requests answered with a redirect are excluded: a redirect is a hop, not an arrival."
         />
       </div>
 
-      {/* Last 24h: answers "what happened today" without reading a 90-day chart.
-          The newest bucket, so it is the same lane as the charts below. */}
+      {/* The newest bucket, which is the current UTC day SO FAR, not a rolling
+          24 hours. It was labelled "Last 24h" and read near-zero for anyone west
+          of UTC during their afternoon, contradicting the chart directly below.
+          Labelled for what it actually is, and marked when still filling. */}
       {points.length > 0 && (
         <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1 pb-3 mb-4 border-b border-default text-xs text-muted">
-          <span className="text-secondary font-semibold">Last 24h</span>
+          <span className="text-secondary font-semibold">Latest day (UTC)</span>
           <span><span className="text-heading font-semibold tabular-nums mr-1">
             {num(points[points.length - 1]!.crawlerContentHits).toLocaleString()}</span>pages crawled</span>
           <span><span className="text-heading font-semibold tabular-nums mr-1">
@@ -249,6 +295,7 @@ export function AiTrafficHistoryPanel({
             {num(points[points.length - 1]!.aiReferralLandedHits).toLocaleString()}</span>visits, server</span>
           <span><span className="text-heading font-semibold tabular-nums mr-1">
             {gaByDate.get(points[points.length - 1]!.bucket)?.toLocaleString() ?? '—'}</span>visits, GA4</span>
+          <span className="text-faint">still filling</span>
         </div>
       )}
 
@@ -319,19 +366,13 @@ export function AiTrafficHistoryPanel({
           <h3 className="text-sm font-semibold text-heading">People arriving from AI</h3>
           <InfoTooltip text="Two independent counts of the same thing. Server reads your own logs and misses nothing a browser blocks, but cannot see a page served from cache. GA4 needs the browser to run a tag. They rarely match, and neither is the correction of the other." />
         </div>
-        <div className="segmented" role="group" aria-label="Visit measurement source">
-          {(['both', 'server', 'ga4'] as VisitSource[]).map((src) => (
-            <button
-              key={src}
-              type="button"
-              aria-pressed={visitSource === src}
-              className={`segmented-option ${visitSource === src ? 'segmented-option-active' : ''}`}
-              onClick={() => setVisitSource(src)}
-            >
-              {src === 'ga4' ? 'GA4' : src === 'both' ? 'Both' : 'Server'}
-            </button>
-          ))}
-        </div>
+        <MetricsWindowPicker
+          windows={VISIT_SOURCES}
+          value={visitSource}
+          onChange={setVisitSource}
+          label="Visit measurement source"
+          formatOption={(src) => (src === 'ga4' ? 'GA4' : src === 'both' ? 'Both' : 'Server')}
+        />
       </div>
       <ResponsiveContainer width="100%" height={176}>
         <ComposedChart data={chartRows} margin={{ top: 4, right: 8, left: -18, bottom: 0 }}>

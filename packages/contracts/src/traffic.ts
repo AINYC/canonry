@@ -686,14 +686,6 @@ export const trafficEventsResponseSchema = z.object({
     granularity: trafficSeriesGranularitySchema,
     points: z.array(trafficSeriesPointSchema),
     /**
-     * Least-squares fit per charted metric, over the densified points.
-     *
-     * Fitted HERE rather than in a chart component: a regression computed in the
-     * UI is invisible to the CLI and to any other consumer, which is the
-     * UI/CLI parity rule. `null` for a metric with fewer than two observations,
-     * so a caller renders "no trend" instead of a fabricated flat line.
-     */
-    /**
      * Earliest event ever observed for this project, across ALL of its traffic
      * sources, or null when nothing has been recorded. Buckets before it were
      * not measured. Earliest-across-sources is deliberate: the band answers
@@ -702,6 +694,14 @@ export const trafficEventsResponseSchema = z.object({
      * early gap, which is the better error than marking real data unmeasured.
      */
     coverageStart: z.string().nullable(),
+    /**
+     * Least-squares fit per charted metric, over the densified points.
+     *
+     * Fitted HERE rather than in a chart component: a regression computed in the
+     * UI is invisible to the CLI and to any other consumer, which is the
+     * UI/CLI parity rule. `null` for a metric with fewer than two observations,
+     * so a caller renders "no trend" instead of a fabricated flat line.
+     */
     trends: z.object({
       crawlerContentHits: linearTrendSchema.nullable(),
       aiUserFetchHits: linearTrendSchema.nullable(),

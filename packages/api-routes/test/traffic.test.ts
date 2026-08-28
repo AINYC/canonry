@@ -5251,13 +5251,69 @@ describe('crawler-hit content/infra segmentation', () => {
         if (!pt.measured) expect(pt.crawlerHits).toBe(0)
       }
 
-      // The fit must not run across the unmeasured lead-in. This fixture is a
-      // single measured day, so the honest answer is NO trend. Had the flat
-      // zero prefix been fed to the fit it would have returned a confident
-      // downward slope from nothing, which is exactly the failure being pinned.
+      // The fit must not run across the unmeasured lead-in. Asserting an exact
+      // measured-day count was wall-clock dependent: the harness writes events
+      // an hour back, so a run between 00:00 and ~01:00 UTC straddles midnight
+      // and produces TWO measured days instead of one, failing for that hour
+      // only. Assert the invariant instead of the incidental count.
       const measuredDays = points.filter((pt) => pt.measured).length
-      expect(measuredDays).toBeLessThan(2)
-      expect(body.series.trends.crawlerContentHits).toBeNull()
+      const trend = body.series.trends.crawlerContentHits
+      if (trend !== null) {
+        // Whatever the fit used, it can never include an unmeasured bucket, and
+        // the trailing partial bucket is excluded too.
+        expect(trend.n).toBeLessThanOrEqual(measuredDays)
+        expect(trend.startIndex).toBeGreaterThanOrEqual(points.findIndex((pt) => pt.measured))
+      }
+    } finally { await h.close() }
+  })
+
+  /**
+   * Review finding: `until` defaults to now, so the newest daily bucket holds
+   * only the elapsed fraction of the current UTC day. Fitting through it makes a
+   * flat site read as declining, every time, for everyone. Same class of error
+   * as the leading unmeasured edge, which was already guarded.
+   *
+   * The fixture is deliberately FLAT on the complete days with a small partial
+   * today. A fit that includes today returns a negative slope; one that excludes
+   * it returns ~0.
+   */
+  it('excludes the trailing partial bucket from the trend fit', async () => {
+    const { h, sourceId } = await mixedPathHarness()
+    try {
+      const source = h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()!
+      const writtenAt = new Date().toISOString()
+      const row = (tsHour: string, pathNormalized: string, hits: number) => ({
+        projectId: source.projectId, sourceId, tsHour,
+        botId: 'openai-gptbot', operator: 'OpenAI', verificationStatus: 'claimed_unverified' as const,
+        pathNormalized, status: 200, hits, sampledUserAgent: 'GPTBot/1.0',
+        createdAt: writtenAt, updatedAt: writtenAt,
+      })
+
+      // Five complete days flat at 100, then a small slice for today.
+      const rows = []
+      for (let back = 5; back >= 1; back--) {
+        const d = new Date(); d.setUTCDate(d.getUTCDate() - back); d.setUTCHours(12, 0, 0, 0)
+        rows.push(row(d.toISOString(), `/blog/day-${back}`, 100))
+      }
+      const today = new Date(); today.setUTCHours(0, 30, 0, 0)
+      rows.push(row(today.toISOString(), '/blog/today', 4))
+      h.db.insert(crawlerEventsHourly).values(rows).run()
+
+      const since = new Date(); since.setUTCDate(since.getUTCDate() - 7)
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/projects/test-project/traffic/events?since=${encodeURIComponent(since.toISOString())}&granularity=day`,
+      })
+      expect(res.statusCode).toBe(200)
+      const body = JSON.parse(res.payload)
+      const trend = body.series.trends.crawlerContentHits
+      expect(trend).not.toBeNull()
+
+      // The partial day must not be in the fit. Including it drags the slope
+      // sharply negative on a series that is flat.
+      const lastIndex = body.series.points.length - 1
+      expect(trend.endIndex).toBeLessThan(lastIndex)
+      expect(trend.slope).toBeGreaterThan(-20)
     } finally { await h.close() }
   })
 

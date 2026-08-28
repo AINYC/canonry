@@ -29,6 +29,7 @@ import {
   useClientTable,
 } from '../shared/DataTableControls.js'
 import { AiTrafficHistoryPanel } from './AiTrafficHistoryPanel.js'
+import { MetricsWindowPicker } from '../shared/MetricsWindowPicker.js'
 import { InfoTooltip } from '../shared/InfoTooltip.js'
 import { ToneBadge } from '../shared/ToneBadge.js'
 import type { MetricsWindow } from '@ainyc/canonry-contracts'
@@ -248,19 +249,12 @@ export function ActivitySection({ projectName }: { projectName: string }) {
         default range with no way to change it.
       */}
       <div className="flex items-center justify-end">
-        <div className="segmented" role="group" aria-label="Traffic time period">
-          {TRAFFIC_WINDOWS.map(w => (
-            <button
-              key={w}
-              type="button"
-              aria-pressed={trafficWindow === w}
-              className={`segmented-option ${trafficWindow === w ? 'segmented-option-active' : ''}`}
-              onClick={() => setTrafficWindow(w)}
-            >
-              {w}
-            </button>
-          ))}
-        </div>
+        <MetricsWindowPicker
+          windows={TRAFFIC_WINDOWS}
+          value={trafficWindow}
+          onChange={setTrafficWindow}
+          label="Traffic time period"
+        />
       </div>
       <AiTrafficHistoryPanel
         projectName={projectName}

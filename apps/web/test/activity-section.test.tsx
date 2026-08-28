@@ -653,12 +653,15 @@ test('AI traffic history reports a measured-empty window as measured, not unconn
         events: [],
         eventRows: { total: 0, returned: 0, truncated: false },
         totals: { crawlerHits: 0, crawlerContentHits: 0, aiUserFetchHits: 0, aiReferralHits: 0, aiReferralLandedHits: 0 },
-        // Densified: the window WAS measured, it just held nothing.
+        // Densified: the window WAS measured, it just held nothing. coverageStart
+        // is what makes that claim; without it the honest read is "never recorded".
         series: {
           granularity: 'day',
+          coverageStart: '2026-07-01T00:00:00.000Z',
+          trends: { crawlerContentHits: null, aiUserFetchHits: null, aiReferralLandedHits: null },
           points: [
-            { bucket: '2026-08-01', crawlerHits: 0, crawlerContentHits: 0, aiUserFetchHits: 0, aiReferralHits: 0, aiReferralLandedHits: 0 },
-            { bucket: '2026-08-02', crawlerHits: 0, crawlerContentHits: 0, aiUserFetchHits: 0, aiReferralHits: 0, aiReferralLandedHits: 0 },
+            { bucket: '2026-08-01', crawlerHits: 0, crawlerContentHits: 0, aiUserFetchHits: 0, aiReferralHits: 0, aiReferralLandedHits: 0, measured: true },
+            { bucket: '2026-08-02', crawlerHits: 0, crawlerContentHits: 0, aiUserFetchHits: 0, aiReferralHits: 0, aiReferralLandedHits: 0, measured: true },
           ],
         },
       })
@@ -746,7 +749,7 @@ test('AI traffic history survives an API older than the client', async () => {
 
   // It must RENDER, not throw. The crawler tile degrades to 0 because the old
   // API cannot answer it; the fields that do exist still read correctly.
-  expect(await screen.findByText('Last 24h')).toBeTruthy()
+  expect(await screen.findByText('Latest day (UTC)')).toBeTruthy()
   const tileFor = (label: string) =>
     screen.getByText(label).closest('div.rounded-lg') as HTMLElement
   expect(within(tileFor('AI page fetches')).getByText('7')).toBeTruthy()
