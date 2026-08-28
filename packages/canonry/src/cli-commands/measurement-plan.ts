@@ -104,7 +104,7 @@ export const MEASUREMENT_PLAN_CLI_COMMANDS: readonly CliCommandSpec[] = [
     await showMeasurementPlan(requireProject(input, 'measurement-plan.show', 'canonry measurement-plan show <project> [--revision N]'), revision)
   } },
   { path: ['measurement-plan', 'versions'], usage: 'canonry measurement-plan versions <project> [--format json]', run: input => listMeasurementPlanVersions(requireProject(input, 'measurement-plan.versions', 'canonry measurement-plan versions <project>')) },
-  { path: ['measurement-plan', 'publish'], usage: 'canonry measurement-plan publish <project> <yaml|json|-> [--format json]', run: input => {
+  { path: ['measurement-plan', 'publish'], usage: 'canonry measurement-plan publish <project> <yaml|json|-> [--format json] (legacy schema v1 only; refuses over an active v2 plan; for Advanced Measurement use: canonry measurement-plan advanced <project> draft-action)', run: input => {
     const project = requireProject(input, 'measurement-plan.publish', 'canonry measurement-plan publish <project> <yaml|json|->')
     const source = input.positionals[1]
     if (!source) throw usageError('plan file path or - is required')

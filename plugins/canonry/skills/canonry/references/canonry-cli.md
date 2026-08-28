@@ -332,7 +332,7 @@ cnry measurement-plan discover <project> --sitemap-url https://example.com/sitem
 cnry measurement-plan show <project>                    # active immutable revision
 cnry measurement-plan show <project> --revision 2       # one historical revision
 cnry measurement-plan versions <project>
-cnry measurement-plan publish <project> plan.yaml
+cnry measurement-plan publish <project> plan.yaml       # legacy schema v1 only; refuses over an active v2 plan (use: measurement-plan advanced <project> draft-action)
 cnry measurement-plan report <project> --revision 2     # stored evidence only; never starts provider work
 cnry measurement-plan retire <project> <stable-key>
 ```
