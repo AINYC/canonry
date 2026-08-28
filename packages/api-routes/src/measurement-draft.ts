@@ -63,6 +63,7 @@ import {
   compileMeasurementDraft,
   compileMeasurementDraftAssignmentExecution,
   diffCompiledPlans,
+  plansShareExecutionSurface,
   proposeQueryClassForTarget,
   type MeasurementDraftCompileContext,
 } from './measurement-draft-compile.js'
@@ -967,6 +968,19 @@ export async function measurementDraftRoutes(app: FastifyInstance, opts: Measure
         }).run()
       }
 
+      // Publish-time continuity: when this publish changes NOTHING about
+      // execution — the superseded active revision froze the identical
+      // execution surface — record the link so reads keep serving the previous
+      // revision's runs instead of blanking until the next full sweep. An
+      // execution-changing publish leaves the link null and keeps today's
+      // refusal semantics exactly. A v1 active revision has no comparable
+      // execution model, so it never links.
+      const comparableToVersionId = active !== null
+        && active.schemaVersion === 2
+        && plansShareExecutionSurface(parseV2Plan(active), compiled.plan)
+        ? active.id
+        : null
+
       tx.insert(measurementPlanVersions).values({
         id: versionId,
         projectId: gate.project.id,
@@ -975,6 +989,7 @@ export async function measurementDraftRoutes(app: FastifyInstance, opts: Measure
         checksum: sha256Hex(canonicalJson),
         schemaVersion: 2,
         compiledChecksum: compiled.plan.compiledChecksum,
+        comparableToVersionId,
         publishedBy: serializeActor(gate.actor),
         sourceDraftId: row.id,
         createdAt: now.toISOString(),

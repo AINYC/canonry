@@ -57,7 +57,7 @@ import {
   materializeMeasurementQuestionRun,
   selectMeasurementQuestionRun,
 } from './measurement-question-reads.js'
-import { measurementRunExpectedSlots } from './measurement-report-adapter.js'
+import { comparableMeasurementVersionIds, measurementRunExpectedSlots } from './measurement-report-adapter.js'
 import { measurementRunCompleteness } from './measurement-run-completeness.js'
 
 /** Compact demo lists intentionally stop at ten unless the caller asks for more. */
@@ -671,7 +671,11 @@ function previousComparableRun(
     measurementExecutionIdentity: runs.measurementExecutionIdentity,
   }).from(runs).where(and(
     eq(runs.projectId, current.projectId),
-    eq(runs.measurementPlanVersionId, active.version.id),
+    // The comparable chain keeps period-over-period alive across a label-only
+    // republish: a run pinned to a comparable prior revision measured exactly
+    // the questions the active revision asks. The execution-identity and scope
+    // checks below still gate what actually compares.
+    inArray(runs.measurementPlanVersionId, comparableMeasurementVersionIds(db, current.projectId, active.version.id)),
     eq(runs.kind, RunKinds['answer-visibility']),
     inArray(runs.status, [RunStatuses.completed, RunStatuses.partial]),
     or(

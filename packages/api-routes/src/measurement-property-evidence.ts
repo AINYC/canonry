@@ -54,6 +54,7 @@ import {
   buildMeasurementPlanV2ReportInput,
   latestMeasurementRun,
   measurementRunExpectedSlots,
+  runVersionServesActiveVersion,
 } from './measurement-report-adapter.js'
 
 interface EvidenceCursor {
@@ -185,7 +186,10 @@ function selectDisplayedRun(
   }
   const run = db.select().from(runs).where(and(eq(runs.projectId, projectId), eq(runs.id, runId))).get()
   if (!run) throw notFound('Run', runId)
-  if (run.measurementPlanVersionId === active.version.id) return run
+  // A run pinned to a comparable prior revision (a label-only republish chain)
+  // measured exactly the questions the active revision asks, so naming it is
+  // continuity, not cross-revision mixing.
+  if (runVersionServesActiveVersion(db, projectId, active.version.id, run.measurementPlanVersionId)) return run
   const pinned = run.measurementPlanVersionId === null
     ? null
     : db.select({ revision: measurementPlanVersions.revision }).from(measurementPlanVersions)
