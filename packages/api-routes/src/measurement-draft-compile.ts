@@ -592,8 +592,35 @@ export function diffCompiledPlans(
  * new revision's manifest checks, which is what publish-time continuity
  * (`measurement_plan_versions.comparable_to_version_id`) promises the reads.
  */
-export function plansShareExecutionSurface(active: MeasurementPlanV2, candidate: MeasurementPlanV2): boolean {
-  const surface = (plan: MeasurementPlanV2): string =>
-    JSON.stringify(canonicalJsonValue(canonicalMeasurementPlanV2(plan).executionNodes))
+export function plansAreLabelOnlyVariants(active: MeasurementPlanV2, candidate: MeasurementPlanV2): boolean {
+  /**
+   * Continuity is promised ONLY for a label-only republish, so the comparison
+   * is the FULL canonical document with display labels neutralized - not the
+   * execution nodes alone. Execution-node equality looked sufficient and was
+   * not: queryClass lives on assignments, aliases and urlMatchers on targets,
+   * brand names on identities, competitors on groups - all invisible to the
+   * node comparison, and every one of them changes what stored evidence MEANS
+   * when the reads hand the active plan to the report adapter. Admitting any
+   * of them as "cosmetic" reinterprets old answers under new semantics with
+   * zero new measurement, which is exactly what the frozen-revision doctrine
+   * exists to prevent.
+   */
+  const surface = (plan: MeasurementPlanV2): string => {
+    const doc = canonicalMeasurementPlanV2(plan)
+    const stripped = {
+      ...doc,
+      // compiledChecksum is DERIVED over the full document, labels included,
+      // so keeping it would smuggle the stripped labels back into the
+      // comparison. Everything else in the doc is semantic and stays.
+      compiledChecksum: '',
+      targets: doc.targets.map((target) => ({ ...target, label: '' })),
+      groups: doc.groups.map((group) => ({
+        ...group,
+        label: '',
+        competitors: group.competitors.map((competitor) => ({ ...competitor, label: '' })),
+      })),
+    }
+    return JSON.stringify(canonicalJsonValue(stripped))
+  }
   return surface(active) === surface(candidate)
 }
