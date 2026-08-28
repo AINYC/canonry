@@ -20,10 +20,8 @@ function readText(relativePath: string): string {
 }
 
 function semverCore(version: string): [number, number, number] {
-  // The dependency moved from an exact pin to a caret range when the engine
-  // reached 7.1.0 (native budget derivation); accept `^x.y.z` alongside `x.y.z`.
-  const match = /^\^?(\d+)\.(\d+)\.(\d+)$/.exec(version)
-  if (!match) throw new Error(`Expected an exact or caret semver, received ${version}`)
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version)
+  if (!match) throw new Error(`Expected an exact semver pin, received ${version}`)
   return [Number(match[1]), Number(match[2]), Number(match[3])]
 }
 

@@ -37,10 +37,12 @@ vi.mock('../src/site-audit-root.js', () => ({
 }))
 import { runSiteCrawl } from '@canonry/aeo-audit'
 import {
+  clampSiteAuditEdgeLimit,
   clampSiteAuditLimit,
   computeFactorAverages,
   executeSiteAudit,
   SITE_AUDIT_DEFAULT_PAGE_LIMIT,
+  SITE_AUDIT_MAX_EDGE_LIMIT,
   SITE_AUDIT_MAX_PAGE_LIMIT,
 } from '../src/execute-site-audit.js'
 import { resolveSiteAuditRootUrl } from '../src/site-audit-root.js'
@@ -189,6 +191,17 @@ describe('clampSiteAuditLimit', () => {
     expect(clampSiteAuditLimit(undefined)).toBe(SITE_AUDIT_DEFAULT_PAGE_LIMIT)
     expect(clampSiteAuditLimit(0)).toBe(1)
     expect(clampSiteAuditLimit(99999)).toBe(SITE_AUDIT_MAX_PAGE_LIMIT)
+  })
+
+  it('leaves an unset edge budget unset so the engine derives it from the page count', () => {
+    // Passing the flat default here would cap BELOW the engine's derivation
+    // (pages x 50, floored at 100,000) for any crawl over 2,000 pages,
+    // quietly recreating the ceiling the 7.1.0 engine removed.
+    expect(clampSiteAuditEdgeLimit(undefined)).toBeUndefined()
+    expect(clampSiteAuditEdgeLimit(Number.NaN)).toBeUndefined()
+    expect(clampSiteAuditEdgeLimit(0)).toBe(1)
+    expect(clampSiteAuditEdgeLimit(400_000)).toBe(400_000)
+    expect(clampSiteAuditEdgeLimit(99_999_999)).toBe(SITE_AUDIT_MAX_EDGE_LIMIT)
   })
 })
 

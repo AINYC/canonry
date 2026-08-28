@@ -22,7 +22,6 @@ import type {
   SiteCrawlReport,
 } from '@canonry/aeo-audit'
 import {
-  SITE_AUDIT_DEFAULT_EDGE_LIMIT,
   SITE_AUDIT_DEFAULT_PAGE_LIMIT,
   SITE_AUDIT_MAX_EDGE_LIMIT,
   SITE_AUDIT_MAX_PAGE_LIMIT,
@@ -93,8 +92,15 @@ export function clampSiteAuditLimit(limit: number | undefined): number {
   return Math.max(1, Math.min(SITE_AUDIT_MAX_PAGE_LIMIT, Math.floor(limit)))
 }
 
-export function clampSiteAuditEdgeLimit(limit: number | undefined): number {
-  if (limit == null || !Number.isFinite(limit)) return SITE_AUDIT_DEFAULT_EDGE_LIMIT
+export function clampSiteAuditEdgeLimit(limit: number | undefined): number | undefined {
+  /**
+   * An unset edge limit stays unset. The engine derives maxEdges from the
+   * resolved page count (7.1.0: pages x 50, floored at 100,000), and a flat
+   * default passed from here would CAP BELOW that derivation for any crawl
+   * over 2,000 pages, quietly recreating the ceiling the derivation removed.
+   * An operator's explicit value is clamped and honoured exactly.
+   */
+  if (limit == null || !Number.isFinite(limit)) return undefined
   return Math.max(1, Math.min(SITE_AUDIT_MAX_EDGE_LIMIT, Math.floor(limit)))
 }
 
