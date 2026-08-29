@@ -1025,6 +1025,8 @@ spec:
 
 Locations are project-scoped via `spec.locations` and `spec.defaultLocation`. Runs choose the default location, an explicit location, all configured locations, or no location. Do not model locations as query-owned state.
 
+`spec.queries` (and its legacy `keywords` alias) is declarative WHEN PRESENT: the tracked basket is replaced to match it, and an explicit empty list clears it. A spec that OMITS the field leaves the tracked basket untouched, so a config converge that only manages providers/locations/metadata cannot wipe live queries (that wipe hit a control plane's boot-time re-apply mid-sweep, 2026-08-29).
+
 Multiple projects can be defined in one file using `---` document separators. Apply with `canonry apply <file...>` (accepts multiple files) or `POST /api/v1/apply`. Applied project YAML is declarative input; runtime project/run data lives in the DB, while local authentication credentials live in `~/.canonry/config.yaml`.
 
 ## API Surface

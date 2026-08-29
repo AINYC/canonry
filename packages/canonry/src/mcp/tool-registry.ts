@@ -2107,7 +2107,7 @@ export const canonryMcpTools = [
   defineTool({
     name: 'canonry_apply_config',
     title: 'Apply project config',
-    description: 'Apply one Canonry config-as-code project document. Replaces the project to match the config — fields omitted from the spec are reset to defaults. For multi-document YAML, call this tool once per project document.',
+    description: 'Apply one Canonry config-as-code project document. Replaces the project to match the config — fields omitted from the spec are reset to defaults, with one exception: a spec with neither queries nor keywords leaves the tracked-query basket unchanged. To clear the basket, pass an explicit empty queries list. For multi-document YAML, call this tool once per project document.',
     access: 'write',
     tier: 'core',
     inputSchema: applyConfigInputSchema,
