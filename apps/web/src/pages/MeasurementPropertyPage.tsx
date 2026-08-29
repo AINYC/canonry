@@ -175,8 +175,8 @@ function AnswerSources({ row }: { row: AnswerRow }) {
  *
  * The row above it can only ever say whether this Property was named. It cannot
  * say what the engine actually recommended, and that is the thing an operator
- * opens the row to find out: a "not mentioned" row on a Buckhead query turns
- * out to be an answer recommending two OTHER buildings from the same brand.
+ * opens the row to find out: a "not mentioned" row on a local-market query can
+ * turn out to be an answer recommending two other properties from the brand.
  * None of that is visible in a signal badge or a source count.
  *
  * Fetched per row rather than with the list because an answer runs to several
