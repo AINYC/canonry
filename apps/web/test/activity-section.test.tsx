@@ -7,11 +7,30 @@ afterEach(cleanup)
 
 vi.mock('recharts', () => {
   const passthrough = ({ children }: { children?: React.ReactNode }) => <div>{children}</div>
+  // The chart's rows, captured so `Line` can run the real dot renderer against
+  // them. React renders a parent before its children, so this is populated by
+  // the time any `Line` below is called.
+  let chartRows: Record<string, unknown>[] = []
+  const ComposedChart = ({ children, data }: { children?: React.ReactNode; data?: Record<string, unknown>[] }) => {
+    chartRows = data ?? []
+    return <div>{children}</div>
+  }
   return {
     ResponsiveContainer: passthrough,
-    ComposedChart: passthrough,
+    ComposedChart,
     Area: () => null,
-    Line: () => null,
+    // A `dot` RENDERER is invoked once per row and its output mounted, so a test
+    // can prove an isolated reading is actually drawn. Recharts does this into
+    // SVG that jsdom cannot meaningfully assert on; object/false dots stay inert.
+    Line: ({ dataKey, dot }: { dataKey?: string; dot?: unknown }) =>
+      typeof dot === 'function'
+        ? (
+          <div data-testid={`dots-${dataKey}`}>
+            {chartRows.map((_, i) =>
+              (dot as (p: Record<string, unknown>) => React.ReactNode)({ cx: i, cy: 1, index: i, key: `dot-${i}` }))}
+          </div>
+        )
+        : null,
     CartesianGrid: () => null,
     Bar: () => null,
     BarChart: passthrough,
@@ -796,4 +815,139 @@ test('AI traffic charts carry a legend', async () => {
   await screen.findByText('AI crawlers')
   // One per chart: machines, and people arriving.
   expect(screen.getAllByTestId('chart-legend').length).toBe(2)
+})
+
+/**
+ * Review finding: an isolated GA4 reading rendered as NOTHING. The line runs
+ * with `connectNulls={false}`, so a lone point has no neighbour to draw a
+ * segment to, and dots were off entirely. GA4 days with no referrals are ABSENT
+ * rather than zero, so `[null, 7, null]` is the ordinary shape of a quiet week,
+ * and that day's visits simply vanished from a chart measuring visits.
+ *
+ * One fixture proves BOTH halves, because "draw the invisible point" could
+ * otherwise be satisfied by turning every dot on, which is a different chart:
+ * a RUN of three readings must contribute no dots (it draws as a line), and the
+ * lone reading after the gap must contribute exactly one.
+ */
+test('AI traffic history draws isolated GA4 readings without speckling runs', async () => {
+  const days = ['2026-08-01', '2026-08-02', '2026-08-03', '2026-08-04', '2026-08-05', '2026-08-06']
+  const restoreFetch = mockFetch((url) => {
+    const path = url.split('?')[0]!
+    if (path.endsWith('/ga/status')) return jsonResponse({ connected: true, propertyId: 'p', clientEmail: null, lastSyncedAt: null })
+    if (path.endsWith('/ga/ai-referral-daily')) {
+      // A run of three, a gap, then ONE alone, then a gap.
+      return jsonResponse({ days: [
+        { date: '2026-08-01', sessions: 4 },
+        { date: '2026-08-02', sessions: 4 },
+        { date: '2026-08-03', sessions: 4 },
+        { date: '2026-08-05', sessions: 9 },
+      ] })
+    }
+    if (path.endsWith('/projects/test-project/traffic/events')) {
+      return jsonResponse({
+        events: [], eventRows: { total: 0, returned: 0, truncated: false },
+        totals: { crawlerHits: 30, crawlerContentHits: 30, aiUserFetchHits: 6, aiReferralHits: 6, aiReferralLandedHits: 6 },
+        series: {
+          granularity: 'day', coverageStart: '2026-07-01T00:00:00.000Z',
+          trends: { crawlerContentHits: null, aiUserFetchHits: null, aiReferralLandedHits: null },
+          points: days.map((bucket) => ({
+            bucket, crawlerHits: 5, crawlerContentHits: 5, aiUserFetchHits: 1,
+            aiReferralHits: 1, aiReferralLandedHits: 1, measured: true,
+          })),
+        },
+      })
+    }
+    return jsonResponse({ sources: [{ id: 's1', status: 'connected' }] })
+  })
+  onTestFinished(restoreFetch)
+
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(
+    <QueryClientProvider client={queryClient}>
+      <AiTrafficHistoryPanel projectName="test-project" sinceMinutes={43200} />
+    </QueryClientProvider>,
+  )
+
+  // The GA4 overlay resolves after the server series, so wait for the settled
+  // count rather than sampling the chart mid-flight.
+  await waitFor(() => {
+    const dots = screen.getByTestId('dots-ga4Visits')
+    // Exactly one: the lone 2026-08-05. Zero is the reported bug; four would
+    // mean the run got speckled too.
+    expect(dots.querySelectorAll('circle').length).toBe(1)
+  })
+})
+
+/**
+ * Review finding: "nothing recorded" was rendered as "nothing connected".
+ * `coverageStart === null` is equally true of a source connected an hour ago
+ * that has not reported yet, so a CONNECTED source was told to connect one,
+ * directly contradicting the connected badge above this panel.
+ */
+test('AI traffic history does not tell a connected source to connect a source', async () => {
+  const restoreFetch = mockFetch((url) => {
+    const path = url.split('?')[0]!
+    if (path.endsWith('/projects/test-project/traffic/sources')) {
+      return jsonResponse({ sources: [{ id: 'src-1', status: 'connected', sourceType: 'wordpress' }] })
+    }
+    if (path.endsWith('/projects/test-project/traffic/events')) {
+      // Connected, but has never recorded anything: coverageStart is null.
+      return jsonResponse({
+        events: [], eventRows: { total: 0, returned: 0, truncated: false },
+        totals: { crawlerHits: 0, crawlerContentHits: 0, aiUserFetchHits: 0, aiReferralHits: 0, aiReferralLandedHits: 0 },
+        series: {
+          granularity: 'day', coverageStart: null,
+          trends: { crawlerContentHits: null, aiUserFetchHits: null, aiReferralLandedHits: null },
+          points: [{ bucket: '2026-08-01', crawlerHits: 0, crawlerContentHits: 0, aiUserFetchHits: 0, aiReferralHits: 0, aiReferralLandedHits: 0, measured: false }],
+        },
+      })
+    }
+    return jsonResponse({})
+  })
+  onTestFinished(restoreFetch)
+
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(
+    <QueryClientProvider client={queryClient}>
+      <AiTrafficHistoryPanel projectName="test-project" sinceMinutes={43200} />
+    </QueryClientProvider>,
+  )
+
+  expect(await screen.findByText(/No AI activity recorded yet/i)).toBeTruthy()
+  // The contradiction: a connected source must never be told to connect one.
+  expect(screen.queryByText(/Connect a traffic source/i)).toBeNull()
+  expect(screen.queryByText(/No server-side traffic source connected/i)).toBeNull()
+})
+
+/**
+ * The converse still has to work: with genuinely no source, say so.
+ */
+test('AI traffic history still reports a genuinely unconnected project', async () => {
+  const restoreFetch = mockFetch((url) => {
+    const path = url.split('?')[0]!
+    if (path.endsWith('/projects/test-project/traffic/sources')) return jsonResponse({ sources: [] })
+    if (path.endsWith('/projects/test-project/traffic/events')) {
+      return jsonResponse({
+        events: [], eventRows: { total: 0, returned: 0, truncated: false },
+        totals: { crawlerHits: 0, crawlerContentHits: 0, aiUserFetchHits: 0, aiReferralHits: 0, aiReferralLandedHits: 0 },
+        series: {
+          granularity: 'day', coverageStart: null,
+          trends: { crawlerContentHits: null, aiUserFetchHits: null, aiReferralLandedHits: null },
+          points: [{ bucket: '2026-08-01', crawlerHits: 0, crawlerContentHits: 0, aiUserFetchHits: 0, aiReferralHits: 0, aiReferralLandedHits: 0, measured: false }],
+        },
+      })
+    }
+    return jsonResponse({})
+  })
+  onTestFinished(restoreFetch)
+
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(
+    <QueryClientProvider client={queryClient}>
+      <AiTrafficHistoryPanel projectName="test-project" sinceMinutes={43200} />
+    </QueryClientProvider>,
+  )
+
+  expect(await screen.findByText(/No server-side traffic source connected yet/i)).toBeTruthy()
+  expect(screen.getByText(/Connect a traffic source/i)).toBeTruthy()
 })

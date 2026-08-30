@@ -9,7 +9,7 @@
  * "Pages crawled" reads `crawlerContentHits`, not `crawlerHits`. The latter
  * counts robots.txt and sitemap re-fetches, which are not pages an engine read.
  */
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type Key } from 'react'
 import {
   Area,
   CartesianGrid,
@@ -32,7 +32,7 @@ import {
 import { InfoTooltip } from '../shared/InfoTooltip.js'
 import { MetricsWindowPicker } from '../shared/MetricsWindowPicker.js'
 import { Card } from '../ui/card.js'
-import { useServerTrafficEvents } from '../../queries/server-traffic.js'
+import { useServerTrafficEvents, useServerTrafficSources } from '../../queries/server-traffic.js'
 import { TRAFFIC_STALE_MS } from '../../queries/query-client.js'
 // The canonical compact formatter, from contracts. A local copy with a different
 // threshold made the same magnitude read "5,000" in one tile and "5.0K" in the
@@ -114,6 +114,26 @@ function Tile({ label, value, caption, tooltip }: {
   )
 }
 
+/**
+ * A LONE reading has no neighbour to draw a segment to. With
+ * `connectNulls={false}` and `dot={false}`, Recharts therefore renders it as
+ * NOTHING, so a day's visits vanish from a chart whose whole job is visits.
+ * This is not an edge case for GA4: days with no referrals are ABSENT rather
+ * than zero, so isolated readings are the ordinary shape of a quiet week.
+ *
+ * Draw a marker exactly where a point stands alone. Two or more in a row still
+ * render as a line, so a dense window is not speckled with dots.
+ */
+function isolatedPointDot(values: readonly (number | null)[], fill: string) {
+  return (props: { cx?: number; cy?: number; index?: number; key?: Key | null }) => {
+    const { cx, cy, index, key } = props
+    const i = index ?? -1
+    const alone = values[i] != null && values[i - 1] == null && values[i + 1] == null
+    if (!alone || cx === undefined || cy === undefined) return <g key={key} />
+    return <circle key={key} cx={cx} cy={cy} r={2.6} fill={fill} stroke="none" />
+  }
+}
+
 export function AiTrafficHistoryPanel({
   projectName,
   sinceMinutes,
@@ -127,6 +147,10 @@ export function AiTrafficHistoryPanel({
   // limit: 1 because this panel reads `series` and never `events`. The default
   // 500 built and shipped ~1,500 event objects per lane that are discarded.
   const events = useServerTrafficEvents(projectName, { sinceMinutes, granularity: 'day', limit: 1 })
+  // Connection state is a FACT about configuration, not something to infer from
+  // the absence of recorded events. Only the empty state reads it; the query is
+  // shared with the sibling traffic panels under the same key.
+  const sources = useServerTrafficSources(projectName)
   // The route requires a bound GA4 property and throws without one, so firing
   // unconditionally guaranteed a failed request on every mount for every
   // project with no GA4. `staleTime` matches the sibling panel's, which fetches
@@ -236,22 +260,31 @@ export function AiTrafficHistoryPanel({
     )
   }
   if (!measuredAnything) {
-    // The densifier always emits at least one bucket, so an empty array never
-    // reaches here against a live API. "Nothing was ever recorded" is
-    // coverageStart === null, which is what a project with no traffic source
-    // actually returns.
-    const neverRecorded = coverageStart === null
+    // "Nothing connected" and "nothing recorded" are DIFFERENT states, and
+    // `coverageStart === null` cannot tell them apart: it is equally true of a
+    // source connected an hour ago that has not reported yet. Reading it as the
+    // former told an operator to connect a source while the connected badge sat
+    // directly above this panel saying one already was. Take the connection fact
+    // from the source list; absence of evidence is not evidence of absence.
+    // Until that list resolves, claim nothing about connection state.
+    const sourceList = sources.data?.sources
+    const noSourceConnected = sourceList !== undefined && sourceList.length === 0
+    const connectedButSilent = !noSourceConnected && coverageStart === null
     return (
       <Card className="surface-card p-5">
         <p className="text-sm text-secondary">
-          {neverRecorded
+          {noSourceConnected
             ? 'No server-side traffic source connected yet.'
-            : 'No AI activity recorded in this period.'}
+            : connectedButSilent
+              ? 'No AI activity recorded yet.'
+              : 'No AI activity recorded in this period.'}
         </p>
         <p className="text-xs text-muted mt-1">
-          {neverRecorded
+          {noSourceConnected
             ? 'Connect a traffic source to see how AI engines read this site over time.'
-            : 'The window was measured and nothing was recorded. Try a longer range.'}
+            : connectedButSilent
+              ? 'The source is connected but has not reported anything yet. A new source can take a few hours to appear.'
+              : 'The window was measured and nothing was recorded. Try a longer range.'}
         </p>
       </Card>
     )
@@ -397,7 +430,8 @@ export function AiTrafficHistoryPanel({
           )}
           {visitSource !== 'server' && (
             <Line type="monotone" dataKey="ga4Visits" name="Visits, GA4" connectNulls={false}
-                  stroke={GA4_COLOR} strokeWidth={1.8} strokeDasharray="5 3" dot={false} />
+                  stroke={GA4_COLOR} strokeWidth={1.8} strokeDasharray="5 3"
+                  dot={isolatedPointDot(chartRows.map((r) => r.ga4Visits), GA4_COLOR)} />
           )}
           {showTrend && visitSource !== 'ga4' && (
             <Line type="linear" dataKey="visitTrend" name="Visits trend" dot={false}

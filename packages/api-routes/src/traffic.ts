@@ -4776,13 +4776,20 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
             .where(coverageScope(aiReferralEventsHourly.projectId, aiReferralEventsHourly.sourceId)).get()?.v,
         ].filter((v): v is string => typeof v === 'string' && v.length > 0)
         const coverageStart = firsts.length ? firsts.slice().sort()[0]! : null
+        // A DAY bucket is `YYYY-MM-DD` (`substr(ts_hour, 1, 10)`) and needs a time
+        // appended; an HOUR bucket IS `ts_hour`, ALREADY a full ISO instant
+        // (`2026-05-14T23:00:00.000Z`). Appending to the hour form produced
+        // `...000Z:00:00.000Z`, which parses to NaN, so the `Number.isFinite`
+        // guard below always failed and the partial-hour exclusion was dead code
+        // on the hourly series: flat traffic read mid-hour reported a decline.
+        const bucketStartMs = (bucket: string): number => Date.parse(
+          granularity === TrafficSeriesGranularities.day ? `${bucket}T00:00:00.000Z` : bucket,
+        )
         // The newest bucket is partial whenever `until` lands inside it rather
         // than on its boundary, which is the default case (`until` = now).
         const bucketMs = granularity === TrafficSeriesGranularities.day ? 86_400_000 : 3_600_000
         const lastBucket = points.length ? points[points.length - 1]!.bucket : null
-        const lastBucketStartMs = lastBucket === null
-          ? null
-          : Date.parse(granularity === TrafficSeriesGranularities.day ? `${lastBucket}T00:00:00.000Z` : `${lastBucket}:00:00.000Z`)
+        const lastBucketStartMs = lastBucket === null ? null : bucketStartMs(lastBucket)
         const trailingBucketIsPartial = lastBucketStartMs !== null
           && Number.isFinite(lastBucketStartMs)
           && until.getTime() < lastBucketStartMs + bucketMs
@@ -4797,6 +4804,21 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
             ? false
             : (granularity === TrafficSeriesGranularities.day ? pt.bucket.slice(0, 10) : pt.bucket.slice(0, 13)) >= coverageKey
         }
+        // The FIRST measured bucket is itself partial whenever recording began
+        // INSIDE it rather than on its boundary. `measured` cannot see that: it
+        // compares at bucket granularity, so the bucket holding `coverageStart`
+        // reads as fully measured while holding only the tail of one. Left in,
+        // a site flat at 10 hits/hour whose source connected at 14:00 contributes
+        // a 100-hit first day against 240-hit neighbours, and the fit returns a
+        // confident CLIMB for traffic that never changed. The trailing-edge error
+        // mirrored, and the trailing guard alone left it in place.
+        const firstMeasuredIdx = points.findIndex((pt) => pt.measured)
+        const coverageStartMs = coverageStart === null ? null : Date.parse(coverageStart)
+        const leadingBucketIsPartial = firstMeasuredIdx >= 0
+          && coverageStartMs !== null
+          && Number.isFinite(coverageStartMs)
+          // Strict: coverage starting exactly on the boundary is a WHOLE bucket.
+          && coverageStartMs > bucketStartMs(points[firstMeasuredIdx]!.bucket)
         // Fitted server-side so the CLI and every other consumer get the same
         // line the chart draws (the UI/CLI parity rule). Points are densified,
         // so a quiet day is a real 0 in the fit rather than a gap.
@@ -4808,7 +4830,9 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
           // bucket that is not a full reading must not be treated as one.
           //
           // Leading: unmeasured buckets predate recording, so they are the
-          // ABSENCE of a reading, not a reading of zero.
+          // ABSENCE of a reading, not a reading of zero. The first MEASURED
+          // bucket goes too when recording began inside it, since a fraction of
+          // a bucket read as a whole one slopes the fit up out of nothing.
           //
           // Trailing: `until` defaults to now, so the newest bucket holds only
           // the elapsed fraction of the current period. A site flat at 500/day
@@ -4821,7 +4845,9 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
           // index, so dropping an edge does not compress the x-axis.
           trends: (() => {
             const usable = (pt: TrafficSeriesPoint, i: number) =>
-              pt.measured && !(i === points.length - 1 && trailingBucketIsPartial)
+              pt.measured
+              && !(i === firstMeasuredIdx && leadingBucketIsPartial)
+              && !(i === points.length - 1 && trailingBucketIsPartial)
             const series = (pick: (pt: TrafficSeriesPoint) => number) =>
               linearTrend(points.map((pt, i) => (usable(pt, i) ? pick(pt) : null)))
             return {

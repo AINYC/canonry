@@ -5317,6 +5317,112 @@ describe('crawler-hit content/infra segmentation', () => {
     } finally { await h.close() }
   })
 
+  /**
+   * Review finding: the trailing guard had a mirror image nobody wrote. The
+   * FIRST measured bucket is partial whenever recording began inside it, and
+   * `measured` cannot see that (it compares at bucket granularity, so the bucket
+   * holding `coverageStart` reads as whole). A site flat at 10 hits/hour whose
+   * source connected at 18:00 contributes a short first day against full
+   * neighbours and the fit reports a confident CLIMB for flat traffic.
+   *
+   * Fixture: one partial first day at 40, then four complete days flat at 240.
+   * Including the partial day fits slope = +60/day. Excluding it fits 0.
+   */
+  it('excludes the partial LEADING bucket from the trend fit', async () => {
+    const { h, sourceId } = await mixedPathHarness()
+    try {
+      const source = h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()!
+      const writtenAt = new Date().toISOString()
+      const row = (tsHour: string, pathNormalized: string, hits: number) => ({
+        projectId: source.projectId, sourceId, tsHour,
+        botId: 'openai-gptbot', operator: 'OpenAI', verificationStatus: 'claimed_unverified' as const,
+        pathNormalized, status: 200, hits, sampledUserAgent: 'GPTBot/1.0',
+        createdAt: writtenAt, updatedAt: writtenAt,
+      })
+
+      const rows = []
+      // Recording begins late on day-5: a real partial day, not a quiet one.
+      const first = new Date(); first.setUTCDate(first.getUTCDate() - 5); first.setUTCHours(18, 0, 0, 0)
+      rows.push(row(first.toISOString(), '/blog/first', 40))
+      // Four COMPLETE days, perfectly flat.
+      for (let back = 4; back >= 1; back--) {
+        const d = new Date(); d.setUTCDate(d.getUTCDate() - back); d.setUTCHours(12, 0, 0, 0)
+        rows.push(row(d.toISOString(), `/blog/day-${back}`, 240))
+      }
+      h.db.insert(crawlerEventsHourly).values(rows).run()
+
+      const since = new Date(); since.setUTCDate(since.getUTCDate() - 7)
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/projects/test-project/traffic/events?since=${encodeURIComponent(since.toISOString())}&granularity=day`,
+      })
+      expect(res.statusCode).toBe(200)
+      const body = JSON.parse(res.payload)
+      const points = body.series.points as { measured: boolean }[]
+      const trend = body.series.trends.crawlerContentHits
+      expect(trend).not.toBeNull()
+
+      // The fit must START AFTER the first measured bucket: that bucket is a
+      // fraction of a day and was read as a whole one.
+      const firstMeasured = points.findIndex((pt) => pt.measured)
+      expect(firstMeasured).toBeGreaterThanOrEqual(0)
+      expect(trend.startIndex).toBeGreaterThan(firstMeasured)
+
+      // Flat traffic must not report growth. Including the partial day fits +60.
+      expect(trend.slope).toBeLessThan(10)
+      expect(Math.abs(trend.slope)).toBeLessThan(10)
+    } finally { await h.close() }
+  })
+
+  /**
+   * Review finding: an HOUR bucket is `ts_hour`, already a full ISO instant, so
+   * appending a time built `...000Z:00:00.000Z`, which parses to NaN. The
+   * `Number.isFinite` guard then failed and `trailingBucketIsPartial` was false
+   * for every hourly series ever served: the partial-hour exclusion was dead
+   * code, and flat traffic read mid-hour reported a decline.
+   *
+   * Fixture: five complete hours flat at 100, current hour at 4.
+   */
+  it('excludes the partial trailing bucket on the HOURLY series', async () => {
+    const { h, sourceId } = await mixedPathHarness()
+    try {
+      const source = h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()!
+      const writtenAt = new Date().toISOString()
+      const row = (tsHour: string, pathNormalized: string, hits: number) => ({
+        projectId: source.projectId, sourceId, tsHour,
+        botId: 'openai-gptbot', operator: 'OpenAI', verificationStatus: 'claimed_unverified' as const,
+        pathNormalized, status: 200, hits, sampledUserAgent: 'GPTBot/1.0',
+        createdAt: writtenAt, updatedAt: writtenAt,
+      })
+
+      const rows = []
+      for (let back = 5; back >= 1; back--) {
+        const d = new Date(); d.setUTCMinutes(0, 0, 0); d.setUTCHours(d.getUTCHours() - back)
+        rows.push(row(d.toISOString(), `/blog/hour-${back}`, 100))
+      }
+      const thisHour = new Date(); thisHour.setUTCMinutes(0, 0, 0)
+      rows.push(row(thisHour.toISOString(), '/blog/now', 4))
+      h.db.insert(crawlerEventsHourly).values(rows).run()
+
+      const since = new Date(); since.setUTCMinutes(0, 0, 0); since.setUTCHours(since.getUTCHours() - 6)
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/projects/test-project/traffic/events?since=${encodeURIComponent(since.toISOString())}&granularity=hour`,
+      })
+      expect(res.statusCode).toBe(200)
+      const body = JSON.parse(res.payload)
+      const trend = body.series.trends.crawlerContentHits
+      expect(trend).not.toBeNull()
+
+      // The in-progress hour must be out of the fit, exactly as the daily
+      // series already did. This is the assertion that was silently vacuous.
+      const lastIndex = body.series.points.length - 1
+      expect(trend.endIndex).toBeLessThan(lastIndex)
+      // Flat traffic must not report a decline.
+      expect(trend.slope).toBeGreaterThan(-20)
+    } finally { await h.close() }
+  })
+
   it('rejects sinceMinutes rather than silently answering for 24 hours', async () => {
     const { h } = await mixedPathHarness()
     try {
