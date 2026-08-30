@@ -41,6 +41,7 @@ import {
   AdsOperationStates,
   AdsReconcileStrategies,
   AdsActivationGrantStates,
+  ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES,
   ADS_ACTIVATION_MAX_ENTITIES,
   AdsOperationStepStates,
 } from '../src/ads.js'
@@ -656,7 +657,7 @@ describe('approval-bound campaign-tree activation contracts', () => {
     }).success).toBe(false)
   })
 
-  test('bounds one activation manifest to a safe provider and SQLite workload', () => {
+  test('bounds one activation manifest to the absolute structural ceiling', () => {
     const manifestWithAds = (adCount: number) => ({
       campaign: {
         id: 'cmpn_bounded',
@@ -665,18 +666,31 @@ describe('approval-bound campaign-tree activation contracts', () => {
           id: 'adgrp_bounded',
           expectedUpdatedAt: 2,
           ads: Array.from({ length: adCount }, (_, index) => ({
-            id: `ad_${String(index).padStart(3, '0')}`,
+            id: `ad_${String(index).padStart(4, '0')}`,
             expectedUpdatedAt: index + 3,
           })),
         }],
       },
     })
-    expect(adsActivationManifestSchema.safeParse(
-      manifestWithAds(ADS_ACTIVATION_MAX_ENTITIES - 2),
-    ).success).toBe(true)
+    // The schema validates STORED manifests and participates in canonical
+    // hashing, so it enforces only the fixed absolute ceiling. The (default
+    // 100) operational cap is an API entry-point concern, not a schema one:
+    // a manifest above the operational cap still parses.
     expect(adsActivationManifestSchema.safeParse(
       manifestWithAds(ADS_ACTIVATION_MAX_ENTITIES - 1),
+    ).success).toBe(true)
+    expect(adsActivationManifestSchema.safeParse(
+      manifestWithAds(ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES - 2),
+    ).success).toBe(true)
+    expect(adsActivationManifestSchema.safeParse(
+      manifestWithAds(ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES - 1),
     ).success).toBe(false)
+  })
+
+  test('keeps the operational default strictly inside the absolute ceiling', () => {
+    expect(ADS_ACTIVATION_MAX_ENTITIES).toBe(100)
+    expect(ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES).toBe(1000)
+    expect(ADS_ACTIVATION_MAX_ENTITIES).toBeLessThanOrEqual(ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES)
   })
 
   test('models every grant state with exact terminal timestamps', () => {

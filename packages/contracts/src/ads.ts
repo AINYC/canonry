@@ -475,18 +475,31 @@ const adsActivationEntityRefSchema = z.object({
 const adsActivationAdSchema = adsActivationEntityRefSchema
 
 /**
- * Keep one approval/execution inside a bounded provider and SQLite workload.
- * The campaign itself counts toward this limit, so callers can approve at
- * most 99 descendants in one activation manifest.
+ * Structural ceiling for one activation manifest (1 campaign + ad groups +
+ * ads). This bound lives in the SCHEMA, which participates in canonical
+ * manifest hashing and validates STORED manifests, so it must never tighten:
+ * it protects canonical hashing and keeps one approval/execution inside a
+ * bounded SQLite and provider workload. Never configurable.
+ */
+export const ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES = 1000
+
+/**
+ * DEFAULT OPERATIONAL cap on entities in one activation manifest. Enforced at
+ * the API entry points that accept a caller-assembled manifest (activation
+ * grant creation and new activate-tree executions), where a deployment may
+ * override it via `CANONRY_ADS_ACTIVATION_MAX_ENTITIES` up to
+ * {@link ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES}. The schema below deliberately
+ * does NOT enforce this cap: stored manifests approved under a larger
+ * configured cap must keep validating and hashing unchanged.
  */
 export const ADS_ACTIVATION_MAX_ENTITIES = 100
 
 const adsActivationAdGroupSchema = adsActivationEntityRefSchema.extend({
-  ads: z.array(adsActivationAdSchema).min(1).max(ADS_ACTIVATION_MAX_ENTITIES - 1),
+  ads: z.array(adsActivationAdSchema).min(1).max(ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES - 1),
 }).strict()
 
 const adsActivationCampaignSchema = adsActivationEntityRefSchema.extend({
-  adGroups: z.array(adsActivationAdGroupSchema).min(1).max(ADS_ACTIVATION_MAX_ENTITIES - 1),
+  adGroups: z.array(adsActivationAdGroupSchema).min(1).max(ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES - 1),
 }).strict()
 
 function compareAdsActivationEntityIds(left: string, right: string): number {
@@ -524,11 +537,11 @@ export const adsActivationManifestSchema = z.object({
     (count, group) => count + 1 + group.ads.length,
     0,
   )
-  if (entityCount > ADS_ACTIVATION_MAX_ENTITIES) {
+  if (entityCount > ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES) {
     ctx.addIssue({
       code: 'custom',
       path: ['campaign'],
-      message: `Activation manifests may contain at most ${ADS_ACTIVATION_MAX_ENTITIES} entities`,
+      message: `Activation manifests may contain at most ${ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES} entities`,
     })
   }
   addCanonicalEntityOrderIssue(manifest.campaign.adGroups, ['campaign', 'adGroups'], ctx)
