@@ -4152,7 +4152,7 @@ const routeCatalog: OpenApiOperation[] = [
     path: '/api/v1/projects/{name}/ads/activation-grants',
     summary: 'Approve one exact paused OpenAI Ads campaign tree for activation',
     description:
-      'Human-only approval surface. The authenticated ads.approve key is recorded as approver and must differ from the named executor key. Canonry verifies account eligibility, exact parent-child membership, paused state, upstream timestamps, and ad review approval before issuing a short-lived single-use grant.',
+      'Human-only approval surface. The authenticated ads.approve key is recorded as approver and must differ from the named executor key. Canonry verifies account eligibility, exact parent-child membership, paused state, upstream timestamps, and ad review approval before issuing a short-lived single-use grant. New grants are refused when the manifest exceeds the deployment\'s operational entity cap (default 100, tunable via CANONRY_ADS_ACTIVATION_MAX_ENTITIES up to the structural ceiling of 1000).',
     tags: ['ads'],
     parameters: [nameParameter],
     requestBody: {
@@ -4209,7 +4209,7 @@ const routeCatalog: OpenApiOperation[] = [
     path: '/api/v1/projects/{name}/ads/campaigns/{id}/activate-tree',
     summary: 'Execute a grant-bound OpenAI Ads campaign-tree activation',
     description:
-      'Requires ads.activate and a nonexpired single-use grant bound to the exact executor key, project, advertiser account, manifest hash, campaign, entity IDs, and upstream timestamps. Canonry activates ads first, then ad groups, then the campaign; every step is durably checkpointed and verified. Failure rolls back the campaign before children and ambiguous outcomes fail closed as unknown.',
+      'Requires ads.activate and a nonexpired single-use grant bound to the exact executor key, project, advertiser account, manifest hash, campaign, entity IDs, and upstream timestamps. Canonry activates ads first, then ad groups, then the campaign; every step is durably checkpointed and verified. Failure rolls back the campaign before children and ambiguous outcomes fail closed as unknown. New executions are refused when the manifest exceeds the deployment\'s operational entity cap (default 100, tunable via CANONRY_ADS_ACTIVATION_MAX_ENTITIES up to the structural ceiling of 1000); stored receipts replay and reconcile regardless.',
     tags: ['ads'],
     parameters: [
       nameParameter,

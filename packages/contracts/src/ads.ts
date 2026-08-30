@@ -494,6 +494,23 @@ export const ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES = 1000
  */
 export const ADS_ACTIVATION_MAX_ENTITIES = 100
 
+/**
+ * Count the entities in one activation manifest: the campaign, plus one per
+ * ad group, plus one per ad. This is THE entity-count formula, shared by the
+ * manifest schema's absolute-ceiling check and the API entry points'
+ * operational cap so the two counts can never drift apart. Typed over the
+ * minimal structural shape so both the schema's pre-brand refinement input
+ * and the parsed DTO satisfy it.
+ */
+export function countAdsActivationManifestEntities(
+  manifest: { campaign: { adGroups: { ads: unknown[] }[] } },
+): number {
+  return 1 + manifest.campaign.adGroups.reduce(
+    (count, group) => count + 1 + group.ads.length,
+    0,
+  )
+}
+
 const adsActivationAdGroupSchema = adsActivationEntityRefSchema.extend({
   ads: z.array(adsActivationAdSchema).min(1).max(ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES - 1),
 }).strict()
@@ -533,10 +550,7 @@ function addCanonicalEntityOrderIssue(
 export const adsActivationManifestSchema = z.object({
   campaign: adsActivationCampaignSchema,
 }).strict().superRefine((manifest, ctx) => {
-  const entityCount = 1 + manifest.campaign.adGroups.reduce(
-    (count, group) => count + 1 + group.ads.length,
-    0,
-  )
+  const entityCount = countAdsActivationManifestEntities(manifest)
   if (entityCount > ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES) {
     ctx.addIssue({
       code: 'custom',

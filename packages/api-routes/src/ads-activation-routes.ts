@@ -21,6 +21,7 @@ import {
   adsActivationGrantRevokeRequestSchema,
   adsOperationStepDtoSchema,
   alreadyExists,
+  countAdsActivationManifestEntities,
   forbidden,
   internalError,
   notFound,
@@ -618,9 +619,10 @@ function countManifest(manifest: AdsActivationGrantDto['manifest']): {
  * configuration.
  *
  * Read per request so an operator restart is the only deployment step. An
- * absent or unparseable value falls back to the default; parseable values are
- * clamped into [1, ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES] rather than rejected
- * so a bad env cannot take the bound off entirely.
+ * absent or unparseable value falls back to the default, and so does a
+ * parseable value below 1; a value above
+ * `ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES` clamps down to that ceiling, so a
+ * bad env cannot take the bound off entirely.
  */
 export function resolveAdsActivationMaxEntities(
   env: NodeJS.ProcessEnv = process.env,
@@ -629,7 +631,7 @@ export function resolveAdsActivationMaxEntities(
   if (raw === undefined || raw.trim() === '') return ADS_ACTIVATION_MAX_ENTITIES
   const parsed = Number(raw)
   if (!Number.isFinite(parsed) || parsed < 1) return ADS_ACTIVATION_MAX_ENTITIES
-  return Math.min(ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES, Math.max(1, Math.trunc(parsed)))
+  return Math.min(ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES, Math.trunc(parsed))
 }
 
 /**
@@ -642,10 +644,7 @@ function enforceAdsActivationOperationalCap(
   manifest: AdsActivationGrantDto['manifest'],
 ): void {
   const maxEntities = resolveAdsActivationMaxEntities()
-  const entityCount = 1 + manifest.campaign.adGroups.reduce(
-    (count, group) => count + 1 + group.ads.length,
-    0,
-  )
+  const entityCount = countAdsActivationManifestEntities(manifest)
   if (entityCount > maxEntities) {
     throw validationError(
       `New ads activations may contain at most ${maxEntities} entities`
