@@ -28,6 +28,8 @@ import {
   urlSearchText,
   useClientTable,
 } from '../shared/DataTableControls.js'
+import { AiTrafficHistoryPanel } from './AiTrafficHistoryPanel.js'
+import { MetricsWindowPicker } from '../shared/MetricsWindowPicker.js'
 import { InfoTooltip } from '../shared/InfoTooltip.js'
 import { ToneBadge } from '../shared/ToneBadge.js'
 import type { MetricsWindow } from '@ainyc/canonry-contracts'
@@ -63,7 +65,24 @@ import {
 } from '../../lib/social-chart-helpers.js'
 import { buildAiChartData } from '../../lib/ai-chart-helpers.js'
 
-const TRAFFIC_WINDOWS: MetricsWindow[] = ['7d', '30d', '90d', 'all']
+// 'all' is deliberately absent. GA treats it as unbounded retention; the
+// server lane is queried with `since`, which has no unbounded form (omitting it
+// means 24h, not everything). One control offering 'all' therefore labelled two
+// incomparable ranges identically. 7d/30d/90d mean the same thing in both lanes.
+const TRAFFIC_WINDOWS: MetricsWindow[] = ['7d', '30d', '90d']
+
+// The server-side lane is queried in minutes, the GA lane by window name. One
+// control drives both, so the mapping lives here rather than in either consumer.
+// 'all' is capped at 90 days: `sinceMinutes` has no unbounded representation,
+// and an uncapped scan is not what the operator is asking for from a chart.
+const TRAFFIC_WINDOW_MINUTES: Record<MetricsWindow, number> = {
+  '7d': 7 * 24 * 60,
+  '30d': 30 * 24 * 60,
+  '90d': 90 * 24 * 60,
+  // Unreachable from the control (see TRAFFIC_WINDOWS); present only to satisfy
+  // the MetricsWindow key set. Never rendered as a selectable range.
+  all: 90 * 24 * 60,
+}
 
 const SOURCE_COLORS = CHART_SERIES_COLORS
 
@@ -215,18 +234,48 @@ function ServerActivityPanel({ projectName }: { projectName: string }) {
 }
 
 export function ActivitySection({ projectName }: { projectName: string }) {
+  // Owned here so the GA panel's selector and the server-fed chart cannot drift
+  // onto different ranges. The chart is a SIBLING of ClickThroughActivity, never
+  // a child: that component early-returns a connect prompt with no GA4 property,
+  // and the chart's data exists without GA4 at all.
+  const [trafficWindow, setTrafficWindow] = useState<MetricsWindow>('30d')
   return (
     <div className="space-y-10">
       <ServerActivityPanel projectName={projectName} />
-      <ClickThroughActivity projectName={projectName} />
+      {/*
+        The picker lives HERE, not inside ClickThroughActivity. That component
+        returns a connect prompt before rendering its own controls when GA4 is
+        disconnected, which left the server chart visible but stuck on its
+        default range with no way to change it.
+      */}
+      <div className="flex items-center justify-end">
+        <MetricsWindowPicker
+          windows={TRAFFIC_WINDOWS}
+          value={trafficWindow}
+          onChange={setTrafficWindow}
+          label="Traffic time period"
+        />
+      </div>
+      <AiTrafficHistoryPanel
+        projectName={projectName}
+        sinceMinutes={TRAFFIC_WINDOW_MINUTES[trafficWindow]}
+      />
+      <ClickThroughActivity projectName={projectName} window={trafficWindow} />
     </div>
   )
 }
 
 // Exported for focused testing of the GA4 click-through panel (e.g. landing-page
 // pagination) without standing up a router for the sibling ServerActivityPanel's links.
-export function ClickThroughActivity({ projectName }: { projectName: string }) {
+export function ClickThroughActivity({ projectName, window: windowProp }: {
+  projectName: string
+  /** Owned by ActivitySection, which renders the only picker on the page. */
+  window?: MetricsWindow
+}) {
   const queryClient = useQueryClient()
+  // Read-only here: ActivitySection owns the control. Defaulted so this
+  // component stays independently mountable in tests.
+  const trafficWindow = windowProp ?? '30d'
   const [status, setStatus] = useState<ApiGaStatus | null>(null)
   const [traffic, setTraffic] = useState<ApiGaTraffic | null>(null)
   const [loading, setLoading] = useState(true)
@@ -246,7 +295,6 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
   const [sessionHistory, setSessionHistory] = useState<GA4SessionHistoryEntry[]>([])
   const [socialHistory, setSocialHistory] = useState<GA4SocialReferralHistoryEntry[]>([])
   const [socialTableExpanded, setSocialTableExpanded] = useState(false)
-  const [trafficWindow, setTrafficWindow] = useState<MetricsWindow>('30d')
 
   async function loadData(cancelled: { current: boolean }) {
     setLoading(true)
@@ -612,19 +660,6 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
               <InfoTooltip text={`Aggregated traffic metrics from Google Analytics 4.${traffic?.periodStart && traffic?.periodEnd ? ` Data available: ${new Date(traffic.periodStart + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })} – ${new Date(traffic.periodEnd + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}.` : ''} Distinct users are unavailable when the selected history extends beyond a stored aggregate. Organic sessions are Google organic search sessions specifically.`} />
             </h2>
           </div>
-          <div className="segmented" role="group" aria-label="Traffic time period">
-            {TRAFFIC_WINDOWS.map(w => (
-              <button
-                key={w}
-                type="button"
-                aria-pressed={trafficWindow === w}
-                className={`segmented-option ${trafficWindow === w ? 'segmented-option-active' : ''}`}
-                onClick={() => setTrafficWindow(w)}
-              >
-                {w === 'all' ? 'All' : w}
-              </button>
-            ))}
-          </div>
         </div>
 
         {traffic ? (
@@ -956,8 +991,77 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
               </h2>
             </div>
 
-            {socialChartData.length > 0 && (
-              <Card className="surface-card p-5 mb-4">
+
+            {/* Stacked, not side by side. The breakdown is a six-column table
+                (source, medium, channel, sessions, share, users) and at ~60% of
+                the row it wrapped or truncated the source names, which are the
+                column a reader actually scans. Full width also matches the
+                approved mock. The summary tiles above it are already a 3-up
+                grid, so they fill the width without changes. */}
+            <div className="grid gap-4">
+              <Card className="surface-card p-5">
+                <div className="mb-4">
+                  <p className="eyebrow eyebrow-soft">Summary</p>
+                  <h3 className="text-sm font-semibold text-heading">Visits from social</h3>
+                </div>
+
+                {traffic.socialReferrals.length > 0 ? (
+                  <>
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      <AttributionStat
+                        label="Social Sessions"
+                        value={formatCompact(socialSessions)}
+                        hint={`${socialSessions.toLocaleString()} sessions`}
+                        tone="positive"
+                        tooltip="Total sessions classified as Organic Social or Paid Social by GA4's default channel grouping."
+                      />
+                      <AttributionStat
+                        label="Share of Traffic"
+                        value={socialSharePctDisplay}
+                        hint="of total sessions"
+                        tone="neutral"
+                        tooltip="Percentage of your total site sessions that originated from social media platforms."
+                      />
+                      <AttributionStat
+                        label="Platforms"
+                        value={String(socialSourceCount)}
+                        hint={`${traffic.socialReferrals.length} source rows`}
+                        tone="neutral"
+                        tooltip="Number of distinct social media platforms detected. Each unique source/medium combination counts as one source row."
+                      />
+                    </div>
+
+                    {topSocialSource && (
+                      <div className="mt-4 rounded-lg border border-info-800/40 bg-info-500/6 px-4 py-3 text-sm text-info-100">
+                        <p className="text-xs uppercase tracking-wider text-info-300/70 mb-1">Top social source</p>
+                        <p
+                          className="font-medium truncate"
+                          title={`${topSocialSource.source} via ${topSocialSource.medium}`}
+                        >
+                          {truncateLabel(decodeSocialSourceLabel(topSocialSource.source), 64)}
+                        </p>
+                        <p className="text-xs text-info-200/70 mt-0.5 truncate" title={topSocialSource.medium}>
+                          via {decodeSocialSourceLabel(topSocialSource.medium)} · {topSocialSource.sessions.toLocaleString()} sessions
+                        </p>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      <AttributionStat label="Social Sessions" value="0" hint="0 sessions" tone="neutral" tooltip="Total sessions attributed to social media platforms." />
+                      <AttributionStat label="Share of Traffic" value="0%" hint="of total sessions" tone="neutral" tooltip="Percentage of your total site sessions from social media." />
+                      <AttributionStat label="Platforms" value="0" hint="known platforms" tone="neutral" tooltip="Number of distinct social media platforms detected." />
+                    </div>
+                    <div className="rounded-lg border border-default bg-surface px-4 py-3 text-sm text-secondary">
+                      <p className="mb-1.5 text-neutral">Monitoring social media traffic via GA4 channel grouping</p>
+                      <p className="text-xs text-muted">Sessions classified as Organic Social or Paid Social by GA4 will appear here. Google maintains the source-to-channel mapping, which includes Facebook, Instagram, X/Twitter, LinkedIn, Reddit, Pinterest, Snapchat, and other platforms.</p>
+                    </div>
+                  </div>
+                )}
+              </Card>
+              {socialChartData.length > 0 && (
+              <Card className="surface-card p-5">
                 <div className="mb-4 flex items-end justify-between gap-3">
                   <div>
                     <p className="eyebrow eyebrow-soft">Trend</p>
@@ -1031,70 +1135,7 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
 
                 <SocialChartLegend sources={socialChartSources} otherCount={socialOtherCount} />
               </Card>
-            )}
-
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.5fr)]">
-              <Card className="surface-card p-5">
-                <div className="mb-4">
-                  <p className="eyebrow eyebrow-soft">Summary</p>
-                  <h3 className="text-sm font-semibold text-heading">Visits from social</h3>
-                </div>
-
-                {traffic.socialReferrals.length > 0 ? (
-                  <>
-                    <div className="grid gap-3 sm:grid-cols-3">
-                      <AttributionStat
-                        label="Social Sessions"
-                        value={formatCompact(socialSessions)}
-                        hint={`${socialSessions.toLocaleString()} sessions`}
-                        tone="positive"
-                        tooltip="Total sessions classified as Organic Social or Paid Social by GA4's default channel grouping."
-                      />
-                      <AttributionStat
-                        label="Share of Traffic"
-                        value={socialSharePctDisplay}
-                        hint="of total sessions"
-                        tone="neutral"
-                        tooltip="Percentage of your total site sessions that originated from social media platforms."
-                      />
-                      <AttributionStat
-                        label="Platforms"
-                        value={String(socialSourceCount)}
-                        hint={`${traffic.socialReferrals.length} source rows`}
-                        tone="neutral"
-                        tooltip="Number of distinct social media platforms detected. Each unique source/medium combination counts as one source row."
-                      />
-                    </div>
-
-                    {topSocialSource && (
-                      <div className="mt-4 rounded-lg border border-info-800/40 bg-info-500/6 px-4 py-3 text-sm text-info-100">
-                        <p className="text-xs uppercase tracking-wider text-info-300/70 mb-1">Top social source</p>
-                        <p
-                          className="font-medium truncate"
-                          title={`${topSocialSource.source} via ${topSocialSource.medium}`}
-                        >
-                          {truncateLabel(decodeSocialSourceLabel(topSocialSource.source), 64)}
-                        </p>
-                        <p className="text-xs text-info-200/70 mt-0.5 truncate" title={topSocialSource.medium}>
-                          via {decodeSocialSourceLabel(topSocialSource.medium)} · {topSocialSource.sessions.toLocaleString()} sessions
-                        </p>
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <div className="space-y-3">
-                    <div className="grid gap-3 sm:grid-cols-3">
-                      <AttributionStat label="Social Sessions" value="0" hint="0 sessions" tone="neutral" tooltip="Total sessions attributed to social media platforms." />
-                      <AttributionStat label="Share of Traffic" value="0%" hint="of total sessions" tone="neutral" tooltip="Percentage of your total site sessions from social media." />
-                      <AttributionStat label="Platforms" value="0" hint="known platforms" tone="neutral" tooltip="Number of distinct social media platforms detected." />
-                    </div>
-                    <div className="rounded-lg border border-default bg-surface px-4 py-3 text-sm text-secondary">
-                      <p className="mb-1.5 text-neutral">Monitoring social media traffic via GA4 channel grouping</p>
-                      <p className="text-xs text-muted">Sessions classified as Organic Social or Paid Social by GA4 will appear here. Google maintains the source-to-channel mapping, which includes Facebook, Instagram, X/Twitter, LinkedIn, Reddit, Pinterest, Snapchat, and other platforms.</p>
-                    </div>
-                  </div>
-                )}
-              </Card>
+              )}
 
               <Card className="surface-card p-5">
                 <div className="mb-4 flex items-end justify-between gap-3">

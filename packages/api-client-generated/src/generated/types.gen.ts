@@ -9846,7 +9846,42 @@ export type TrafficEventsResponse = {
             aiUserFetchHits: number;
             aiReferralHits: number;
             aiReferralLandedHits: number;
+            crawlerContentHits: number;
+            measured: boolean;
         }>;
+        coverageStart: string | null;
+        trends: {
+            crawlerContentHits: {
+                slope: number;
+                intercept: number;
+                r2: number;
+                start: number;
+                end: number;
+                n: number;
+                startIndex: number;
+                endIndex: number;
+            } | null;
+            aiUserFetchHits: {
+                slope: number;
+                intercept: number;
+                r2: number;
+                start: number;
+                end: number;
+                n: number;
+                startIndex: number;
+                endIndex: number;
+            } | null;
+            aiReferralLandedHits: {
+                slope: number;
+                intercept: number;
+                r2: number;
+                start: number;
+                end: number;
+                n: number;
+                startIndex: number;
+                endIndex: number;
+            } | null;
+        };
     };
     totals: {
         crawlerHits: number;

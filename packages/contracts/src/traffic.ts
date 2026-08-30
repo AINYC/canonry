@@ -1,3 +1,4 @@
+import { linearTrendSchema } from './statistics.js'
 import { z } from 'zod'
 import { runStatusSchema } from './run.js'
 import type { TrafficCrawlerSegments, TrafficPathClass } from './traffic-path.js'
@@ -588,6 +589,21 @@ export const trafficSeriesPointSchema = z.object({
    * series to chart under any label that says sessions or visits.
    */
   aiReferralLandedHits: z.number().int().nonnegative(),
+  /**
+   * The part of `crawlerHits` that is a real content page, excluding robots,
+   * sitemaps and assets. `crawlerHits` keeps its full-count contract; this is
+   * the series to chart under any label that says "pages crawled", because a
+   * sitemap re-fetch is not a page an engine read.
+   */
+  crawlerContentHits: z.number().int().nonnegative(),
+  /**
+   * False for a bucket that predates any observation for this project, i.e.
+   * before `series.coverageStart`. Such a bucket reads 0 because nothing was
+   * being recorded, NOT because nothing happened, and a chart must not draw
+   * those as a measured zero. Derived here rather than in a component so the
+   * CLI draws the same distinction.
+   */
+  measured: z.boolean(),
 })
 export type TrafficSeriesPoint = z.infer<typeof trafficSeriesPointSchema>
 
@@ -669,6 +685,28 @@ export const trafficEventsResponseSchema = z.object({
   series: z.object({
     granularity: trafficSeriesGranularitySchema,
     points: z.array(trafficSeriesPointSchema),
+    /**
+     * Earliest event ever observed for this project, across ALL of its traffic
+     * sources, or null when nothing has been recorded. Buckets before it were
+     * not measured. Earliest-across-sources is deliberate: the band answers
+     * "before this we have nothing", and if any source has data we do not have
+     * nothing. The cost is that a source connected much later hides its own
+     * early gap, which is the better error than marking real data unmeasured.
+     */
+    coverageStart: z.string().nullable(),
+    /**
+     * Least-squares fit per charted metric, over the densified points.
+     *
+     * Fitted HERE rather than in a chart component: a regression computed in the
+     * UI is invisible to the CLI and to any other consumer, which is the
+     * UI/CLI parity rule. `null` for a metric with fewer than two observations,
+     * so a caller renders "no trend" instead of a fabricated flat line.
+     */
+    trends: z.object({
+      crawlerContentHits: linearTrendSchema.nullable(),
+      aiUserFetchHits: linearTrendSchema.nullable(),
+      aiReferralLandedHits: linearTrendSchema.nullable(),
+    }),
   }),
   totals: z.object({
     /** Total classified-crawler hits across the window. UNCHANGED contract. */

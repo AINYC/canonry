@@ -5032,6 +5032,8 @@ describe('GET /traffic/events', () => {
         aiUserFetchHits: 0,
         aiReferralHits: 0,
         aiReferralLandedHits: 0,
+        crawlerContentHits: 7,
+        measured: true,
       })
       expect(body.series.points[45].crawlerHits).toBe(11)
       expect(body.series.points.reduce((sum: number, point: { crawlerHits: number }) => sum + point.crawlerHits, 0))
@@ -5157,6 +5159,358 @@ describe('crawler-hit content/infra segmentation', () => {
       expect(byPath.get('/robots.txt')).toBe('robots')
       expect(byPath.get('/styles/app.css')).toBe('asset')
       expect(byPath.get('/report.pdf')).toBe('other')
+    } finally { await h.close() }
+  })
+
+  /**
+   * The daily series is what the Activity chart draws. `crawlerHits` is the full
+   * count, so a day of sitemap re-fetches inflates it; `crawlerContentHits` is
+   * the part that is a real page. Charting the former under "pages crawled"
+   * reports infrastructure as reading, which is the whole reason this field
+   * exists, so assert the two DISAGREE here rather than that either is non-zero.
+   */
+  it('splits content from infrastructure per day in the series, not just in the totals', async () => {
+    const { h } = await mixedPathHarness()
+    try {
+      const res = await h.app.inject({
+        method: 'GET',
+        // 24h explicitly. This previously read `sinceMinutes=1440` and only
+        // worked because 1440 minutes happens to equal the ignored default.
+        url: `/api/v1/projects/test-project/traffic/events?since=${encodeURIComponent(new Date(Date.now() - 24 * 60 * 60_000).toISOString())}&granularity=day`,
+      })
+      expect(res.statusCode).toBe(200)
+      const body = JSON.parse(res.payload)
+
+      const sum = (key: string) => body.series.points
+        .reduce((acc: number, pt: Record<string, number>) => acc + pt[key], 0)
+
+      const total = EXPECTED_SEGMENTS.content + EXPECTED_SEGMENTS.sitemap
+        + EXPECTED_SEGMENTS.robots + EXPECTED_SEGMENTS.asset + EXPECTED_SEGMENTS.other
+      expect(sum('crawlerHits')).toBe(total)
+      expect(sum('crawlerContentHits')).toBe(EXPECTED_SEGMENTS.content)
+      // The point of the field: the two must not be the same number here.
+      expect(sum('crawlerContentHits')).toBeLessThan(sum('crawlerHits'))
+
+      // The series must agree with the totals object on the same request.
+      expect(sum('crawlerHits')).toBe(body.totals.crawlerHits)
+      expect(sum('crawlerContentHits')).toBe(body.totals.crawlerContentHits)
+
+      // Every point carries the key, including zero-filled days, and never exceeds its own total.
+      for (const pt of body.series.points) {
+        expect(typeof pt.crawlerContentHits).toBe('number')
+        expect(pt.crawlerContentHits).toBeLessThanOrEqual(pt.crawlerHits)
+      }
+    } finally { await h.close() }
+  })
+  /**
+   * Review finding: the first version grouped the series by (bucket, path), so a
+   * site with many distinct paths materialized paths x buckets rows before any
+   * limit applied. This pins the fix: many distinct paths across many days must
+   * still return one row per bucket, with the content split intact.
+   *
+   * Rows are inserted directly, like the 90-day series test, because the sync
+   * path time-filters anything older than its window.
+   */
+  /**
+   * `sinceMinutes` is the sync body parameter. Sent here it used to be ignored
+   * and the window quietly fell back to 24 hours, so a caller asking for 90 days
+   * got a plausible answer for the wrong range. That cost real debugging time
+   * while writing the test above: the data looked missing when the window was
+   * simply wrong. Fail loudly instead.
+   */
+  /**
+   * A window that reaches back before recording began must say so. Those
+   * buckets read 0 because nothing was being recorded, not because nothing
+   * happened, and a chart that draws them as a measured zero invents a quiet
+   * period. Operator ruling: coverageStart is the EARLIEST observed event,
+   * earliest across all of the project's sources.
+   */
+  it('marks buckets before the first observation as unmeasured', async () => {
+    const { h } = await mixedPathHarness()
+    try {
+      const res = await h.app.inject({
+        method: 'GET',
+        // 30 days back, well before this harness's minutes-old fixture.
+        url: `/api/v1/projects/test-project/traffic/events?since=${encodeURIComponent(new Date(Date.now() - 30 * 24 * 60 * 60_000).toISOString())}&granularity=day`,
+      })
+      expect(res.statusCode).toBe(200)
+      const body = JSON.parse(res.payload)
+
+      expect(typeof body.series.coverageStart).toBe('string')
+      const points = body.series.points as Array<{ bucket: string; measured: boolean; crawlerHits: number }>
+
+      // Both states must be present, or the test proves nothing.
+      expect(points.some((pt) => !pt.measured)).toBe(true)
+      expect(points.some((pt) => pt.measured)).toBe(true)
+
+      const coverageDay = String(body.series.coverageStart).slice(0, 10)
+      for (const pt of points) {
+        expect(pt.measured).toBe(pt.bucket.slice(0, 10) >= coverageDay)
+        // An unmeasured bucket must never carry hits: that would mean we
+        // recorded something before we claim recording began.
+        if (!pt.measured) expect(pt.crawlerHits).toBe(0)
+      }
+
+      // The fit must not run across the unmeasured lead-in. Asserting an exact
+      // measured-day count was wall-clock dependent: the harness writes events
+      // an hour back, so a run between 00:00 and ~01:00 UTC straddles midnight
+      // and produces TWO measured days instead of one, failing for that hour
+      // only. Assert the invariant instead of the incidental count.
+      const measuredDays = points.filter((pt) => pt.measured).length
+      const trend = body.series.trends.crawlerContentHits
+      if (trend !== null) {
+        // Whatever the fit used, it can never include an unmeasured bucket, and
+        // the trailing partial bucket is excluded too.
+        expect(trend.n).toBeLessThanOrEqual(measuredDays)
+        expect(trend.startIndex).toBeGreaterThanOrEqual(points.findIndex((pt) => pt.measured))
+      }
+    } finally { await h.close() }
+  })
+
+  /**
+   * Review finding: `until` defaults to now, so the newest daily bucket holds
+   * only the elapsed fraction of the current UTC day. Fitting through it makes a
+   * flat site read as declining, every time, for everyone. Same class of error
+   * as the leading unmeasured edge, which was already guarded.
+   *
+   * The fixture is deliberately FLAT on the complete days with a small partial
+   * today. A fit that includes today returns a negative slope; one that excludes
+   * it returns ~0.
+   */
+  it('excludes the trailing partial bucket from the trend fit', async () => {
+    const { h, sourceId } = await mixedPathHarness()
+    try {
+      const source = h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()!
+      const writtenAt = new Date().toISOString()
+      const row = (tsHour: string, pathNormalized: string, hits: number) => ({
+        projectId: source.projectId, sourceId, tsHour,
+        botId: 'openai-gptbot', operator: 'OpenAI', verificationStatus: 'claimed_unverified' as const,
+        pathNormalized, status: 200, hits, sampledUserAgent: 'GPTBot/1.0',
+        createdAt: writtenAt, updatedAt: writtenAt,
+      })
+
+      // Five complete days flat at 100, then a small slice for today.
+      const rows = []
+      for (let back = 5; back >= 1; back--) {
+        const d = new Date(); d.setUTCDate(d.getUTCDate() - back); d.setUTCHours(12, 0, 0, 0)
+        rows.push(row(d.toISOString(), `/blog/day-${back}`, 100))
+      }
+      const today = new Date(); today.setUTCHours(0, 30, 0, 0)
+      rows.push(row(today.toISOString(), '/blog/today', 4))
+      h.db.insert(crawlerEventsHourly).values(rows).run()
+
+      const since = new Date(); since.setUTCDate(since.getUTCDate() - 7)
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/projects/test-project/traffic/events?since=${encodeURIComponent(since.toISOString())}&granularity=day`,
+      })
+      expect(res.statusCode).toBe(200)
+      const body = JSON.parse(res.payload)
+      const trend = body.series.trends.crawlerContentHits
+      expect(trend).not.toBeNull()
+
+      // The partial day must not be in the fit. Including it drags the slope
+      // sharply negative on a series that is flat.
+      const lastIndex = body.series.points.length - 1
+      expect(trend.endIndex).toBeLessThan(lastIndex)
+      expect(trend.slope).toBeGreaterThan(-20)
+    } finally { await h.close() }
+  })
+
+  /**
+   * Review finding: the trailing guard had a mirror image nobody wrote. The
+   * FIRST measured bucket is partial whenever recording began inside it, and
+   * `measured` cannot see that (it compares at bucket granularity, so the bucket
+   * holding `coverageStart` reads as whole). A site flat at 10 hits/hour whose
+   * source connected at 18:00 contributes a short first day against full
+   * neighbours and the fit reports a confident CLIMB for flat traffic.
+   *
+   * Fixture: one partial first day at 40, then four complete days flat at 240.
+   * Including the partial day fits slope = +60/day. Excluding it fits 0.
+   */
+  it('excludes the partial LEADING bucket from the trend fit', async () => {
+    const { h, sourceId } = await mixedPathHarness()
+    try {
+      const source = h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()!
+      const writtenAt = new Date().toISOString()
+      const row = (tsHour: string, pathNormalized: string, hits: number) => ({
+        projectId: source.projectId, sourceId, tsHour,
+        botId: 'openai-gptbot', operator: 'OpenAI', verificationStatus: 'claimed_unverified' as const,
+        pathNormalized, status: 200, hits, sampledUserAgent: 'GPTBot/1.0',
+        createdAt: writtenAt, updatedAt: writtenAt,
+      })
+
+      const rows = []
+      // Recording begins late on day-5: a real partial day, not a quiet one.
+      const first = new Date(); first.setUTCDate(first.getUTCDate() - 5); first.setUTCHours(18, 0, 0, 0)
+      rows.push(row(first.toISOString(), '/blog/first', 40))
+      // Four COMPLETE days, perfectly flat.
+      for (let back = 4; back >= 1; back--) {
+        const d = new Date(); d.setUTCDate(d.getUTCDate() - back); d.setUTCHours(12, 0, 0, 0)
+        rows.push(row(d.toISOString(), `/blog/day-${back}`, 240))
+      }
+      h.db.insert(crawlerEventsHourly).values(rows).run()
+
+      const since = new Date(); since.setUTCDate(since.getUTCDate() - 7)
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/projects/test-project/traffic/events?since=${encodeURIComponent(since.toISOString())}&granularity=day`,
+      })
+      expect(res.statusCode).toBe(200)
+      const body = JSON.parse(res.payload)
+      const points = body.series.points as { measured: boolean }[]
+      const trend = body.series.trends.crawlerContentHits
+      expect(trend).not.toBeNull()
+
+      // The fit must START AFTER the first measured bucket: that bucket is a
+      // fraction of a day and was read as a whole one.
+      const firstMeasured = points.findIndex((pt) => pt.measured)
+      expect(firstMeasured).toBeGreaterThanOrEqual(0)
+      expect(trend.startIndex).toBeGreaterThan(firstMeasured)
+
+      // Flat traffic must not report growth. Including the partial day fits +60.
+      expect(trend.slope).toBeLessThan(10)
+      expect(Math.abs(trend.slope)).toBeLessThan(10)
+    } finally { await h.close() }
+  })
+
+  /**
+   * Review finding: an HOUR bucket is `ts_hour`, already a full ISO instant, so
+   * appending a time built `...000Z:00:00.000Z`, which parses to NaN. The
+   * `Number.isFinite` guard then failed and `trailingBucketIsPartial` was false
+   * for every hourly series ever served: the partial-hour exclusion was dead
+   * code, and flat traffic read mid-hour reported a decline.
+   *
+   * Fixture: five complete hours flat at 100, current hour at 4.
+   */
+  it('excludes the partial trailing bucket on the HOURLY series', async () => {
+    const { h, sourceId } = await mixedPathHarness()
+    try {
+      const source = h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()!
+      const writtenAt = new Date().toISOString()
+      const row = (tsHour: string, pathNormalized: string, hits: number) => ({
+        projectId: source.projectId, sourceId, tsHour,
+        botId: 'openai-gptbot', operator: 'OpenAI', verificationStatus: 'claimed_unverified' as const,
+        pathNormalized, status: 200, hits, sampledUserAgent: 'GPTBot/1.0',
+        createdAt: writtenAt, updatedAt: writtenAt,
+      })
+
+      const rows = []
+      for (let back = 5; back >= 1; back--) {
+        const d = new Date(); d.setUTCMinutes(0, 0, 0); d.setUTCHours(d.getUTCHours() - back)
+        rows.push(row(d.toISOString(), `/blog/hour-${back}`, 100))
+      }
+      const thisHour = new Date(); thisHour.setUTCMinutes(0, 0, 0)
+      rows.push(row(thisHour.toISOString(), '/blog/now', 4))
+      h.db.insert(crawlerEventsHourly).values(rows).run()
+
+      const since = new Date(); since.setUTCMinutes(0, 0, 0); since.setUTCHours(since.getUTCHours() - 6)
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/projects/test-project/traffic/events?since=${encodeURIComponent(since.toISOString())}&granularity=hour`,
+      })
+      expect(res.statusCode).toBe(200)
+      const body = JSON.parse(res.payload)
+      const trend = body.series.trends.crawlerContentHits
+      expect(trend).not.toBeNull()
+
+      // The in-progress hour must be out of the fit, exactly as the daily
+      // series already did. This is the assertion that was silently vacuous.
+      const lastIndex = body.series.points.length - 1
+      expect(trend.endIndex).toBeLessThan(lastIndex)
+      // Flat traffic must not report a decline.
+      expect(trend.slope).toBeGreaterThan(-20)
+    } finally { await h.close() }
+  })
+
+  it('rejects sinceMinutes rather than silently answering for 24 hours', async () => {
+    const { h } = await mixedPathHarness()
+    try {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: '/api/v1/projects/test-project/traffic/events?sinceMinutes=14400&granularity=day',
+      })
+      expect(res.statusCode).toBe(400)
+      const body = JSON.parse(res.payload)
+      // The message must name the parameter that actually works.
+      expect(body.error.message).toContain('sinceMinutes')
+      expect(body.error.message).toContain('since')
+    } finally { await h.close() }
+  })
+
+  it('keeps the series bounded by buckets, not paths x buckets, on a high-cardinality site', async () => {
+    const { h, sourceId } = await mixedPathHarness()
+    try {
+      const source = h.db
+        .select()
+        .from(trafficSources)
+        .where(eq(trafficSources.id, sourceId))
+        .get()!
+      const writtenAt = new Date().toISOString()
+      const rowFor = (tsHour: string, pathNormalized: string) => ({
+        projectId: source.projectId,
+        sourceId,
+        tsHour,
+        botId: 'openai-gptbot',
+        operator: 'OpenAI',
+        verificationStatus: 'claimed_unverified' as const,
+        pathNormalized,
+        status: 200,
+        hits: 1,
+        sampledUserAgent: 'GPTBot/1.0',
+        createdAt: writtenAt,
+        updatedAt: writtenAt,
+      })
+
+      // 6 days x 20 distinct content paths, plus 2 infrastructure paths per day.
+      const rows = []
+      for (let day = 0; day < 6; day++) {
+        const d = new Date()
+        d.setUTCDate(d.getUTCDate() - (day + 1))
+        d.setUTCHours(12, 0, 0, 0)
+        const ts = d.toISOString()
+        for (let n = 0; n < 20; n++) rows.push(rowFor(ts, `/blog/post-${day}-${n}`))
+        rows.push(rowFor(ts, '/robots.txt'))
+        rows.push(rowFor(ts, '/sitemap_index.xml'))
+      }
+      h.db.insert(crawlerEventsHourly).values(rows).run()
+      // Guard the fixture before asserting on the API. When this test first
+      // failed the rows looked missing, and the cause was the QUERY window, not
+      // the insert. This separates those two failures so the next person does
+      // not go hunting in the wrong place.
+      const inserted = h.db
+        .select()
+        .from(crawlerEventsHourly)
+        .where(eq(crawlerEventsHourly.sourceId, sourceId))
+        .all()
+      expect(inserted.length).toBeGreaterThanOrEqual(rows.length)
+
+      // The events route windows on ISO `since`/`until`, NOT sinceMinutes (that
+      // is a sync body param). Passing the wrong one silently falls back to 24h.
+      const windowStart = new Date()
+      windowStart.setUTCDate(windowStart.getUTCDate() - 10)
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/projects/test-project/traffic/events?since=${encodeURIComponent(windowStart.toISOString())}&granularity=day`,
+      })
+      expect(res.statusCode).toBe(200)
+      const body = JSON.parse(res.payload)
+
+      // One point per calendar day, never one per path.
+      const buckets = body.series.points.map((pt: { bucket: string }) => pt.bucket)
+      expect(new Set(buckets).size).toBe(buckets.length)
+      expect(buckets.length).toBeLessThan(40)
+
+      const sum = (k: string) => body.series.points
+        .reduce((a: number, pt: Record<string, number>) => a + pt[k], 0)
+      // 120 content rows and 12 infrastructure rows ON TOP of the harness
+      // fixture, which is already inside this window. The split must survive the
+      // bounded query, not just the total.
+      const fixtureTotal = EXPECTED_SEGMENTS.content + EXPECTED_SEGMENTS.sitemap
+        + EXPECTED_SEGMENTS.robots + EXPECTED_SEGMENTS.asset + EXPECTED_SEGMENTS.other
+      expect(sum('crawlerContentHits')).toBe(120 + EXPECTED_SEGMENTS.content)
+      expect(sum('crawlerHits')).toBe(132 + fixtureTotal)
+      expect(sum('crawlerContentHits')).toBeLessThan(sum('crawlerHits'))
     } finally { await h.close() }
   })
 
