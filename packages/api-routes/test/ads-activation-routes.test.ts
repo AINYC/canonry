@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { and, eq } from 'drizzle-orm'
 import {
   ADS_ACTIVATE_SCOPE,
+  ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES,
+  ADS_ACTIVATION_MAX_ENTITIES,
   ADS_APPROVE_SCOPE,
   AdsActivationEntityTypes,
   AdsActivationGrantStates,
@@ -35,7 +37,10 @@ import {
   hashAdsActivationManifest,
   hashAdsActivationOperationRequest,
 } from '../src/ads-activation.js'
-import { registerAdsActivationRoutes } from '../src/ads-activation-routes.js'
+import {
+  registerAdsActivationRoutes,
+  resolveAdsActivationMaxEntities,
+} from '../src/ads-activation-routes.js'
 
 const MANIFEST: AdsActivationManifest = {
   campaign: {
@@ -1701,5 +1706,233 @@ describe('ads approval-bound activation routes', () => {
     expect(ctx.db.select().from(adsActivationGrants)
       .where(eq(adsActivationGrants.id, grant.id)).get()?.state)
       .toBe(AdsActivationGrantStates.unknown)
+  })
+})
+
+describe('operational activation entity cap', () => {
+  const ENV_VAR = 'CANONRY_ADS_ACTIVATION_MAX_ENTITIES'
+  let ctx: ReturnType<typeof buildHarness>
+  let originalCap: string | undefined
+
+  beforeEach(async () => {
+    originalCap = process.env[ENV_VAR]
+    delete process.env[ENV_VAR]
+    ctx = buildHarness()
+    await ctx.app.ready()
+  })
+
+  afterEach(async () => {
+    if (originalCap === undefined) delete process.env[ENV_VAR]
+    else process.env[ENV_VAR] = originalCap
+    await ctx.app.close()
+    fs.rmSync(ctx.tmpDir, { recursive: true, force: true })
+  })
+
+  /** 3 base entities (campaign + group + first ad) plus `extraAdCount` ads. */
+  function manifestWithExtraAds(extraAdCount: number): AdsActivationManifest {
+    const group = MANIFEST.campaign.adGroups[0]!
+    return {
+      campaign: {
+        ...MANIFEST.campaign,
+        adGroups: [{
+          ...group,
+          // 'ad_approved' sorts before every 'ad_extra_…' id.
+          ads: [group.ads[0]!, ...Array.from({ length: extraAdCount }, (_, index) => ({
+            id: `ad_extra_${String(index).padStart(4, '0')}`,
+            expectedUpdatedAt: 1_000 + index,
+          }))],
+        }],
+      },
+    }
+  }
+
+  function seedExtraAds(extraAdCount: number): void {
+    for (let index = 0; index < extraAdCount; index += 1) {
+      const id = `ad_extra_${String(index).padStart(4, '0')}`
+      ctx.entities.set(id, {
+        id,
+        adGroupId: 'adgrp_approved',
+        reviewStatus: 'approved',
+        status: 'paused',
+        updatedAt: 1_000 + index,
+      })
+    }
+  }
+
+  it('resolves the cap: unset or empty means the default, a valid integer passes through', () => {
+    expect(resolveAdsActivationMaxEntities({})).toBe(ADS_ACTIVATION_MAX_ENTITIES)
+    expect(resolveAdsActivationMaxEntities({ [ENV_VAR]: '' })).toBe(ADS_ACTIVATION_MAX_ENTITIES)
+    expect(resolveAdsActivationMaxEntities({ [ENV_VAR]: '   ' })).toBe(ADS_ACTIVATION_MAX_ENTITIES)
+    expect(resolveAdsActivationMaxEntities({ [ENV_VAR]: '1' })).toBe(1)
+    expect(resolveAdsActivationMaxEntities({ [ENV_VAR]: '150' })).toBe(150)
+    expect(resolveAdsActivationMaxEntities({ [ENV_VAR]: ' 150 ' })).toBe(150)
+    expect(resolveAdsActivationMaxEntities({
+      [ENV_VAR]: String(ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES),
+    })).toBe(ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES)
+  })
+
+  it('fails closed on a set-but-invalid cap instead of silently picking one', () => {
+    const invalid = [
+      'abc', // non-numeric
+      '0', // below 1
+      '-5', // negative
+      '150.9', // fraction: never truncated
+      '150.0', // fraction notation even when whole
+      '1e3', // exponent notation
+      '0x20', // hex notation
+      '+150', // signed notation
+      '5000', // above the absolute ceiling: never clamped
+      String(ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES + 1),
+    ]
+    for (const raw of invalid) {
+      expect(
+        () => resolveAdsActivationMaxEntities({ [ENV_VAR]: raw }),
+        `expected "${raw}" to be refused`,
+      ).toThrowError(new RegExp(ENV_VAR))
+    }
+    try {
+      resolveAdsActivationMaxEntities({ [ENV_VAR]: 'abc' })
+      expect.unreachable('an invalid cap must throw')
+    } catch (error) {
+      const appError = error as { statusCode?: number; message: string }
+      expect(appError.statusCode).toBe(500)
+      expect(appError.message).toContain(ENV_VAR)
+      expect(appError.message).toContain('"abc"')
+      expect(appError.message)
+        .toContain(`between 1 and ${ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES}`)
+      expect(appError.message).toContain(`default of ${ADS_ACTIVATION_MAX_ENTITIES}`)
+    }
+  })
+
+  it('rejects a new grant above the default operational cap, before provider I/O', async () => {
+    const response = await ctx.createGrant('key_executor', manifestWithExtraAds(98)) // 101 entities
+    expect(response.statusCode).toBe(400)
+    const body = JSON.parse(response.body) as { error: { message: string; details?: unknown } }
+    expect(body.error.message).toContain(`at most ${ADS_ACTIVATION_MAX_ENTITIES} entities`)
+    expect(body.error.message).toContain(ENV_VAR)
+    expect(ctx.calls).toEqual([])
+  })
+
+  it('allows a manifest up to a raised env cap', async () => {
+    process.env[ENV_VAR] = '150'
+    seedExtraAds(147)
+    const response = await ctx.createGrant('key_executor', manifestWithExtraAds(147)) // 150 entities
+    expect(response.statusCode, response.body).toBe(200)
+    expect(JSON.parse(response.body).grant.state).toBe(AdsActivationGrantStates.approved)
+  })
+
+  it('rejects a manifest above a lowered env cap and names the configured limit', async () => {
+    process.env[ENV_VAR] = '50'
+    const response = await ctx.createGrant('key_executor', manifestWithExtraAds(57)) // 60 entities
+    expect(response.statusCode).toBe(400)
+    const body = JSON.parse(response.body) as { error: { message: string } }
+    expect(body.error.message).toContain('at most 50 entities')
+    expect(body.error.message).toContain(ENV_VAR)
+  })
+
+  it('refuses new grants outright under an invalid env cap, before provider I/O', async () => {
+    process.env[ENV_VAR] = '999999' // above the absolute ceiling: fails closed, never clamps
+    seedExtraAds(147)
+    const response = await ctx.createGrant('key_executor', manifestWithExtraAds(147))
+    expect(response.statusCode).toBe(500)
+    const body = JSON.parse(response.body) as { error: { message: string } }
+    expect(body.error.message).toContain(ENV_VAR)
+    expect(ctx.calls).toEqual([])
+  })
+
+  it('enforces the operational cap on a NEW activate-tree execution', async () => {
+    process.env[ENV_VAR] = '150'
+    seedExtraAds(147)
+    const approval = await ctx.createGrant('key_executor', manifestWithExtraAds(147))
+    expect(approval.statusCode, approval.body).toBe(200)
+    const grant = JSON.parse(approval.body).grant as { id: string; manifestHash: string }
+
+    delete process.env[ENV_VAR] // back to the default 100 before execution
+    const activated = await ctx.app.inject({
+      method: 'POST',
+      url: '/projects/acme/ads/campaigns/cmpn_approved/activate-tree',
+      headers: ctx.headers('key_executor'),
+      payload: {
+        operationKey: 'beta:cap:new-activation',
+        grantId: grant.id,
+        manifestHash: grant.manifestHash,
+      },
+    })
+    expect(activated.statusCode).toBe(400)
+    const body = JSON.parse(activated.body) as { error: { message: string } }
+    expect(body.error.message).toContain(`at most ${ADS_ACTIVATION_MAX_ENTITIES} entities`)
+    expect(body.error.message).toContain(ENV_VAR)
+    expect(ctx.calls.some((call) => call.startsWith('activate:'))).toBe(false)
+    expect(ctx.db.select().from(adsOperations)
+      .where(eq(adsOperations.operationKey, 'beta:cap:new-activation')).all()).toHaveLength(0)
+  })
+
+  it('never applies the cap to stored receipts: terminal replay and resume stay readable', async () => {
+    const approval = await ctx.createGrant()
+    const grant = JSON.parse(approval.body).grant as { id: string; manifestHash: string }
+    const payload = {
+      operationKey: 'beta:cap:replay',
+      grantId: grant.id,
+      manifestHash: grant.manifestHash,
+    }
+    const activated = await ctx.app.inject({
+      method: 'POST',
+      url: '/projects/acme/ads/campaigns/cmpn_approved/activate-tree',
+      headers: ctx.headers('key_executor'),
+      payload,
+    })
+    expect(activated.statusCode, activated.body).toBe(200)
+
+    process.env[ENV_VAR] = '2' // MANIFEST holds 3 entities: now above the cap
+    const replay = await ctx.app.inject({
+      method: 'POST',
+      url: '/projects/acme/ads/campaigns/cmpn_approved/activate-tree',
+      headers: ctx.headers('key_executor'),
+      payload,
+    })
+    expect(replay.statusCode, replay.body).toBe(200)
+    expect(JSON.parse(replay.body)).toMatchObject({
+      grant: { state: AdsActivationGrantStates.consumed },
+      operation: { state: AdsOperationStates.succeeded },
+    })
+    // Even a broken (fail-closed) env value must not strand a stored receipt.
+    process.env[ENV_VAR] = 'abc'
+    const resumed = await ctx.app.inject({
+      method: 'POST',
+      url: `/projects/acme/ads/operations/${payload.operationKey}/resume-activation`,
+      headers: ctx.headers('key_executor'),
+    })
+    expect(resumed.statusCode, resumed.body).toBe(200)
+  })
+
+  it('never applies the cap to reconciling a pending stored operation', async () => {
+    const approval = await ctx.createGrant()
+    const grant = JSON.parse(approval.body).grant as { id: string; manifestHash: string }
+    const payload = {
+      operationKey: 'beta:cap:pending-resume',
+      grantId: grant.id,
+      manifestHash: grant.manifestHash,
+    }
+    ctx.failVerifyAfter(1)
+    const interrupted = await ctx.app.inject({
+      method: 'POST',
+      url: '/projects/acme/ads/campaigns/cmpn_approved/activate-tree',
+      headers: ctx.headers('key_executor'),
+      payload,
+    })
+    expect(interrupted.statusCode).toBe(502)
+
+    process.env[ENV_VAR] = '2' // MANIFEST holds 3 entities: now above the cap
+    const resumed = await ctx.app.inject({
+      method: 'POST',
+      url: '/projects/acme/ads/campaigns/cmpn_approved/activate-tree',
+      headers: ctx.headers('key_executor'),
+      payload,
+    })
+    expect(resumed.statusCode, resumed.body).toBe(200)
+    expect(JSON.parse(resumed.body)).toMatchObject({
+      grant: { state: AdsActivationGrantStates.consumed },
+      operation: { state: AdsOperationStates.succeeded },
+    })
   })
 })

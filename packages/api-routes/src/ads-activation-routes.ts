@@ -3,6 +3,8 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { and, asc, eq, gt, isNotNull, isNull, lte, or, sql } from 'drizzle-orm'
 import {
   ADS_ACTIVATE_SCOPE,
+  ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES,
+  ADS_ACTIVATION_MAX_ENTITIES,
   ADS_APPROVE_SCOPE,
   AdsActivationVersionPolicies,
   AdsActivationGrantStates,
@@ -19,6 +21,7 @@ import {
   adsActivationGrantRevokeRequestSchema,
   adsOperationStepDtoSchema,
   alreadyExists,
+  countAdsActivationManifestEntities,
   forbidden,
   internalError,
   notFound,
@@ -600,6 +603,82 @@ function countManifest(manifest: AdsActivationGrantDto['manifest']): {
   return {
     adGroupCount: manifest.campaign.adGroups.length,
     adCount: manifest.campaign.adGroups.reduce((count, group) => count + group.ads.length, 0),
+  }
+}
+
+/**
+ * Resolve the OPERATIONAL entity cap for new activation approvals and
+ * executions from the environment.
+ *
+ * This exists because one deployment operating managed tenants needs to tune
+ * how large an approved campaign tree may be without shipping code. The cap
+ * is an entry-point policy, deliberately NOT part of
+ * `adsActivationManifestSchema`: that schema participates in canonical
+ * manifest hashing and validates STORED manifests, so it keeps the fixed
+ * `ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES` ceiling and must never tighten under
+ * configuration.
+ *
+ * Read per request so an operator restart is the only deployment step.
+ *
+ * FAIL CLOSED on a set-but-invalid value. This gate sits on a paid-mutation
+ * path: an operator who set the cap believes a specific bound is in force, so
+ * silently substituting the default (or truncating a fraction, or clamping an
+ * over-ceiling value) would run activations under a cap nobody chose. Only an
+ * UNSET or empty variable means "use the default"; anything else must be a
+ * whole base-10 integer between 1 and `ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES`,
+ * and any other value refuses new activations until the env is fixed.
+ */
+export function resolveAdsActivationMaxEntities(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const raw = env.CANONRY_ADS_ACTIVATION_MAX_ENTITIES
+  if (raw === undefined || raw.trim() === '') return ADS_ACTIVATION_MAX_ENTITIES
+  const trimmed = raw.trim()
+  const parsed = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN
+  if (
+    !Number.isSafeInteger(parsed)
+    || parsed < 1
+    || parsed > ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES
+  ) {
+    throw internalError(
+      `CANONRY_ADS_ACTIVATION_MAX_ENTITIES is set to the invalid value "${raw}".`
+        + ` It must be a whole number between 1 and ${ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES}`
+        + ` (unset it to use the default of ${ADS_ACTIVATION_MAX_ENTITIES}).`
+        + ' New ads activations are refused until the variable is fixed.',
+      {
+        envVar: 'CANONRY_ADS_ACTIVATION_MAX_ENTITIES',
+        value: raw,
+        min: 1,
+        max: ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES,
+        default: ADS_ACTIVATION_MAX_ENTITIES,
+      },
+    )
+  }
+  return parsed
+}
+
+/**
+ * Enforce the operational cap where a caller-assembled manifest enters the
+ * system: grant creation and a NEW activate-tree execution. Never called for
+ * reading, replaying, or reconciling a stored operation: a receipt approved
+ * under a larger configured cap must stay recoverable after the cap shrinks.
+ */
+function enforceAdsActivationOperationalCap(
+  manifest: AdsActivationGrantDto['manifest'],
+): void {
+  const maxEntities = resolveAdsActivationMaxEntities()
+  const entityCount = countAdsActivationManifestEntities(manifest)
+  if (entityCount > maxEntities) {
+    throw validationError(
+      `New ads activations may contain at most ${maxEntities} entities`
+        + ' (raise CANONRY_ADS_ACTIVATION_MAX_ENTITIES to change the operational cap)',
+      {
+        entityCount,
+        maxEntities,
+        absoluteMaxEntities: ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES,
+        envVar: 'CANONRY_ADS_ACTIVATION_MAX_ENTITIES',
+      },
+    )
   }
 }
 
@@ -1206,6 +1285,7 @@ export function registerAdsActivationRoutes(
       const approver = requireAuthenticatedKey(request)
       const project = resolveProject(app.db, request.params.name)
       const body = parseBody(adsActivationGrantCreateRequestSchema, request.body)
+      enforceAdsActivationOperationalCap(body.manifest)
       const now = new Date()
       const expiresAt = Date.parse(body.expiresAt)
       if (
@@ -1406,6 +1486,12 @@ export function registerAdsActivationRoutes(
       }
       if (grant.manifestHash !== body.manifestHash) {
         throw validationError('The activation grant does not match the requested manifest hash')
+      }
+      // Only a NEW execution is capped. A grant that already owns an
+      // operation is being replayed or reconciled, and a stored receipt must
+      // stay recoverable even after the operational cap shrinks.
+      if (!grant.operationId) {
+        enforceAdsActivationOperationalCap(grant.manifest)
       }
       try {
         const terminal = terminalActivationResponse(app, opts, grant, body.operationKey)

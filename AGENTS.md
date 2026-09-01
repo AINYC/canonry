@@ -196,6 +196,17 @@ canonry ads operation resume-activation <project> --operation-key <key> # exact-
 canonry ads activation-grant create <project> --input <json-file|-> # human approval: exact tree + advertiser account + executor key id + expiry
 canonry ads activation-grant revoke <project> <grant-id>            # revoke an unused grant
 canonry ads campaign activate-tree <project> <campaign-id> --input <json-file|-> # grant-bound agent execution
+# Activation manifest entity caps: the manifest SCHEMA enforces a fixed absolute ceiling of
+# 1,000 entities (campaign + ad groups + ads). It participates in canonical manifest hashing
+# and validates stored manifests, so it is never configurable and never tightens. Separately,
+# the two entry points that accept a caller-assembled manifest (activation-grant creation and
+# a NEW activate-tree execution) enforce an OPERATIONAL cap, default 100, tunable per
+# deployment via CANONRY_ADS_ACTIVATION_MAX_ENTITIES (unset/empty = the default; any SET
+# value must be a whole number between 1 and 1000 — anything else FAILS CLOSED, refusing new
+# grant creations and activate-tree executions until the env is fixed, because silently
+# substituting a cap nobody chose on a paid-mutation path is worse than refusing). Stored
+# receipts are never re-capped: replay, resume-activation, and reconciliation of an existing
+# operation ignore the operational cap.
 canonry ads sync <project>                            # trigger an ads-sync run
 canonry ads campaigns <project> [--format json|jsonl] # snapshots incl. context hints
 canonry ads insights <project> [--level campaign|ad_group] [--entity <id>] [--from <d>] [--to <d>] [--format json|jsonl]

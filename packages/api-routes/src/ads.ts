@@ -93,6 +93,7 @@ import type {
 } from '@ainyc/canonry-contracts'
 import { adsConnections, adsCampaigns, adsAdGroups, adsAds, adsInsightsDaily, adsOperations, projects, runs } from '@ainyc/canonry-db'
 import { requireAdminSession, requirePaidReadScope, requireScope } from './auth.js'
+import { createMemoizedAdsActivationProvider } from './ads-activation.js'
 import { registerAdsActivationRoutes } from './ads-activation-routes.js'
 import {
   buildLiveEntityComparison,
@@ -2190,22 +2191,14 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
             entity: { ...entity, status: entity.status, updatedAt: entity.updatedAt },
           })
         },
-        provider: {
+        // getAdGroup/getAd are list-derived (no single-entity upstream read),
+        // so the memoized provider shares one list walk per parent across the
+        // whole verification pass and clears its cache on every mutation —
+        // see createMemoizedAdsActivationProvider for the invariants.
+        provider: createMemoizedAdsActivationProvider({
           getAccount: refreshAccount,
           getCampaign: (id) => operator.getCampaign(apiKey, id),
-          getAdGroup: async (id, campaignId) => {
-            const entity = (await operator.listAdGroups(apiKey, campaignId))
-              .find((candidate) => candidate.id === id)
-            if (!entity) throw new Error('OpenAI Ads ad group was not found under the approved campaign')
-            return entity
-          },
           listAdGroups: (campaignId) => operator.listAdGroups(apiKey, campaignId),
-          getAd: async (id, adGroupId) => {
-            const entity = (await operator.listAds(apiKey, adGroupId))
-              .find((candidate) => candidate.id === id)
-            if (!entity) throw new Error('OpenAI Ads ad was not found under the approved ad group')
-            return entity
-          },
           listAds: (adGroupId) => operator.listAds(apiKey, adGroupId),
           activateCampaign: (id) => activateCampaign(apiKey, id),
           activateAdGroup: (id) => activateAdGroup(apiKey, id),
@@ -2213,7 +2206,7 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
           pauseCampaign: (id) => operator.pauseCampaign(apiKey, id),
           pauseAdGroup: (id) => operator.pauseAdGroup(apiKey, id),
           pauseAd: (id) => operator.pauseAd(apiKey, id),
-        },
+        }),
       }
     },
     toOperationDto: operationDto,

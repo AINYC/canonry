@@ -4595,7 +4595,7 @@ export const postApiV1ProjectsByNameAdsOperationsByOperationKeyResumeActivationM
 /**
  * Approve one exact paused OpenAI Ads campaign tree for activation
  *
- * Human-only approval surface. The authenticated ads.approve key is recorded as approver and must differ from the named executor key. Canonry verifies account eligibility, exact parent-child membership, paused state, upstream timestamps, and ad review approval before issuing a short-lived single-use grant.
+ * Human-only approval surface. The authenticated ads.approve key is recorded as approver and must differ from the named executor key. Canonry verifies account eligibility, exact parent-child membership, paused state, upstream timestamps, and ad review approval before issuing a short-lived single-use grant. New grants are refused when the manifest exceeds the deployment's operational entity cap (default 100, tunable via CANONRY_ADS_ACTIVATION_MAX_ENTITIES to a whole number between 1 and the structural ceiling of 1000; a set-but-invalid value fails closed and refuses new grants until fixed).
  */
 export const postApiV1ProjectsByNameAdsActivationGrantsMutation = (options?: Partial<Options<PostApiV1ProjectsByNameAdsActivationGrantsData>>): UseMutationOptions<PostApiV1ProjectsByNameAdsActivationGrantsResponse, PostApiV1ProjectsByNameAdsActivationGrantsError, Options<PostApiV1ProjectsByNameAdsActivationGrantsData>> => {
     const mutationOptions: UseMutationOptions<PostApiV1ProjectsByNameAdsActivationGrantsResponse, PostApiV1ProjectsByNameAdsActivationGrantsError, Options<PostApiV1ProjectsByNameAdsActivationGrantsData>> = {
@@ -4633,7 +4633,7 @@ export const postApiV1ProjectsByNameAdsActivationGrantsByGrantIdRevokeMutation =
 /**
  * Execute a grant-bound OpenAI Ads campaign-tree activation
  *
- * Requires ads.activate and a nonexpired single-use grant bound to the exact executor key, project, advertiser account, manifest hash, campaign, entity IDs, and upstream timestamps. Canonry activates ads first, then ad groups, then the campaign; every step is durably checkpointed and verified. Failure rolls back the campaign before children and ambiguous outcomes fail closed as unknown.
+ * Requires ads.activate and a nonexpired single-use grant bound to the exact executor key, project, advertiser account, manifest hash, campaign, entity IDs, and upstream timestamps. Canonry activates ads first, then ad groups, then the campaign; every step is durably checkpointed and verified. Failure rolls back the campaign before children and ambiguous outcomes fail closed as unknown. New executions are refused when the manifest exceeds the deployment's operational entity cap (default 100, tunable via CANONRY_ADS_ACTIVATION_MAX_ENTITIES to a whole number between 1 and the structural ceiling of 1000; a set-but-invalid value fails closed and refuses new executions until fixed); stored receipts replay and reconcile regardless.
  */
 export const postApiV1ProjectsByNameAdsCampaignsByIdActivateTreeMutation = (options?: Partial<Options<PostApiV1ProjectsByNameAdsCampaignsByIdActivateTreeData>>): UseMutationOptions<PostApiV1ProjectsByNameAdsCampaignsByIdActivateTreeResponse, PostApiV1ProjectsByNameAdsCampaignsByIdActivateTreeError, Options<PostApiV1ProjectsByNameAdsCampaignsByIdActivateTreeData>> => {
     const mutationOptions: UseMutationOptions<PostApiV1ProjectsByNameAdsCampaignsByIdActivateTreeResponse, PostApiV1ProjectsByNameAdsCampaignsByIdActivateTreeError, Options<PostApiV1ProjectsByNameAdsCampaignsByIdActivateTreeData>> = {
