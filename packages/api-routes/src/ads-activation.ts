@@ -257,6 +257,115 @@ export interface AdsActivationProvider {
   pauseAd(id: string): Promise<unknown>
 }
 
+/**
+ * The raw per-call reads and mutations a host wires an activation provider
+ * from. The upstream API has no single-entity ad-group or ad read, so
+ * `getAdGroup` / `getAd` are derived from the parent-scoped lists by
+ * {@link createMemoizedAdsActivationProvider}.
+ */
+export interface AdsActivationProviderSource {
+  getAccount(): Promise<AdsActivationAccountSnapshot>
+  getCampaign(id: string): Promise<AdsActivationEntitySnapshot>
+  listAdGroups(campaignId: string): Promise<AdsActivationEntitySnapshot[]>
+  listAds(adGroupId: string): Promise<AdsActivationEntitySnapshot[]>
+  activateCampaign(id: string): Promise<unknown>
+  activateAdGroup(id: string): Promise<unknown>
+  activateAd(id: string): Promise<unknown>
+  pauseCampaign(id: string): Promise<unknown>
+  pauseAdGroup(id: string): Promise<unknown>
+  pauseAd(id: string): Promise<unknown>
+}
+
+/**
+ * Build an {@link AdsActivationProvider} whose entity reads memoize the
+ * parent-scoped list results within THIS provider instance.
+ *
+ * Why: `getAdGroup` / `getAd` are implemented as "list the parent's children
+ * and find by id" because the upstream API has no single-entity read. The
+ * activation flows (preflight, version refresh, recovery) read every entity in
+ * the approved tree, so without memoization a tree of N entities costs about N
+ * full paginated list walks — quadratic in provider requests, and a manifest
+ * may now hold up to the 1,000-entity structural ceiling. With memoization a
+ * pure verification pass costs exactly one `listAdGroups` walk plus one
+ * `listAds` walk per ad group.
+ *
+ * Staleness safety: every mutation (`activate*` / `pause*`) clears the WHOLE
+ * cache in a `finally`, so a postcondition read after a mutation — the
+ * active-checkpoint verification after `activateTarget`, the paused
+ * verification after `pauseTarget` in rollback and the watchdog safety paths —
+ * always re-reads the provider. The cache is cleared even when the mutation
+ * call fails, because a lost response may still have landed upstream. Reads
+ * cache the in-flight PROMISE so concurrent readers share one walk; a rejected
+ * promise is evicted so a later read retries instead of replaying the failure.
+ *
+ * Instances are per-runtime-resolution (one HTTP request, or one watchdog
+ * operation), so an entry can never outlive the flow that populated it.
+ */
+export function createMemoizedAdsActivationProvider(
+  source: AdsActivationProviderSource,
+): AdsActivationProvider {
+  const adGroupsByCampaignId = new Map<string, Promise<AdsActivationEntitySnapshot[]>>()
+  const adsByAdGroupId = new Map<string, Promise<AdsActivationEntitySnapshot[]>>()
+
+  const readThrough = (
+    cache: Map<string, Promise<AdsActivationEntitySnapshot[]>>,
+    parentId: string,
+    load: () => Promise<AdsActivationEntitySnapshot[]>,
+  ): Promise<AdsActivationEntitySnapshot[]> => {
+    const cached = cache.get(parentId)
+    if (cached) return cached
+    const pending = load()
+    cache.set(parentId, pending)
+    pending.catch(() => {
+      if (cache.get(parentId) === pending) cache.delete(parentId)
+    })
+    return pending
+  }
+
+  const invalidate = (): void => {
+    adGroupsByCampaignId.clear()
+    adsByAdGroupId.clear()
+  }
+
+  const mutate = async (run: () => Promise<unknown>): Promise<unknown> => {
+    try {
+      return await run()
+    } finally {
+      invalidate()
+    }
+  }
+
+  const listAdGroups = (campaignId: string): Promise<AdsActivationEntitySnapshot[]> =>
+    readThrough(adGroupsByCampaignId, campaignId, () => source.listAdGroups(campaignId))
+  const listAds = (adGroupId: string): Promise<AdsActivationEntitySnapshot[]> =>
+    readThrough(adsByAdGroupId, adGroupId, () => source.listAds(adGroupId))
+
+  return {
+    getAccount: () => source.getAccount(),
+    getCampaign: (id) => source.getCampaign(id),
+    listAdGroups,
+    getAdGroup: async (id, campaignId) => {
+      const entity = (await listAdGroups(campaignId))
+        .find((candidate) => candidate.id === id)
+      if (!entity) throw new Error('OpenAI Ads ad group was not found under the approved campaign')
+      return entity
+    },
+    listAds,
+    getAd: async (id, adGroupId) => {
+      const entity = (await listAds(adGroupId))
+        .find((candidate) => candidate.id === id)
+      if (!entity) throw new Error('OpenAI Ads ad was not found under the approved ad group')
+      return entity
+    },
+    activateCampaign: (id) => mutate(() => source.activateCampaign(id)),
+    activateAdGroup: (id) => mutate(() => source.activateAdGroup(id)),
+    activateAd: (id) => mutate(() => source.activateAd(id)),
+    pauseCampaign: (id) => mutate(() => source.pauseCampaign(id)),
+    pauseAdGroup: (id) => mutate(() => source.pauseAdGroup(id)),
+    pauseAd: (id) => mutate(() => source.pauseAd(id)),
+  }
+}
+
 export interface AdsActivationDependencies {
   store: AdsActivationStore
   provider: AdsActivationProvider

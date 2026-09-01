@@ -618,20 +618,43 @@ function countManifest(manifest: AdsActivationGrantDto['manifest']): {
  * `ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES` ceiling and must never tighten under
  * configuration.
  *
- * Read per request so an operator restart is the only deployment step. An
- * absent or unparseable value falls back to the default, and so does a
- * parseable value below 1; a value above
- * `ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES` clamps down to that ceiling, so a
- * bad env cannot take the bound off entirely.
+ * Read per request so an operator restart is the only deployment step.
+ *
+ * FAIL CLOSED on a set-but-invalid value. This gate sits on a paid-mutation
+ * path: an operator who set the cap believes a specific bound is in force, so
+ * silently substituting the default (or truncating a fraction, or clamping an
+ * over-ceiling value) would run activations under a cap nobody chose. Only an
+ * UNSET or empty variable means "use the default"; anything else must be a
+ * whole base-10 integer between 1 and `ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES`,
+ * and any other value refuses new activations until the env is fixed.
  */
 export function resolveAdsActivationMaxEntities(
   env: NodeJS.ProcessEnv = process.env,
 ): number {
   const raw = env.CANONRY_ADS_ACTIVATION_MAX_ENTITIES
   if (raw === undefined || raw.trim() === '') return ADS_ACTIVATION_MAX_ENTITIES
-  const parsed = Number(raw)
-  if (!Number.isFinite(parsed) || parsed < 1) return ADS_ACTIVATION_MAX_ENTITIES
-  return Math.min(ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES, Math.trunc(parsed))
+  const trimmed = raw.trim()
+  const parsed = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN
+  if (
+    !Number.isSafeInteger(parsed)
+    || parsed < 1
+    || parsed > ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES
+  ) {
+    throw internalError(
+      `CANONRY_ADS_ACTIVATION_MAX_ENTITIES is set to the invalid value "${raw}".`
+        + ` It must be a whole number between 1 and ${ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES}`
+        + ` (unset it to use the default of ${ADS_ACTIVATION_MAX_ENTITIES}).`
+        + ' New ads activations are refused until the variable is fixed.',
+      {
+        envVar: 'CANONRY_ADS_ACTIVATION_MAX_ENTITIES',
+        value: raw,
+        min: 1,
+        max: ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES,
+        default: ADS_ACTIVATION_MAX_ENTITIES,
+      },
+    )
+  }
+  return parsed
 }
 
 /**

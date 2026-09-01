@@ -1759,17 +1759,49 @@ describe('operational activation entity cap', () => {
     }
   }
 
-  it('resolves the cap from the env with clamping and an invalid-value fallback', () => {
+  it('resolves the cap: unset or empty means the default, a valid integer passes through', () => {
     expect(resolveAdsActivationMaxEntities({})).toBe(ADS_ACTIVATION_MAX_ENTITIES)
     expect(resolveAdsActivationMaxEntities({ [ENV_VAR]: '' })).toBe(ADS_ACTIVATION_MAX_ENTITIES)
-    expect(resolveAdsActivationMaxEntities({ [ENV_VAR]: 'abc' })).toBe(ADS_ACTIVATION_MAX_ENTITIES)
-    expect(resolveAdsActivationMaxEntities({ [ENV_VAR]: '0' })).toBe(ADS_ACTIVATION_MAX_ENTITIES)
-    expect(resolveAdsActivationMaxEntities({ [ENV_VAR]: '-5' })).toBe(ADS_ACTIVATION_MAX_ENTITIES)
+    expect(resolveAdsActivationMaxEntities({ [ENV_VAR]: '   ' })).toBe(ADS_ACTIVATION_MAX_ENTITIES)
     expect(resolveAdsActivationMaxEntities({ [ENV_VAR]: '1' })).toBe(1)
     expect(resolveAdsActivationMaxEntities({ [ENV_VAR]: '150' })).toBe(150)
-    expect(resolveAdsActivationMaxEntities({ [ENV_VAR]: '150.9' })).toBe(150)
-    expect(resolveAdsActivationMaxEntities({ [ENV_VAR]: '5000' }))
-      .toBe(ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES)
+    expect(resolveAdsActivationMaxEntities({ [ENV_VAR]: ' 150 ' })).toBe(150)
+    expect(resolveAdsActivationMaxEntities({
+      [ENV_VAR]: String(ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES),
+    })).toBe(ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES)
+  })
+
+  it('fails closed on a set-but-invalid cap instead of silently picking one', () => {
+    const invalid = [
+      'abc', // non-numeric
+      '0', // below 1
+      '-5', // negative
+      '150.9', // fraction: never truncated
+      '150.0', // fraction notation even when whole
+      '1e3', // exponent notation
+      '0x20', // hex notation
+      '+150', // signed notation
+      '5000', // above the absolute ceiling: never clamped
+      String(ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES + 1),
+    ]
+    for (const raw of invalid) {
+      expect(
+        () => resolveAdsActivationMaxEntities({ [ENV_VAR]: raw }),
+        `expected "${raw}" to be refused`,
+      ).toThrowError(new RegExp(ENV_VAR))
+    }
+    try {
+      resolveAdsActivationMaxEntities({ [ENV_VAR]: 'abc' })
+      expect.unreachable('an invalid cap must throw')
+    } catch (error) {
+      const appError = error as { statusCode?: number; message: string }
+      expect(appError.statusCode).toBe(500)
+      expect(appError.message).toContain(ENV_VAR)
+      expect(appError.message).toContain('"abc"')
+      expect(appError.message)
+        .toContain(`between 1 and ${ADS_ACTIVATION_ABSOLUTE_MAX_ENTITIES}`)
+      expect(appError.message).toContain(`default of ${ADS_ACTIVATION_MAX_ENTITIES}`)
+    }
   })
 
   it('rejects a new grant above the default operational cap, before provider I/O', async () => {
@@ -1798,11 +1830,14 @@ describe('operational activation entity cap', () => {
     expect(body.error.message).toContain(ENV_VAR)
   })
 
-  it('treats env values above the absolute ceiling as the ceiling, not unbounded', async () => {
-    process.env[ENV_VAR] = '999999'
+  it('refuses new grants outright under an invalid env cap, before provider I/O', async () => {
+    process.env[ENV_VAR] = '999999' // above the absolute ceiling: fails closed, never clamps
     seedExtraAds(147)
     const response = await ctx.createGrant('key_executor', manifestWithExtraAds(147))
-    expect(response.statusCode, response.body).toBe(200)
+    expect(response.statusCode).toBe(500)
+    const body = JSON.parse(response.body) as { error: { message: string } }
+    expect(body.error.message).toContain(ENV_VAR)
+    expect(ctx.calls).toEqual([])
   })
 
   it('enforces the operational cap on a NEW activate-tree execution', async () => {
@@ -1860,6 +1895,8 @@ describe('operational activation entity cap', () => {
       grant: { state: AdsActivationGrantStates.consumed },
       operation: { state: AdsOperationStates.succeeded },
     })
+    // Even a broken (fail-closed) env value must not strand a stored receipt.
+    process.env[ENV_VAR] = 'abc'
     const resumed = await ctx.app.inject({
       method: 'POST',
       url: `/projects/acme/ads/operations/${payload.operationKey}/resume-activation`,

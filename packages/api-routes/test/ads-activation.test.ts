@@ -14,6 +14,7 @@ import {
   AdsActivationError,
   AdsActivationErrorCodes,
   buildAdsActivationSteps,
+  createMemoizedAdsActivationProvider,
   enforceUnknownAdsActivationSafety,
   executeApprovedAdsActivation,
   hashAdsActivationManifest,
@@ -29,6 +30,7 @@ import {
   type AdsActivationGrantRecord,
   type AdsActivationOperationRecord,
   type AdsActivationProvider,
+  type AdsActivationProviderSource,
   type AdsActivationRequest,
   type AdsActivationStepRecord,
   type AdsActivationStepTransitionInput,
@@ -1121,5 +1123,222 @@ describe('approval-bound ads activation core', () => {
       { id: 'step_2', ordinal: 1, entityType: AdsActivationEntityTypes.ad_group },
       { id: 'step_3', ordinal: 2, entityType: AdsActivationEntityTypes.campaign },
     ])
+  })
+})
+
+describe('createMemoizedAdsActivationProvider', () => {
+  const CAMPAIGN_ID = 'cmpn_wide'
+
+  /**
+   * Counting source over a campaign tree of `groupCount` ad groups with
+   * `adsPerGroup` ads each. Every list walk and mutation is recorded so a test
+   * can assert exactly how many provider walks a flow cost.
+   */
+  function countingTreeSource(groupCount: number, adsPerGroup: number) {
+    const campaign = { id: CAMPAIGN_ID, status: 'paused', updatedAt: 100 }
+    const groups = new Map<string, AdsActivationEntitySnapshot>()
+    const ads = new Map<string, AdsActivationEntitySnapshot>()
+    for (let g = 1; g <= groupCount; g += 1) {
+      const groupId = `adgrp_${g}`
+      groups.set(groupId, {
+        id: groupId,
+        campaignId: CAMPAIGN_ID,
+        status: 'paused',
+        updatedAt: 200 + g,
+      })
+      for (let a = 1; a <= adsPerGroup; a += 1) {
+        const adId = `ad_${g}_${a}`
+        ads.set(adId, {
+          id: adId,
+          adGroupId: groupId,
+          reviewStatus: 'approved',
+          status: 'paused',
+          updatedAt: (300 + g) * 1_000 + a,
+        })
+      }
+    }
+    const calls = {
+      listAdGroups: [] as string[],
+      listAds: [] as string[],
+      mutations: [] as string[],
+    }
+    const flip = (entity: AdsActivationEntitySnapshot | undefined, status: string): void => {
+      if (!entity) throw new Error('Missing counting source entity')
+      entity.status = status
+      entity.updatedAt = (entity.updatedAt ?? 0) + 1
+    }
+    const source: AdsActivationProviderSource = {
+      getAccount: async () => ({
+        id: 'adacct_1',
+        reviewStatus: 'approved',
+        integrityReviewStatus: 'approved',
+        integrityDecision: 'allowed',
+      }),
+      getCampaign: async (id) => {
+        if (id !== CAMPAIGN_ID) throw new Error('Missing counting source campaign')
+        return { ...campaign }
+      },
+      listAdGroups: async (campaignId) => {
+        calls.listAdGroups.push(campaignId)
+        return [...groups.values()]
+          .filter((group) => group.campaignId === campaignId)
+          .map((group) => ({ ...group }))
+      },
+      listAds: async (adGroupId) => {
+        calls.listAds.push(adGroupId)
+        return [...ads.values()]
+          .filter((ad) => ad.adGroupId === adGroupId)
+          .map((ad) => ({ ...ad }))
+      },
+      activateCampaign: async (id) => {
+        calls.mutations.push(`activate:campaign:${id}`)
+        flip(campaign, 'active')
+      },
+      activateAdGroup: async (id) => {
+        calls.mutations.push(`activate:ad_group:${id}`)
+        flip(groups.get(id), 'active')
+      },
+      activateAd: async (id) => {
+        calls.mutations.push(`activate:ad:${id}`)
+        flip(ads.get(id), 'active')
+      },
+      pauseCampaign: async (id) => {
+        calls.mutations.push(`pause:campaign:${id}`)
+        flip(campaign, 'paused')
+      },
+      pauseAdGroup: async (id) => {
+        calls.mutations.push(`pause:ad_group:${id}`)
+        flip(groups.get(id), 'paused')
+      },
+      pauseAd: async (id) => {
+        calls.mutations.push(`pause:ad:${id}`)
+        flip(ads.get(id), 'paused')
+      },
+    }
+    const manifest: AdsActivationManifest = {
+      campaign: {
+        id: CAMPAIGN_ID,
+        expectedUpdatedAt: campaign.updatedAt,
+        adGroups: [...groups.values()].map((group) => ({
+          id: group.id,
+          expectedUpdatedAt: group.updatedAt!,
+          ads: [...ads.values()]
+            .filter((ad) => ad.adGroupId === group.id)
+            .map((ad) => ({ id: ad.id, expectedUpdatedAt: ad.updatedAt! })),
+        })),
+      },
+    }
+    return { source, calls, manifest }
+  }
+
+  it('verifies a whole tree with one ad-group walk and one ad walk per group, not one per entity', async () => {
+    const groupCount = 3
+    const adsPerGroup = 4 // 1 + 3 + 12 = 16 entities in the manifest
+    const { source, calls, manifest } = countingTreeSource(groupCount, adsPerGroup)
+    const provider = createMemoizedAdsActivationProvider(source)
+
+    const result = await preflightAdsActivationApproval(provider, {
+      adAccountId: 'adacct_1',
+      manifest,
+    })
+
+    expect(result.manifestHash).toBe(hashAdsActivationManifest(manifest))
+    // The exact-descendant walk lists each parent once; every per-entity
+    // getAdGroup/getAd verification read reuses those walks instead of
+    // re-listing (the previous behavior cost ~one full walk per entity).
+    expect(calls.listAdGroups).toEqual([CAMPAIGN_ID])
+    expect(calls.listAds).toHaveLength(groupCount)
+    expect([...calls.listAds].sort()).toEqual(['adgrp_1', 'adgrp_2', 'adgrp_3'])
+    expect(calls.mutations).toEqual([])
+  })
+
+  it('shares one in-flight walk between list and get reads of the same parent', async () => {
+    const { source, calls } = countingTreeSource(1, 2)
+    const provider = createMemoizedAdsActivationProvider(source)
+
+    const [listed, fetched] = await Promise.all([
+      provider.listAds('adgrp_1'),
+      provider.getAd('ad_1_2', 'adgrp_1'),
+    ])
+    expect(listed).toHaveLength(2)
+    expect(fetched.id).toBe('ad_1_2')
+    expect(calls.listAds).toEqual(['adgrp_1'])
+
+    await provider.getAdGroup('adgrp_1', CAMPAIGN_ID)
+    await provider.listAdGroups(CAMPAIGN_ID)
+    expect(calls.listAdGroups).toEqual([CAMPAIGN_ID])
+  })
+
+  it('returns fresh state on a read after a mutation through the same instance', async () => {
+    const { source, calls } = countingTreeSource(1, 1)
+    const provider = createMemoizedAdsActivationProvider(source)
+
+    expect((await provider.getAd('ad_1_1', 'adgrp_1')).status).toBe('paused')
+    expect(calls.listAds).toHaveLength(1)
+
+    await provider.activateAd('ad_1_1')
+    expect((await provider.getAd('ad_1_1', 'adgrp_1')).status).toBe('active')
+    expect(calls.listAds).toHaveLength(2)
+
+    // Every mutation clears the WHOLE cache: a campaign-level pause must also
+    // invalidate cached ad and ad-group walks (the watchdog safety path pauses
+    // the campaign first and then re-verifies descendants).
+    expect((await provider.getAdGroup('adgrp_1', CAMPAIGN_ID)).status).toBe('paused')
+    expect(calls.listAdGroups).toHaveLength(1)
+    await provider.pauseCampaign(CAMPAIGN_ID)
+    await provider.getAdGroup('adgrp_1', CAMPAIGN_ID)
+    await provider.getAd('ad_1_1', 'adgrp_1')
+    expect(calls.listAdGroups).toHaveLength(2)
+    expect(calls.listAds).toHaveLength(3)
+  })
+
+  it('invalidates the cache even when the mutation call itself fails', async () => {
+    const { source, calls } = countingTreeSource(1, 1)
+    const failingSource: AdsActivationProviderSource = {
+      ...source,
+      pauseAd: async () => {
+        throw new Error('lost response')
+      },
+    }
+    const provider = createMemoizedAdsActivationProvider(failingSource)
+
+    await provider.getAd('ad_1_1', 'adgrp_1')
+    expect(calls.listAds).toHaveLength(1)
+    await expect(provider.pauseAd('ad_1_1')).rejects.toThrow('lost response')
+    // A lost response may still have landed upstream, so the next
+    // postcondition read must go back to the provider.
+    await provider.getAd('ad_1_1', 'adgrp_1')
+    expect(calls.listAds).toHaveLength(2)
+  })
+
+  it('evicts a rejected list walk so a later read retries instead of replaying the failure', async () => {
+    const { source, calls } = countingTreeSource(1, 1)
+    let failuresLeft = 1
+    const flakySource: AdsActivationProviderSource = {
+      ...source,
+      listAds: async (adGroupId) => {
+        if (failuresLeft > 0) {
+          failuresLeft -= 1
+          calls.listAds.push(adGroupId)
+          throw new Error('transient list failure')
+        }
+        return source.listAds(adGroupId)
+      },
+    }
+    const provider = createMemoizedAdsActivationProvider(flakySource)
+
+    await expect(provider.getAd('ad_1_1', 'adgrp_1')).rejects.toThrow('transient list failure')
+    expect((await provider.getAd('ad_1_1', 'adgrp_1')).status).toBe('paused')
+    expect(calls.listAds).toHaveLength(2)
+  })
+
+  it('keeps the not-found errors for entities missing from the parent walk', async () => {
+    const { source } = countingTreeSource(1, 1)
+    const provider = createMemoizedAdsActivationProvider(source)
+
+    await expect(provider.getAdGroup('adgrp_missing', CAMPAIGN_ID))
+      .rejects.toThrow('OpenAI Ads ad group was not found under the approved campaign')
+    await expect(provider.getAd('ad_missing', 'adgrp_1'))
+      .rejects.toThrow('OpenAI Ads ad was not found under the approved ad group')
   })
 })

@@ -201,10 +201,12 @@ canonry ads campaign activate-tree <project> <campaign-id> --input <json-file|->
 # and validates stored manifests, so it is never configurable and never tightens. Separately,
 # the two entry points that accept a caller-assembled manifest (activation-grant creation and
 # a NEW activate-tree execution) enforce an OPERATIONAL cap, default 100, tunable per
-# deployment via CANONRY_ADS_ACTIVATION_MAX_ENTITIES (values above 1000 clamp down to that
-# ceiling; absent, invalid, or below-1 values fall back to the default). Stored receipts are
-# never re-capped: replay, resume-activation, and reconciliation of an existing operation
-# ignore the operational cap.
+# deployment via CANONRY_ADS_ACTIVATION_MAX_ENTITIES (unset/empty = the default; any SET
+# value must be a whole number between 1 and 1000 — anything else FAILS CLOSED, refusing new
+# grant creations and activate-tree executions until the env is fixed, because silently
+# substituting a cap nobody chose on a paid-mutation path is worse than refusing). Stored
+# receipts are never re-capped: replay, resume-activation, and reconciliation of an existing
+# operation ignore the operational cap.
 canonry ads sync <project>                            # trigger an ads-sync run
 canonry ads campaigns <project> [--format json|jsonl] # snapshots incl. context hints
 canonry ads insights <project> [--level campaign|ad_group] [--entity <id>] [--from <d>] [--to <d>] [--format json|jsonl]
