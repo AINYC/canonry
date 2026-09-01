@@ -55,6 +55,18 @@ jobs:
           next="$major.$minor.$((patch + 1))"
           npm pkg set "version=$next"
           npm pkg set "version=$next" --prefix packages/canonry
+          # `verifyDepsBeforeRun: error` (pnpm-workspace.yaml) checks every
+          # workspace manifest's name+version against the name+version recorded
+          # in node_modules/.pnpm-workspace-state-v1.json at install time. The
+          # two `npm pkg set` calls above make that snapshot stale, so the very
+          # next `pnpm <script>` — plugin:sync here, then verify and build —
+          # dies with ERR_PNPM_VERIFY_DEPS_BEFORE_RUN. Nothing is actually out
+          # of sync: a workspace version bump cannot move the lockfile, which
+          # records workspace links as `link:` targets, so `--frozen-lockfile`
+          # is a no-op resolution that only rewrites the state file. Keep this
+          # between the bump and the first pnpm script, matching the
+          # bump → install → gates order in bump-aeo-audit.yml.
+          pnpm install --frozen-lockfile
           pnpm plugin:sync
           echo "from=$current" >> "$GITHUB_OUTPUT"
           echo "to=$next" >> "$GITHUB_OUTPUT"

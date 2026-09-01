@@ -21,7 +21,14 @@ packages:
 #
 # Costs a few hundredths of a second when in sync — the check short-circuits on
 # manifest mtimes and only reads the lockfile when one is newer than the last
-# install. It cannot fire spuriously in CI, where every job installs before it
-# runs anything (.github/actions/setup), and it never blocks `pnpm install`
-# itself, so the remedy it names always works.
+# install. It never blocks `pnpm install` itself, so the remedy it names always
+# works.
+#
+# One CI caveat, learned the hard way: the recorded state includes every
+# workspace project's name AND version, so a job that REWRITES a manifest after
+# .github/actions/setup has installed — `npm pkg set version=…` in
+# refresh-crawler-ip-ranges.yml — invalidates the snapshot even though nothing
+# about the dependency graph moved, and every later `pnpm <script>` in that job
+# dies. Re-run `pnpm install --frozen-lockfile` between the rewrite and the next
+# pnpm script; it is a no-op resolution that just refreshes the state file.
 verifyDepsBeforeRun: error
