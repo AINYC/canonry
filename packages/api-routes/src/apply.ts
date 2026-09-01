@@ -102,6 +102,13 @@ export async function applyRoutes(app: FastifyInstance, opts?: ApplyRoutesOption
 
     const now = new Date().toISOString()
     const name = config.metadata.name
+    // Absent means "this apply is not managing the basket"; an explicit empty
+    // list stays a deliberate clear. Resolving absent to [] made every
+    // metadata-only converge (a control plane re-applying provider policy on
+    // boot) delete the project's whole tracked set, once mid-sweep: the
+    // in-flight snapshot inserts died on the queries FK (live 2026-08-29).
+    // Same presence-check pattern as `notifications` above.
+    const managesQueries = 'queries' in rawSpec || 'keywords' in rawSpec
     const configQueries = resolveConfigSpecQueries(config.spec)
 
     const target = app.db
@@ -207,15 +214,20 @@ export async function applyRoutes(app: FastifyInstance, opts?: ApplyRoutesOption
       // Replace queries + competitors. Query rows are the FK anchor for every
       // historical snapshot, so unchanged texts must keep their EXISTING rows —
       // delete-all + reinsert would orphan the project's whole sweep history.
-      replaceProjectQueries(tx, projectId, configQueries, now)
+      // Skipped entirely when the spec carries no queries/keywords key: absent
+      // is not empty, and the audit row is skipped with it so the log never
+      // claims a replacement that did not happen.
+      if (managesQueries) {
+        replaceProjectQueries(tx, projectId, configQueries, now)
 
-      writeAuditLog(tx, {
-        projectId,
-        actor: 'api',
-        action: 'queries.replaced',
-        entityType: 'query',
-        diff: { queries: configQueries },
-      })
+        writeAuditLog(tx, {
+          projectId,
+          actor: 'api',
+          action: 'queries.replaced',
+          entityType: 'query',
+          diff: { queries: configQueries },
+        })
+      }
 
       tx.delete(competitors).where(eq(competitors.projectId, projectId)).run()
       const normalizedCompetitors = normalizeCompetitorList(config.spec.competitors)
