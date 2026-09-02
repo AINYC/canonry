@@ -44,6 +44,12 @@ export interface VisibilityProviderResponse {
   sources?: readonly VisibilitySource[]
   searchQueries?: readonly string[]
   retrievalStatus?: VisibilityRetrievalStatus
+  /**
+   * Why an adapter produced no answer text. Read only when `answerText` is
+   * empty, so an unwritten answer says whether it was truncated, declined, or
+   * simply absent.
+   */
+  emptyAnswerReason?: string
 }
 
 export interface VisibilityProviderRequest {

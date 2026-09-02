@@ -185,6 +185,34 @@ empty sample is still an `error`: hitting a ceiling cannot upgrade one. The reas
 bypasses Turnstile, and the notice is rendered from the record status by the UI. It took one real submission through
 the form to see it.
 
+## Every Gemini call needs an explicit thinking budget
+
+Gemini 2.5 thinks by DEFAULT and bills those tokens against `maxOutputTokens`. A call that does not set
+`thinkingConfig` can therefore spend its whole allowance reasoning and return a response with NO TEXT. It presents as
+lost data, never as an error.
+
+The same bug landed three separate times before the pattern was obvious:
+
+| call | symptom | budget |
+|---|---|---|
+| `mention-extract.ts` | mentions silently unmeasured | `0` — copying names out needs no thought |
+| probe adapter | "returned no answer text", one lost answer per check | `512` of 2,400 — it simulates an engine, so some reasoning is wanted |
+| planner | "returned invalid JSON" from `JSON.parse('')`, losing every generated question | `0` of 1,200 — emitting a small JSON object needs no thought |
+
+`visibility-gemini.test.ts` drives all three through a capturing client and fails if any omits an explicit budget, or
+sets one that could consume its whole allowance. A new call site cannot inherit the default quietly.
+
+## An empty answer says which of eleven things happened
+
+`FinishReason` is a closed provider enum, and every value is mapped to a safe sentence. Mapping only the likely ones
+left the rest falling through to "contained no answer text", which is where the diagnosis had already been destroyed
+twice: the same probe failure got investigated from scratch each time because the message could not distinguish a
+truncated answer from a refused one from one never attempted.
+
+`STOP` with no text is a real, observed outcome — the model ends cleanly and writes nothing — and it reads as "the
+answer engine finished without saying anything for this question". That is a finding, not a bug: the signals stay
+`null`, because a brand cannot be absent from an answer that does not exist.
+
 ## One flaky call must not cost the whole visibility phase
 
 Three things each turned a single transient failure into TOTAL visibility loss. All three are fixed, and all three

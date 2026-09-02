@@ -62,6 +62,19 @@ const PUBLIC_PROBE_ERRORS = new Map([
   ['The provider was temporarily unavailable.', 'The answer engine was temporarily unavailable.'],
   ['The provider credentials were rejected.', 'This check could not be authorized with the answer engine.'],
   ['The provider response contained no answer text.', 'The answer engine returned no answer text.'],
+  ['The provider answer was cut off at the length limit.', 'The answer engine ran out of room mid-answer.'],
+  ['The provider declined to answer this query.', 'The answer engine declined to answer this question.'],
+  [
+    'The provider stopped the answer to avoid reciting a source.',
+    'The answer engine stopped short to avoid quoting a source.',
+  ],
+  ['The provider does not support the language of this query.', 'The answer engine does not support this language.'],
+  ['The provider ended the answer on an internal tool error.', 'The answer engine hit an internal error mid-answer.'],
+  [
+    'The provider ended the answer without writing anything.',
+    'The answer engine finished without saying anything for this question.',
+  ],
+  ['The provider stopped the answer for an unstated reason.', 'The answer engine stopped without giving a reason.'],
   ['The provider response has an invalid requested model.', 'The answer engine reported an unusable model.'],
   ['The provider request failed.', 'The answer engine did not return an answer.'],
 ])

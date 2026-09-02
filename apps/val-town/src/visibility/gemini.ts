@@ -25,9 +25,19 @@ import {
 } from './runtime.ts'
 
 export const DEFAULT_GEMINI_VISIBILITY_MODEL = 'gemini-2.5-flash'
+
+/**
+ * Thinking tokens a probe may spend, out of its `maxOutputTokens`. Bounded so
+ * reasoning can never starve the answer: an empty answer is a lost
+ * measurement, and it is indistinguishable from an engine that had nothing to
+ * say about the brand.
+ */
+export const PROBE_THINKING_BUDGET_TOKENS = 512
 const VERTEX_AI_SEARCH_PROXY_DOMAIN = 'vertexaisearch.cloud.google.com'
 const MAX_PLANNER_CONTEXT_CHARS = 12_000
-const MAX_PLANNER_OUTPUT_TOKENS = 700
+// Room for the plan itself. Thinking is disabled for this call, so the whole
+// allowance goes to the JSON; 700 had to cover reasoning too and often did not.
+const MAX_PLANNER_OUTPUT_TOKENS = 1_200
 
 export interface GeminiVisibilityAdapterOptions {
   apiKey: string
@@ -69,6 +79,17 @@ export function createGeminiVisibilityAdapter(options: GeminiVisibilityAdapterOp
               candidateCount: 1,
               temperature: 0,
               maxOutputTokens: config.maxOutputTokens,
+              // Gemini 2.5 thinks by default and bills those tokens against
+              // the SAME output allowance, so a probe could spend the whole
+              // budget reasoning and return a response with no text at all —
+              // which the runner correctly reports as "returned no answer
+              // text" and which cost a real check one of its three answers.
+              //
+              // Capped rather than disabled: this is simulating an answer
+              // engine, so some reasoning is wanted, but it must not be able
+              // to consume the answer's room. `mention-extract.ts` sets 0 for
+              // the same reason, because copying names out needs no thought.
+              thinkingConfig: { thinkingBudget: PROBE_THINKING_BUDGET_TOKENS },
               abortSignal: request.signal,
             },
           }),
@@ -114,6 +135,13 @@ export function createGeminiVisibilityQueryPlanner(options: GeminiVisibilityAdap
                 // Gemini 2.5 does not support structured output plus a built-in
                 // tool. We rely on the strict JSON/fence parser below instead.
                 tools: [{ googleSearch: {} }],
+                // The THIRD place this bit. Thinking is on by default on 2.5
+                // and is billed from `maxOutputTokens`, so the planner could
+                // spend its whole allowance reasoning, return empty text, and
+                // fail on `JSON.parse('')` as "returned invalid JSON" — taking
+                // the generated questions with it. Emitting a small JSON object
+                // needs no reasoning at all.
+                thinkingConfig: { thinkingBudget: 0 },
                 abortSignal: deadline.signal,
               },
             }),
@@ -204,15 +232,19 @@ export function normalizeGeminiVisibilityResponse(
 ): VisibilityProviderResponse {
   const model = boundedModelId(requestedModel)
   if (!model) throw new Error(`Gemini model must be at most ${MAX_MODEL_ID_CHARS} non-whitespace characters`)
+  const answerText = extractAnswerText(response)
   return {
     requestedModel: model,
     servedModel: extractServedModel(response),
-    answerText: extractAnswerText(response),
+    answerText,
     sources: extractGroundedSources(response),
     searchQueries: extractSearchQueries(response),
     // Google Search grounding is requested, but the API does not reliably
     // attest whether a search actually ran for each answer.
     retrievalStatus: 'unknown',
+    // Present only when there is no answer to explain. A normalized response
+    // that carries a reason for text it DID produce reads as a contradiction.
+    ...(answerText ? {} : { emptyAnswerReason: emptyAnswerReason(response) }),
   }
 }
 
@@ -239,6 +271,51 @@ export function extractAnswerText(response: GenerateContentResponse): string {
 
 function extractServedModel(response: GenerateContentResponse): string | null {
   return boundedModelId(asRecord(response)?.modelVersion)
+}
+
+/**
+ * The provider's whole `FinishReason` enum, mapped to a closed set of safe
+ * sentences.
+ *
+ * Mapping only the reasons that seemed likely left everything else falling
+ * through to "contained no answer text", which is where the diagnosis had been
+ * destroyed in the first place: a real probe kept failing and the generic
+ * sentence could not say whether the answer was truncated, refused, or never
+ * attempted. Enumerate the source enum rather than guess at a useful subset.
+ *
+ * `STOP` with no text is its own finding: the model ended cleanly and wrote
+ * nothing, which usually means the grounded search returned it nothing to say.
+ */
+const EMPTY_ANSWER_REASONS = new Map<string, string>([
+  ['MAX_TOKENS', 'The provider answer was cut off at the length limit.'],
+  ['SAFETY', 'The provider declined to answer this query.'],
+  ['PROHIBITED_CONTENT', 'The provider declined to answer this query.'],
+  ['BLOCKLIST', 'The provider declined to answer this query.'],
+  ['SPII', 'The provider declined to answer this query.'],
+  ['RECITATION', 'The provider stopped the answer to avoid reciting a source.'],
+  ['LANGUAGE', 'The provider does not support the language of this query.'],
+  ['MALFORMED_FUNCTION_CALL', 'The provider ended the answer on an internal tool error.'],
+  ['STOP', 'The provider ended the answer without writing anything.'],
+  ['OTHER', 'The provider stopped the answer for an unstated reason.'],
+  ['FINISH_REASON_UNSPECIFIED', 'The provider stopped the answer for an unstated reason.'],
+])
+
+/**
+ * Why the model stopped, when it stopped without writing anything.
+ *
+ * A response with no text was reported only as "returned no answer text",
+ * which is a dead end: it cannot distinguish an answer truncated at the token
+ * ceiling (our configuration, fixable) from one the model declined to give
+ * (the content, not fixable). Both were losing measurements and looked
+ * identical, so the same symptom got diagnosed twice from scratch.
+ *
+ * Mapped to a closed set. `finishReason` is a provider enum, and this string
+ * reaches a public record.
+ */
+export function emptyAnswerReason(response: GenerateContentResponse): string {
+  const candidate = asRecords(asRecord(response)?.candidates).at(0)
+  const reason = typeof candidate?.finishReason === 'string' ? candidate.finishReason.toUpperCase() : ''
+  return EMPTY_ANSWER_REASONS.get(reason) ?? 'The provider response contained no answer text.'
 }
 
 export function extractGroundedSources(response: GenerateContentResponse): VisibilitySource[] {

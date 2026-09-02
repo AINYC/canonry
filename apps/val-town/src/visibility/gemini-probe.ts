@@ -64,7 +64,11 @@ export function createGeminiValVisibilityProbe(options: GeminiValVisibilityProbe
     // A transient 503 on one probe used to lose that answer outright. The
     // retry is bounded by the same 20s probe deadline.
     maxRetries: 1,
-    maxOutputTokens: 1_000,
+    // Thinking is billed from this same allowance (see PROBE_THINKING_BUDGET_TOKENS),
+    // so 1,000 left a grounded answer competing with the model's reasoning for
+    // room and sometimes losing entirely. The answer is clipped to 4,000 chars
+    // downstream regardless, so a larger ceiling costs nothing when unused.
+    maxOutputTokens: 2_400,
     client: options.client,
   })
   const extractor = createGeminiBrandExtractor({

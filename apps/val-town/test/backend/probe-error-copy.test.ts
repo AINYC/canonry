@@ -1,5 +1,6 @@
 import { runVisibilityProbe } from '../../src/visibility/runner.ts'
 import { publicProbeError, visibilityPhaseError } from '../../src/jobs/public-check.ts'
+import { emptyAnswerReason } from '../../src/visibility/gemini.ts'
 import type { VisibilityProviderAdapter, VisibilityProviderResponse } from '../../src/visibility/contracts.ts'
 
 function equal<T>(actual: T, expected: T, message = 'values differ'): void {
@@ -263,4 +264,73 @@ Deno.test('a phase that never produced a row still says why', () => {
   // And the sanitizer still refuses to publish anything it does not recognize.
   equal(visibilityPhaseError(new Error('x-request-id 8f21 POST https://internal/v1beta/models')), generic)
   equal(visibilityPhaseError('a bare string, not an Error'), generic)
+})
+
+Deno.test('an empty answer says WHY it was empty', () => {
+  // "returned no answer text" was a dead end: it could not distinguish an
+  // answer truncated at our own token ceiling — a configuration problem we can
+  // fix — from one the model declined to give. Both lost a measurement and
+  // read identically, so the same symptom was diagnosed twice from scratch.
+  const cases: Array<[string, string]> = [
+    ['The provider answer was cut off at the length limit.', 'The answer engine ran out of room mid-answer.'],
+    ['The provider declined to answer this query.', 'The answer engine declined to answer this question.'],
+    [
+      'The provider stopped the answer to avoid reciting a source.',
+      'The answer engine stopped short to avoid quoting a source.',
+    ],
+    ['The provider response contained no answer text.', 'The answer engine returned no answer text.'],
+    ['The provider does not support the language of this query.', 'The answer engine does not support this language.'],
+    ['The provider ended the answer on an internal tool error.', 'The answer engine hit an internal error mid-answer.'],
+    [
+      'The provider ended the answer without writing anything.',
+      'The answer engine finished without saying anything for this question.',
+    ],
+    ['The provider stopped the answer for an unstated reason.', 'The answer engine stopped without giving a reason.'],
+  ]
+  for (const [internal, published] of cases) {
+    equal(publicProbeError(internal), published, `"${internal}" must survive the sanitizer`)
+    assert(publicProbeError(internal) !== GENERIC, 'a new reason must not fall back to the generic sentence')
+  }
+})
+
+Deno.test('every finish reason the provider can send has a public sentence', () => {
+  // Mapping only the reasons that seemed likely left the rest falling through
+  // to the generic, which is exactly where the diagnosis had been destroyed
+  // before: a probe kept failing and "no answer text" could not say whether the
+  // answer was truncated, refused, or never attempted. Enumerate the source
+  // enum instead of guessing at a useful subset.
+  const finishReasons = [
+    'FINISH_REASON_UNSPECIFIED',
+    'STOP',
+    'MAX_TOKENS',
+    'SAFETY',
+    'RECITATION',
+    'LANGUAGE',
+    'OTHER',
+    'BLOCKLIST',
+    'PROHIBITED_CONTENT',
+    'SPII',
+    'MALFORMED_FUNCTION_CALL',
+  ]
+  for (const finishReason of finishReasons) {
+    const internal = emptyAnswerReason(
+      { candidates: [{ finishReason, content: { parts: [] } }] } as never,
+    )
+    assert(
+      internal !== 'The provider response contained no answer text.',
+      `${finishReason} must map to its own reason, not the catch-all`,
+    )
+    equal(
+      publicProbeError(internal) === GENERIC,
+      false,
+      `${finishReason} -> "${internal}" must survive the public sanitizer`,
+    )
+  }
+
+  // A response with no finishReason at all is the one honest use of the
+  // catch-all: nothing was reported, so nothing can be said.
+  equal(
+    emptyAnswerReason({ candidates: [{ content: { parts: [] } }] } as never),
+    'The provider response contained no answer text.',
+  )
 })

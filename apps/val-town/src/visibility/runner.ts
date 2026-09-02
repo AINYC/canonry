@@ -175,7 +175,12 @@ function successfulCheck(
   if (!answer) {
     return failedCheck(
       slot,
-      { code: 'invalid-response', message: 'The provider response contained no answer text.' },
+      {
+        code: 'invalid-response',
+        // The adapter knows WHY it wrote nothing; a flat "no answer text"
+        // cannot tell a truncated answer from a declined one.
+        message: response.emptyAnswerReason ?? 'The provider response contained no answer text.',
+      },
       now,
     )
   }

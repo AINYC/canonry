@@ -3,11 +3,15 @@ import type { VisibilityProbeInput } from '../../src/runtime/types.ts'
 import type { GeminiContentClient } from '../../src/visibility/gemini.ts'
 import {
   buildPlannerPrompt,
+  createGeminiVisibilityAdapter,
   createGeminiVisibilityQueryPlanner,
   extractGroundedSources,
   normalizeGeminiVisibilityResponse,
   parseGeminiQueryPlan,
+  PROBE_THINKING_BUDGET_TOKENS,
 } from '../../src/visibility/gemini.ts'
+import { DEFAULT_VISIBILITY_PROBE_LIMITS } from '../../src/visibility/contracts.ts'
+import { createGeminiBrandExtractor } from '../../src/visibility/mention-extract.ts'
 import { createGeminiValVisibilityProbe, VAL_TOWN_GEMINI_VISIBILITY_LIMITS } from '../../src/visibility/gemini-probe.ts'
 import { runVisibilityProbe } from '../../src/visibility/runner.ts'
 
@@ -407,4 +411,99 @@ Deno.test('a planning failure with nothing else to ask still fails', () => {
         if (!(error instanceof Error)) throw new Error('expected an Error')
       },
     )
+})
+
+Deno.test('a probe caps its thinking so reasoning cannot starve the answer', () => {
+  // A real check lost one of three answers to "returned no answer text".
+  // Gemini 2.5 thinks by default and bills those tokens against the SAME
+  // output allowance, so the model spent the budget reasoning and wrote
+  // nothing. An empty answer is a lost measurement, and it looks exactly like
+  // an engine that had nothing to say about the brand.
+  const captured: Array<Record<string, unknown>> = []
+  const client = {
+    models: {
+      generateContent(params: { config?: Record<string, unknown> }) {
+        captured.push(params.config ?? {})
+        return Promise.resolve({
+          modelVersion: 'gemini-2.5-flash',
+          candidates: [{ content: { parts: [{ text: 'An answer.' }] } }],
+        })
+      },
+    },
+  }
+  const adapter = createGeminiVisibilityAdapter({ apiKey: 'test-key', client: client as never })
+  return adapter.execute({
+    query: { id: 'q1', text: 'a question' },
+    target: { canonicalDomain: 'example.com', brandNames: [] },
+    signal: AbortSignal.timeout(2_000),
+    limits: DEFAULT_VISIBILITY_PROBE_LIMITS,
+  }).then(() => {
+    const config = captured[0]
+    if (!config) throw new Error('the adapter must have issued a call')
+    const thinking = config.thinkingConfig as { thinkingBudget?: number } | undefined
+    equal(thinking?.thinkingBudget, PROBE_THINKING_BUDGET_TOKENS, 'thinking must be explicitly bounded')
+    // Bounded, not disabled: this simulates an answer engine, and those reason.
+    // `mention-extract.ts` sets 0 because copying names out needs no thought.
+    if (PROBE_THINKING_BUDGET_TOKENS <= 0) throw new Error('a probe still gets to think')
+    // And the cap has to leave the answer real room in the same allowance.
+    if (PROBE_THINKING_BUDGET_TOKENS * 3 >= 2_400) {
+      throw new Error(`thinking budget ${PROBE_THINKING_BUDGET_TOKENS} is too large a share of the output allowance`)
+    }
+  })
+})
+
+Deno.test('every Gemini call sets an explicit thinking budget', () => {
+  // The same bug landed three times: the extractor, the probe adapter, and the
+  // planner each spent their output allowance on thinking and returned empty
+  // text. Gemini 2.5 thinks by DEFAULT and bills it from `maxOutputTokens`, so
+  // "I forgot to set it" is the failure mode, and it presents as a lost answer
+  // rather than as an error. A new call site cannot quietly inherit it.
+  const seen: Array<{ label: string; config: Record<string, unknown> }> = []
+  const clientFor = (label: string) => ({
+    models: {
+      generateContent(params: { config?: Record<string, unknown> }) {
+        seen.push({ label, config: params.config ?? {} })
+        return Promise.resolve({
+          modelVersion: 'gemini-2.5-flash',
+          candidates: [{
+            content: {
+              parts: [{
+                text: label === 'planner'
+                  ? JSON.stringify({ brandNames: ['Example'], queries: ['a buyer question'] })
+                  : '{"answers":[]}',
+              }],
+            },
+          }],
+        })
+      },
+    },
+  })
+
+  const adapter = createGeminiVisibilityAdapter({ apiKey: 'k', client: clientFor('probe') as never })
+  const planner = createGeminiVisibilityQueryPlanner({ apiKey: 'k', client: clientFor('planner') as never })
+  const extractor = createGeminiBrandExtractor({ client: clientFor('extract') as never, model: 'gemini-2.5-flash' })
+
+  return Promise.all([
+    adapter.execute({
+      query: { id: 'q1', text: 'a question' },
+      target: { canonicalDomain: 'example.com', brandNames: [] },
+      signal: AbortSignal.timeout(2_000),
+      limits: DEFAULT_VISIBILITY_PROBE_LIMITS,
+    }),
+    planner.plan({ canonicalDomain: 'example.com', brandNames: [], maxQueries: 1 }),
+    extractor.extract(['some answer text'], AbortSignal.timeout(2_000)),
+  ]).then(() => {
+    equal(seen.length, 3, 'all three call sites must have been exercised')
+    for (const { label, config } of seen) {
+      const thinking = config.thinkingConfig as { thinkingBudget?: number } | undefined
+      if (typeof thinking?.thinkingBudget !== 'number') {
+        throw new Error(`the ${label} call must set an explicit thinkingConfig.thinkingBudget`)
+      }
+      // And it has to leave room for the output it was asked to produce.
+      const maxOutput = config.maxOutputTokens as number | undefined
+      if (typeof maxOutput === 'number' && thinking.thinkingBudget >= maxOutput) {
+        throw new Error(`the ${label} call lets thinking consume its entire ${maxOutput}-token allowance`)
+      }
+    }
+  })
 })
