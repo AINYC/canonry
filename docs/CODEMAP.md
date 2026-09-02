@@ -49,6 +49,15 @@ Bundled via `packages/canonry/build-web.ts` → `packages/canonry/assets/`. Lowe
 ### `apps/api/` — Cloud Run entry (imports `packages/api-routes`)
 ### `apps/worker/` — Cloud worker entry
 
+### `apps/val-town/` — Public Deno / Val Town sample
+
+| Path | Role | Notes |
+|------|------|-------|
+| `main.http.tsx` | Val HTTP entry | Thin composition root for the bounded public sample |
+| `deno.json` / `deno.lock` | Self-contained production Deno imports and locked graph | Exact external pins must match the Canonry engine contract |
+| `src/` | HTTP policy, bounded check runner, provider adapter, storage ports, evidence UI | Host owns quotas, provider access, secrets, and persistence |
+| `README.md` / `AGENTS.md` | Local limits, release order, and durable guardrails | Read before changing the Val host |
+
 ## Packages
 
 ### `packages/canonry/` — Publishable npm (`@canonry/canonry`, compat `@ainyc/canonry`)

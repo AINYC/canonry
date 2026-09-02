@@ -30,6 +30,7 @@
 apps/api/                        Cloud API entry point (imports packages/api-routes)
 apps/worker/                     Cloud worker entry point
 apps/web/                        Vite SPA source (bundled into packages/canonry/assets/)
+apps/val-town/                   Public, self-contained Deno/Val Town bounded sample
 packages/canonry/                Publishable npm package (CLI + server + bundled SPA)
 packages/api-routes/             Shared Fastify route plugins
 packages/contracts/              DTOs, enums, config-schema, error codes

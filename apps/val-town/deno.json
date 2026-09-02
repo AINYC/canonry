@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true
+  },
+  "tasks": {
+    "check": "deno check --allow-import --frozen main.http.tsx",
+    "test": "deno test --allow-env --allow-net --allow-import --frozen test",
+    "lint": "deno lint --allow-import main.http.tsx src test",
+    "dev": "deno run --allow-net --allow-env --allow-import test/dev-server.ts"
+  },
+  "fmt": {
+    "lineWidth": 120,
+    "singleQuote": true,
+    "semiColons": false
+  },
+  "lint": {
+    "rules": {
+      "exclude": [
+        "no-import-prefix"
+      ]
+    }
+  }
+}

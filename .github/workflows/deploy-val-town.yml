@@ -1,0 +1,123 @@
+name: Deploy Val Town
+
+# The Val is an independent Deno host. Deployment is intentionally manual so
+# that the self-contained source, frozen production dependency graph, file plan,
+# and post-push health response are all checked in one operator-reviewed run.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-val-town
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # Public, fixed deployment identity. Changing the target requires an
+      # explicit workflow review; editing only .vt/state.json must fail closed.
+      VAL_TOWN_EXPECTED_VAL_ID: b1194860-7c77-41d7-b0b7-f3529a80e15b
+      VAL_TOWN_EXPECTED_BRANCH_ID: a4524491-dcb3-470a-a361-437a88df6a63
+      VAL_TOWN_API_KEY: ${{ secrets.VAL_TOWN_API_KEY }}
+      VAL_TOWN_HEALTH_URL: ${{ vars.VAL_TOWN_HEALTH_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.7.5
+
+      - name: Require Val Town deployment credentials and health URL
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "$VAL_TOWN_API_KEY" ]; then
+            echo "::error::VAL_TOWN_API_KEY secret is required for vt push."
+            exit 1
+          fi
+
+          if [ -z "$VAL_TOWN_HEALTH_URL" ]; then
+            echo "::error::Repository variable VAL_TOWN_HEALTH_URL is required for the post-deploy health check."
+            exit 1
+          fi
+
+          case "$VAL_TOWN_HEALTH_URL" in
+            https://*) ;;
+            *)
+              echo "::error::VAL_TOWN_HEALTH_URL must be an HTTPS URL."
+              exit 1
+              ;;
+          esac
+
+      - name: Require the fixed Val Town deployment target
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          STATE_VAL_ID=$(node -p "JSON.parse(require('node:fs').readFileSync('./apps/val-town/.vt/state.json', 'utf8')).val?.id || ''")
+          STATE_BRANCH_ID=$(node -p "JSON.parse(require('node:fs').readFileSync('./apps/val-town/.vt/state.json', 'utf8')).branch?.id || ''")
+
+          if [ "$STATE_VAL_ID" != "$VAL_TOWN_EXPECTED_VAL_ID" ]; then
+            echo "::error::Refusing to deploy unexpected Val ID: $STATE_VAL_ID"
+            exit 1
+          fi
+
+          if [ "$STATE_BRANCH_ID" != "$VAL_TOWN_EXPECTED_BRANCH_ID" ]; then
+            echo "::error::Refusing to deploy unexpected Val branch ID: $STATE_BRANCH_ID"
+            exit 1
+          fi
+
+      # A stale mirror would ship skills that no longer match `skills/`, and the
+      # Deno checks cannot see it: the generated modules compile either way.
+      - name: Verify the generated skill mirror is current
+        run: node scripts/sync-val-town-skills.mjs --check
+
+      - name: Validate the frozen production Deno graph
+        working-directory: apps/val-town
+        run: |
+          deno check --allow-import --frozen --config deno.json main.http.tsx
+          deno lint --config deno.json main.http.tsx src test
+          deno test --allow-env --allow-net --allow-import --frozen --config deno.json test
+
+      - name: Preview Val Town file changes
+        working-directory: apps/val-town
+        run: deno run -A jsr:@valtown/vt@0.1.59 push --dry-run
+
+      # vt applies a multi-file mirror rather than an atomic bundle. Retry the
+      # same desired state so a transient partial push converges before health
+      # verification. A persistent failure remains visible and requires an
+      # operator rerun or a Val Town version revert.
+      - name: Push Val Town deployment with convergence retries
+        working-directory: apps/val-town
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for attempt in 1 2 3; do
+            if deno run -A jsr:@valtown/vt@0.1.59 push; then
+              exit 0
+            fi
+
+            if [ "$attempt" -lt 3 ]; then
+              sleep 5
+            fi
+          done
+
+          echo "::error::Val Town did not converge after three push attempts. Re-run this workflow or revert the Val version."
+          exit 1
+
+      - name: Verify deployed health endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BODY=$(curl --fail --silent --show-error --retry 12 --retry-connrefused --retry-delay 5 "$VAL_TOWN_HEALTH_URL")
+          node -e "const body = JSON.parse(process.argv[1]); if (body.ok !== true) { throw new Error('Expected health response { ok: true }') }" "$BODY"

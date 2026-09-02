@@ -9,9 +9,15 @@ function repoPath(relativePath: string): string {
   return path.join(repoRoot, relativePath)
 }
 
-function readJson(relativePath: string): { dependencies?: Record<string, string> } {
+function readJson(relativePath: string): {
+  dependencies?: Record<string, string>
+  imports?: Record<string, string>
+  specifiers?: Record<string, string>
+} {
   return JSON.parse(fs.readFileSync(repoPath(relativePath), 'utf8')) as {
     dependencies?: Record<string, string>
+    imports?: Record<string, string>
+    specifiers?: Record<string, string>
   }
 }
 
@@ -35,19 +41,25 @@ function compareSemver(left: string, right: string): number {
 }
 
 describe('AEO audit dependency boundary', () => {
-  it('uses the public full-crawl engine in the local Canonry runtime only', () => {
+  it('keeps the public full-crawl engine exact across Canonry and Val Town', () => {
     const canonryPackage = readJson('packages/canonry/package.json')
     const workerPackage = readJson('apps/worker/package.json')
+    const valTownDeno = readJson('apps/val-town/deno.json')
+    const valTownLock = readJson('apps/val-town/deno.lock')
 
     const localEngineVersion = canonryPackage.dependencies?.['@canonry/aeo-audit']
 
     expect(localEngineVersion).toBeDefined()
+    expect(localEngineVersion).toMatch(/^\d+\.\d+\.\d+$/)
     expect(compareSemver(localEngineVersion!, '4.6.2')).toBeGreaterThanOrEqual(0)
     expect(canonryPackage.dependencies?.['@ainyc/aeo-audit']).toBeUndefined()
     expect(workerPackage.dependencies?.['@ainyc/aeo-audit']).toBe('4.2.0')
+    expect(valTownDeno.imports?.['@canonry/aeo-audit']).toBe(`npm:@canonry/aeo-audit@${localEngineVersion}`)
+    expect(valTownLock.specifiers?.[`npm:@canonry/aeo-audit@${localEngineVersion}`]).toBe(localEngineVersion)
 
     expect(readText('packages/canonry/src/execute-site-audit.ts')).toContain("from '@canonry/aeo-audit'")
     expect(readText('packages/canonry/src/snapshot-service.ts')).toContain("from '@canonry/aeo-audit'")
     expect(readText('scripts/bump-aeo-audit.mjs')).toContain("const DEP = '@canonry/aeo-audit'")
+    expect(readText('scripts/bump-aeo-audit.mjs')).toContain("'apps/val-town/deno.json'")
   })
 })

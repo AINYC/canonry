@@ -24,8 +24,8 @@
 //   GITHUB_OUTPUT         when set, the script appends `changed`/`from`/`to`/
 //                         `canonry_from`/`canonry_to`/`version_note` step outputs.
 //
-// The script only edits files. It never runs `pnpm install`, so the caller
-// controls when the lockfile is regenerated.
+// The script only edits manifests. It never runs `pnpm install` or Deno, so
+// the caller controls when the pnpm and Val Town lockfiles are regenerated.
 
 import { execFileSync } from 'node:child_process'
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
@@ -35,9 +35,21 @@ import { dirname, join } from 'node:path'
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 
 const DEP = '@canonry/aeo-audit'
-// The local Canonry runtime uses the full-crawl engine. apps/worker intentionally
-// remains pinned to @ainyc/aeo-audit@4.2.0 and is not part of this bump.
-const DEP_MANIFESTS = ['packages/canonry/package.json']
+// The local Canonry runtime and Val Town's self-contained production host use
+// the full-crawl engine. apps/worker intentionally remains pinned to
+// @ainyc/aeo-audit@4.2.0 and is not part of this bump.
+const DEP_TARGETS = [
+  {
+    path: 'packages/canonry/package.json',
+    section: 'dependencies',
+    nextSpec: (version, rangePrefix) => `${rangePrefix}${version}`,
+  },
+  {
+    path: 'apps/val-town/deno.json',
+    section: 'imports',
+    nextSpec: (version) => `npm:${DEP}@${version}`,
+  },
+]
 // Published package + native-plugin manifests that must stay in lockstep (see
 // AGENTS.md → Versioning and scripts/sync-canonry-plugin.mjs).
 const VERSION_MANIFESTS = [
@@ -114,23 +126,34 @@ function main() {
   const currentVersion = currentSpec.replace(/^[\^~]/, '')
   const nextSpec = `${rangePrefix}${target}`
 
-  if (currentSpec === nextSpec) {
-    console.log(`${DEP} already at ${currentSpec} — nothing to bump.`)
+  const dependencyChanges = DEP_TARGETS.map((targetManifest) => {
+    const manifest = readJson(targetManifest.path)
+    const current = manifest[targetManifest.section]?.[DEP]
+    if (!current) {
+      throw new Error(`${DEP} not found in ${targetManifest.path} ${targetManifest.section}`)
+    }
+
+    return {
+      ...targetManifest,
+      current,
+      next: targetManifest.nextSpec(target, rangePrefix),
+    }
+  }).filter(({ current, next }) => current !== next)
+
+  if (dependencyChanges.length === 0) {
+    console.log(`${DEP} already synchronized at ${currentSpec} — nothing to bump.`)
     emitOutput({ changed: 'false', from: currentVersion, to: target })
     return
   }
 
-  for (const manifest of DEP_MANIFESTS) {
-    const pkg = readJson(manifest)
-    const spec = pkg.dependencies?.[DEP]
-    if (!spec) throw new Error(`${DEP} not found in ${manifest} dependencies`)
-    replaceField(manifest, DEP, spec, nextSpec)
-    console.log(`${manifest}: ${DEP} ${spec} -> ${nextSpec}`)
+  for (const change of dependencyChanges) {
+    replaceField(change.path, DEP, change.current, change.next)
+    console.log(`${change.path}: ${DEP} ${change.current} -> ${change.next}`)
   }
 
   const canonryFrom = canonryPkg.version
   let canonryTo = canonryFrom
-  if (bumpCanonryVersion) {
+  if (bumpCanonryVersion && currentSpec !== nextSpec) {
     canonryTo = bumpPatch(canonryFrom)
     for (const manifest of VERSION_MANIFESTS) {
       const pkg = readJson(manifest)
@@ -141,7 +164,7 @@ function main() {
     console.log(`Leaving canonry version at ${canonryFrom} (default; pass --version-bump to ship on merge).`)
   }
 
-  const versionNote = bumpCanonryVersion
+  const versionNote = bumpCanonryVersion && currentSpec !== nextSpec
     ? `\`@canonry/canonry\` ${canonryFrom} -> ${canonryTo} (ships to npm on merge).`
     : '`@canonry/canonry` version unchanged — the engine updates in-repo and ships with the next canonry release.'
 
@@ -154,7 +177,7 @@ function main() {
     version_note: versionNote,
   })
 
-  console.log(`\nBumped ${DEP} ${currentVersion} -> ${target}. Next: run \`pnpm install\` to update the lockfile.`)
+  console.log(`\nBumped ${DEP} ${currentVersion} -> ${target}. Next: run \`pnpm install\` and refresh apps/val-town/deno.lock from deno.json.`)
 }
 
 main()
