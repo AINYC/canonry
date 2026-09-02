@@ -1814,20 +1814,44 @@ function buildReportActionPlan(input: ReportActionPlanInput): ReportActionPlanIt
   }
 
   if (actions.length === 0) {
+    // An empty action list has TWO causes that read identically and mean
+    // opposite things: everything was checked and came back clean, or nothing
+    // was ever checked. The single copy below assumed the first. On a project
+    // with no snapshots it told the reader that no issues "were detected",
+    // which is a finding the evidence cannot support, and paired it with
+    // "keep monitoring" and "the NEXT check" for a project that has never had
+    // a first one. No provider snapshots means nothing could be detected
+    // either way, so say that instead.
+    const neverMeasured = input.citationScorecard.providers.length === 0
     actions.push({
       audience: 'both',
       priority: 90,
       horizon: 'short-term',
       category: 'monitoring',
-      title: 'Keep monitoring citation and mention coverage',
-      action: 'Run the next scheduled check and watch for citation gains, losses, and engine-specific misses.',
-      why: [
-        'No urgent corrective action surfaced from the current evidence.',
-        'AEO performance is directional; repeated checks are needed before overreacting to a single sample.',
+      title: neverMeasured
+        ? 'Run the first visibility check'
+        : 'Keep monitoring citation and mention coverage',
+      action: neverMeasured
+        ? 'Run an answer-visibility check to establish the first citation and mention baseline.'
+        : 'Run the next scheduled check and watch for citation gains, losses, and engine-specific misses.',
+      why: neverMeasured
+        ? [
+            'No answer-engine check has completed for this project, so there is no citation or mention evidence to act on yet.',
+            'The rest of this report can only describe what was measured, and this signal has not been measured once.',
+          ]
+        : [
+            'No urgent corrective action surfaced from the current evidence.',
+            'AEO performance is directional; repeated checks are needed before overreacting to a single sample.',
+          ],
+      evidence: [
+        neverMeasured
+          ? 'No completed answer-engine snapshots exist for this project, so nothing could be detected either way.'
+          : 'No critical insights, content gaps, indexing blockers, or provider-zero issues were detected in this report.',
       ],
-      evidence: ['No critical insights, content gaps, indexing blockers, or provider-zero issues were detected in this report.'],
-      successMetric: 'Coverage stays stable or improves across the next trend window.',
-      confidence: 'medium',
+      successMetric: neverMeasured
+        ? 'A first check completes and produces a citation and mention baseline.'
+        : 'Coverage stays stable or improves across the next trend window.',
+      confidence: neverMeasured ? 'high' : 'medium',
     })
   }
 
@@ -1927,14 +1951,33 @@ function buildAgencyDiagnostics(input: ReportActionPlanInput & {
   }
 
   if (input.indexingHealth) {
+    // `indexedPct` falls back to 0 when NOTHING was inspected, which is
+    // indistinguishable from a measured 0%. Rendered as a percentage it stated
+    // "0% of inspected URLs are indexed" at NEGATIVE severity for a project
+    // that had simply never been inspected: a red flag manufactured out of no
+    // measurement, and the first thing a new client would read. The sibling
+    // gate on this same metric already guards `total > 0`; this one did not.
+    const inspected = input.indexingHealth.total > 0
+    const provider = input.indexingHealth.provider ?? 'the connected provider'
     diagnostics.push({
       title: 'Indexing health',
-      detail: `${input.indexingHealth.indexedPct}% of inspected URLs are indexed in ${input.indexingHealth.provider ?? 'the connected provider'}.`,
-      severity: input.indexingHealth.indexedPct >= 90 ? 'positive' : input.indexingHealth.indexedPct >= 70 ? 'caution' : 'negative',
-      evidence: [
-        `${input.indexingHealth.indexed}/${input.indexingHealth.total} indexed`,
-        `${input.indexingHealth.notIndexed} not indexed`,
-      ],
+      detail: inspected
+        ? `${input.indexingHealth.indexedPct}% of inspected URLs are indexed in ${provider}.`
+        : `No URLs have been inspected in ${provider} yet, so indexing coverage is not measured.`,
+      // Not measured is not a finding, so it must not carry a finding's tone.
+      severity: !inspected
+        ? 'neutral'
+        : input.indexingHealth.indexedPct >= 90
+          ? 'positive'
+          : input.indexingHealth.indexedPct >= 70
+            ? 'caution'
+            : 'negative',
+      evidence: inspected
+        ? [
+            `${input.indexingHealth.indexed}/${input.indexingHealth.total} indexed`,
+            `${input.indexingHealth.notIndexed} not indexed`,
+          ]
+        : ['0 URLs inspected'],
     })
   }
 

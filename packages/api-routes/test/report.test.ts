@@ -203,6 +203,96 @@ describe('GET /api/v1/projects/:name/report', () => {
     expect(body.agencyDiagnostics.priorities.length).toBeGreaterThan(0)
   })
 
+  /**
+   * A coverage snapshot exists as soon as GSC has been synced once, so
+   * `indexingHealth` goes non-null well before any URL has been INSPECTED.
+   * With nothing inspected `indexedPct` falls back to 0, which is
+   * indistinguishable from a measured 0%, and the diagnostic stated
+   * "0% of inspected URLs are indexed" at NEGATIVE severity — a red flag
+   * manufactured out of no measurement, hitting every new client before their
+   * first inspection run.
+   */
+  test('indexing health reports nothing inspected as unmeasured, not as 0% indexed', async () => {
+    const projectId = insertProject(ctx.db, 'no-inspections')
+    ctx.db.insert(gscCoverageSnapshots).values({
+      id: crypto.randomUUID(),
+      projectId,
+      syncRunId: null,
+      date: '2026-04-30',
+      indexed: 0,
+      notIndexed: 0,
+      reasonBreakdown: {},
+      createdAt: new Date().toISOString(),
+    }).run()
+    await ctx.app.ready()
+
+    const res = await ctx.app.inject({ method: 'GET', url: '/api/v1/projects/no-inspections/report' })
+    expect(res.statusCode).toBe(200)
+    const body = JSON.parse(res.body) as ProjectReportDto
+
+    const diag = body.agencyDiagnostics.diagnostics.find((d) => d.title === 'Indexing health')
+    expect(diag).toBeDefined()
+    // Not measured is not a finding, so it must not carry a finding's tone.
+    expect(diag!.severity).toBe('neutral')
+    expect(diag!.detail).toMatch(/not measured/i)
+    // The exact false claim that shipped.
+    expect(diag!.detail).not.toMatch(/0% of inspected URLs are indexed/)
+    expect(diag!.evidence.join(' ')).not.toContain('0/0 indexed')
+  })
+
+  /**
+   * The counterpart, and the one that makes the fix safe: a REAL 0% indexed is
+   * a genuine emergency and must still fire at negative severity. Suppressing
+   * the zero rather than the unmeasured case would hide it.
+   */
+  test('indexing health still reports a genuine 0% indexed as negative', async () => {
+    const projectId = insertProject(ctx.db, 'really-zero')
+    ctx.db.insert(gscCoverageSnapshots).values({
+      id: crypto.randomUUID(),
+      projectId,
+      syncRunId: null,
+      date: '2026-04-30',
+      indexed: 0,
+      notIndexed: 12,
+      reasonBreakdown: {},
+      createdAt: new Date().toISOString(),
+    }).run()
+    await ctx.app.ready()
+
+    const res = await ctx.app.inject({ method: 'GET', url: '/api/v1/projects/really-zero/report' })
+    const body = JSON.parse(res.body) as ProjectReportDto
+    const diag = body.agencyDiagnostics.diagnostics.find((d) => d.title === 'Indexing health')
+    expect(diag).toBeDefined()
+    expect(diag!.severity).toBe('negative')
+    expect(diag!.detail).toMatch(/0% of inspected URLs are indexed/)
+    expect(diag!.evidence.join(' ')).toContain('0/12 indexed')
+  })
+
+  /**
+   * An empty action list has two causes that read identically and mean opposite
+   * things: everything was checked and came back clean, or nothing was ever
+   * checked. The fallback assumed the first, so a project with no snapshots was
+   * told no issues "were detected" — a finding the evidence cannot support —
+   * and asked to keep monitoring and run "the NEXT" check before it had a first.
+   */
+  test('a never-measured project is not given a clean bill of health', async () => {
+    insertProject(ctx.db, 'never-swept')
+    await ctx.app.ready()
+
+    const res = await ctx.app.inject({ method: 'GET', url: '/api/v1/projects/never-swept/report' })
+    const body = JSON.parse(res.body) as ProjectReportDto
+
+    expect(body.citationScorecard.providers).toEqual([])
+    const monitoring = body.actionPlan.find((a) => a.category === 'monitoring')
+    expect(monitoring).toBeDefined()
+    expect(monitoring!.title).toBe('Run the first visibility check')
+    // The claim that could not be supported.
+    expect(monitoring!.evidence.join(' ')).not.toMatch(/were detected in this report/)
+    expect(monitoring!.evidence.join(' ')).toMatch(/nothing could be detected/i)
+    // And it must not imply a check has already been happening.
+    expect(monitoring!.action).not.toMatch(/next scheduled check/)
+  })
+
   test('citation scorecard reflects query × provider matrix', async () => {
     const projectId = insertProject(ctx.db, 'scorecard')
     const kwA = insertQuery(ctx.db, projectId, 'aeo platform')
