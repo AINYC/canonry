@@ -18,7 +18,7 @@ import {
 } from '@ainyc/canonry-contracts'
 import type { AgentEvent, AgentMessage } from '@mariozechner/pi-agent-core'
 import type { SessionRegistry } from './session-registry.js'
-import type { SupportedAgentProvider } from './session.js'
+import type { AeroProviderId } from './session.js'
 import {
   AeroToolProfiles,
   AeroToolScopes,
@@ -36,7 +36,7 @@ import {
 
 type AgentPromptBody = Partial<{
   prompt: string
-  provider?: SupportedAgentProvider
+  provider?: AeroProviderId
   modelId?: string
   scope?: AeroToolScope
   profile?: AeroToolProfile

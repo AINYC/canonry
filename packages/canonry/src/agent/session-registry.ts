@@ -18,9 +18,9 @@ import {
   loadAeroSystemPrompt,
   resolveAeroModel,
   resolveSessionProviderAndModel,
-  type SupportedAgentProvider,
+  type AeroProviderId,
 } from './session.js'
-import { getAgentProvider } from './providers.js'
+import { defaultModelForAeroProvider } from './providers.js'
 import { buildSkillDocTools } from './skill-tools.js'
 import {
   AeroToolProfiles,
@@ -42,7 +42,7 @@ export interface SessionRegistryOptions {
 }
 
 export interface SessionPreferences {
-  provider?: SupportedAgentProvider
+  provider?: AeroProviderId
   modelId?: string
   /** Pass 'read-only' to build a session that exposes only read tools. Default 'all'. */
   toolScope?: AeroToolScope
@@ -197,7 +197,9 @@ export class SessionRegistry {
       // Explicit caller preferences override the persisted values (and are
       // persisted back). This keeps `--provider` / `--model` flags meaningful
       // after the first session exists instead of silently ignoring them.
-      const effectiveProvider = (preferences?.provider ?? row.modelProvider) as SupportedAgentProvider
+      // Preserve the stored provider string verbatim. A configured `route:*`
+      // must never silently turn into a native provider on session hydration.
+      const effectiveProvider = (preferences?.provider ?? row.modelProvider) as AeroProviderId
       const effectiveModelId = preferences?.modelId ?? row.modelId
       if (preferences?.provider || preferences?.modelId) {
         this.opts.db
@@ -461,15 +463,17 @@ export class SessionRegistry {
     const projectId = this.tryResolveProjectId(projectName)
     if (!projectId) return
     const row = this.loadRow(projectId)
-    const currentProvider = (row?.modelProvider ?? AgentProviderIds.claude) as SupportedAgentProvider
+    const currentProvider = (row?.modelProvider ?? AgentProviderIds.claude) as AeroProviderId
     const currentModelId = row?.modelId
     const nextProvider = preferences.provider ?? currentProvider
     const nextModelId =
-      preferences.modelId ?? (preferences.provider ? getAgentProvider(nextProvider).defaultModel : currentModelId)
+      preferences.modelId ?? (preferences.provider
+        ? defaultModelForAeroProvider(nextProvider, this.opts.config)
+        : currentModelId)
     if (!nextModelId) return
     if (nextProvider === currentProvider && nextModelId === currentModelId) return
 
-    agent.state.model = resolveAeroModel(nextProvider, nextModelId)
+    agent.state.model = resolveAeroModel(nextProvider, this.opts.config, nextModelId)
     this.opts.db
       .update(agentSessions)
       .set({
@@ -686,7 +690,7 @@ export class SessionRegistry {
     id?: string
     projectId: string
     systemPrompt: string
-    provider?: SupportedAgentProvider
+    provider?: AeroProviderId
     modelId?: string
     modelProvider?: string
     messages: AgentMessage[]

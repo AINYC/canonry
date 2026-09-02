@@ -23,6 +23,7 @@ import {
   getApiV1ProjectsByNameAgentProvidersOptions,
   getApiV1ProjectsOptions,
 } from '@ainyc/canonry-api-client/react-query'
+import { isAeroProviderId } from '@ainyc/canonry-contracts'
 import { asyncHandler } from '../../lib/async-handler.js'
 import {
   extractAssistantText,
@@ -34,7 +35,7 @@ import {
   type AeroMessage,
   type AeroToolResultMessage,
   type AeroToolScope,
-  type AgentProviderId,
+  type AeroProviderId,
   type AgentProviderOption,
 } from '../../api-aero.js'
 
@@ -139,10 +140,10 @@ export function AeroBar({ projectName }: AeroBarProps) {
   const [liveTrail, setLiveTrail] = useState<ToolTrail[]>([])
   const [streamingText, setStreamingText] = useState('')
   const [error, setError] = useState<string | null>(null)
-  const [providerOverride, setProviderOverride] = useState<AgentProviderId | null>(() => {
+  const [providerOverride, setProviderOverride] = useState<AeroProviderId | null>(() => {
     if (typeof window === 'undefined') return null
     const stored = window.localStorage.getItem(PROVIDER_PREF_KEY(projectName))
-    return (stored as AgentProviderId | null) ?? null
+    return (stored as AeroProviderId | null) ?? null
   })
   // Per-project tool scope. `read-only` (the server default) is the safe
   // choice; `all` lets Aero fire write tools like run_sweep without a
@@ -187,31 +188,40 @@ export function AeroBar({ projectName }: AeroBarProps) {
     staleTime: 60_000,
   })
 
+  // OpenAPI preserves the route-id pattern at runtime but emits `string` for
+  // the dynamic branch. Narrow the generated DTO before it reaches picker
+  // state so malformed server data is ignored instead of asserted.
+  const providerOptions = useMemo<AgentProviderOption[]>(() => (
+    (providersQuery.data?.providers ?? []).flatMap((provider) => (
+      isAeroProviderId(provider.id) ? [{ ...provider, id: provider.id }] : []
+    ))
+  ), [providersQuery.data?.providers])
+
   // Active provider = user override if it's still configured, else the
   // server-detected default. Reset stale overrides when the key goes away.
   const activeProvider: AgentProviderOption | null = useMemo(() => {
-    const list = providersQuery.data?.providers ?? []
     if (providerOverride) {
-      const hit = list.find((p) => p.id === providerOverride && p.configured)
+      const hit = providerOptions.find((p) => p.id === providerOverride && p.configured)
       if (hit) return hit
     }
     const defaultId = providersQuery.data?.defaultProvider
-    return defaultId ? (list.find((p) => p.id === defaultId) ?? null) : null
-  }, [providerOverride, providersQuery.data])
+    if (!defaultId || !isAeroProviderId(defaultId)) return null
+    return providerOptions.find((p) => p.id === defaultId) ?? null
+  }, [providerOptions, providerOverride, providersQuery.data?.defaultProvider])
 
   useEffect(() => {
     if (!providersQuery.data || !providerOverride) return
-    const hit = providersQuery.data.providers.find(
+    const hit = providerOptions.find(
       (p) => p.id === providerOverride && p.configured,
     )
     if (!hit) {
       setProviderOverride(null)
       window.localStorage.removeItem(PROVIDER_PREF_KEY(projectName))
     }
-  }, [providersQuery.data, providerOverride, projectName])
+  }, [providerOptions, providersQuery.data, providerOverride, projectName])
 
   const pickProvider = useCallback(
-    (id: AgentProviderId | null) => {
+    (id: AeroProviderId | null) => {
       setProviderOverride(id)
       if (typeof window === 'undefined') return
       if (id) window.localStorage.setItem(PROVIDER_PREF_KEY(projectName), id)
@@ -399,7 +409,7 @@ export function AeroBar({ projectName }: AeroBarProps) {
               </div>
               <div className="flex items-center gap-1">
                 <ProviderPicker
-                  providers={providersQuery.data?.providers ?? []}
+                  providers={providerOptions}
                   active={activeProvider}
                   override={providerOverride}
                   onPick={pickProvider}
@@ -610,8 +620,8 @@ function ProviderPicker({
 }: {
   providers: AgentProviderOption[]
   active: AgentProviderOption | null
-  override: AgentProviderId | null
-  onPick: (id: AgentProviderId | null) => void
+  override: AeroProviderId | null
+  onPick: (id: AeroProviderId | null) => void
   disabled?: boolean
 }) {
   const [open, setOpen] = useState(false)
@@ -801,7 +811,8 @@ function SlashPalette({
   )
 }
 
-function envVarHint(id: AgentProviderId): string {
+function envVarHint(id: AeroProviderId): string {
+  if (id.startsWith('route:')) return 'the configured engine connection'
   switch (id) {
     case 'claude':
       return 'ANTHROPIC_API_KEY'
@@ -813,6 +824,8 @@ function envVarHint(id: AgentProviderId): string {
       return 'ZAI_API_KEY'
     case 'deepinfra':
       return 'DEEPINFRA_TOKEN'
+    default:
+      return 'provider credentials'
   }
 }
 
@@ -835,7 +848,7 @@ function messageKey(message: AeroMessage, fallbackIndex: number): string {
 function renderTranscript(
   messages: AeroMessage[],
   projectName: string,
-  providerOverride: AgentProviderId | null,
+  providerOverride: AeroProviderId | null,
   scope: AeroToolScope,
 ): ReactNode[] {
   const nodes: ReactNode[] = []
@@ -913,7 +926,7 @@ function UserMessageRow({
 }: {
   text: string
   projectName: string
-  providerOverride: AgentProviderId | null
+  providerOverride: AeroProviderId | null
   scope: AeroToolScope
 }) {
   const [copied, setCopied] = useState(false)
@@ -976,7 +989,7 @@ function UserMessageRow({
 function buildAgentAskCommand(
   projectName: string,
   prompt: string,
-  providerOverride: AgentProviderId | null,
+  providerOverride: AeroProviderId | null,
   scope: AeroToolScope,
 ): string {
   const parts = ['canonry', 'agent', 'ask', shellQuote(projectName), shellQuote(prompt)]
