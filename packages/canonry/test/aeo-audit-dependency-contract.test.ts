@@ -25,6 +25,33 @@ function readText(relativePath: string): string {
   return fs.readFileSync(repoPath(relativePath), 'utf8')
 }
 
+/**
+ * Every inline engine specifier in the Val Town app.
+ *
+ * Val Town ignores an import map, so the Val fully qualifies each import in
+ * source rather than resolving one `deno.json` key. That is N places to drift
+ * instead of one, which is exactly why this is asserted as a set: a single file
+ * left behind on an old engine is the failure this contract exists to catch.
+ */
+function valTownEngineSpecifiers(): string[] {
+  const roots = ['apps/val-town/src', 'apps/val-town/main.http.tsx']
+  const found: string[] = []
+  for (const root of roots) {
+    const absRoot = repoPath(root)
+    if (!fs.existsSync(absRoot)) continue
+    const files = fs.statSync(absRoot).isFile()
+      ? [absRoot]
+      : fs.readdirSync(absRoot, { recursive: true, withFileTypes: true })
+        .filter((entry) => entry.isFile() && /\.tsx?$/.test(entry.name))
+        .map((entry) => path.join(entry.parentPath ?? entry.path, entry.name))
+    for (const file of files) {
+      const matches = fs.readFileSync(file, 'utf8').match(/npm:@canonry\/aeo-audit@\d+\.\d+\.\d+/g)
+      if (matches) found.push(...matches)
+    }
+  }
+  return found
+}
+
 function semverCore(version: string): [number, number, number] {
   const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version)
   if (!match) throw new Error(`Expected an exact semver pin, received ${version}`)
@@ -54,12 +81,24 @@ describe('AEO audit dependency boundary', () => {
     expect(compareSemver(localEngineVersion!, '4.6.2')).toBeGreaterThanOrEqual(0)
     expect(canonryPackage.dependencies?.['@ainyc/aeo-audit']).toBeUndefined()
     expect(workerPackage.dependencies?.['@ainyc/aeo-audit']).toBe('4.2.0')
-    expect(valTownDeno.imports?.['@canonry/aeo-audit']).toBe(`npm:@canonry/aeo-audit@${localEngineVersion}`)
+    // The Val imports the engine, and every place it does agrees with Canonry.
+    const valSpecifiers = valTownEngineSpecifiers()
+    expect(valSpecifiers.length).toBeGreaterThan(0)
+    expect([...new Set(valSpecifiers)]).toEqual([`npm:@canonry/aeo-audit@${localEngineVersion}`])
     expect(valTownLock.specifiers?.[`npm:@canonry/aeo-audit@${localEngineVersion}`]).toBe(localEngineVersion)
+    // The Val has no import map on purpose: Val Town ignores one, and a key
+    // sitting there unused would read as the resolution mechanism.
+    expect(valTownDeno.imports?.['@canonry/aeo-audit']).toBeUndefined()
 
     expect(readText('packages/canonry/src/execute-site-audit.ts')).toContain("from '@canonry/aeo-audit'")
     expect(readText('packages/canonry/src/snapshot-service.ts')).toContain("from '@canonry/aeo-audit'")
-    expect(readText('scripts/bump-aeo-audit.mjs')).toContain("const DEP = '@canonry/aeo-audit'")
-    expect(readText('scripts/bump-aeo-audit.mjs')).toContain("'apps/val-town/deno.json'")
+
+    // The bump has to reach the Val, and it can only do that by sweeping source.
+    const bumpScript = readText('scripts/bump-aeo-audit.mjs')
+    expect(bumpScript).toContain("const DEP = '@canonry/aeo-audit'")
+    expect(bumpScript).toContain("const VAL_SOURCE_ROOTS = ['apps/val-town/src', 'apps/val-town/main.http.tsx']")
+    expect(bumpScript).toContain('function rewriteValSpecifiers(')
+    // A manifest key it can no longer find would throw on every bump.
+    expect(bumpScript).not.toContain("'apps/val-town/deno.json'")
   })
 })

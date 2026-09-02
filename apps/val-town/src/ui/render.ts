@@ -11,8 +11,6 @@ import type {
   ShareViewModel,
   SiteHealthFactorViewModel,
   SiteHealthPageViewModel,
-  SiteMapNodeViewModel,
-  SiteMapViewModel,
   UiNotice,
   VisibilityViewModel,
 } from './types.ts'
@@ -162,10 +160,6 @@ function renderNotice(notice: UiNotice | undefined): string {
       </div>
       ${action}
     </aside>`
-}
-
-function round(value: number): string {
-  return (Math.round(value * 10) / 10).toString()
 }
 
 /**

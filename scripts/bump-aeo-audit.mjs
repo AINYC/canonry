@@ -28,9 +28,9 @@
 // the caller controls when the pnpm and Val Town lockfiles are regenerated.
 
 import { execFileSync } from 'node:child_process'
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { dirname, join } from 'node:path'
+import { dirname, join, relative } from 'node:path'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -44,12 +44,58 @@ const DEP_TARGETS = [
     section: 'dependencies',
     nextSpec: (version, rangePrefix) => `${rangePrefix}${version}`,
   },
-  {
-    path: 'apps/val-town/deno.json',
-    section: 'imports',
-    nextSpec: (version) => `npm:${DEP}@${version}`,
-  },
 ]
+
+// Val Town ignores an import map, so every Val import is fully qualified in
+// source: `npm:@canonry/aeo-audit@7.1.0`, repeated in each file that imports
+// the engine. That is N places to drift instead of one, so the bump SWEEPS the
+// tree rather than editing a manifest key. A new file that imports the engine
+// is picked up with no change here, which is the point.
+const VAL_SOURCE_ROOTS = ['apps/val-town/src', 'apps/val-town/main.http.tsx']
+const VAL_SPECIFIER = new RegExp(`npm:${DEP.replace('/', '\\/')}@\\d+\\.\\d+\\.\\d+`, 'g')
+
+/** Every `.ts`/`.tsx` file under the Val roots. */
+function valSourceFiles() {
+  const files = []
+  for (const root of VAL_SOURCE_ROOTS) {
+    const absRoot = join(repoRoot, root)
+    if (!existsSync(absRoot)) continue
+    if (statSync(absRoot).isFile()) {
+      files.push(root)
+      continue
+    }
+    for (const entry of readdirSync(absRoot, { recursive: true, withFileTypes: true })) {
+      if (!entry.isFile() || !/\.tsx?$/.test(entry.name)) continue
+      files.push(relative(repoRoot, join(entry.parentPath ?? entry.path, entry.name)))
+    }
+  }
+  return files.sort()
+}
+
+/**
+ * Rewrite every inline engine specifier to `version`. Returns the files it
+ * touched. Throws when nothing references the engine at all, because a silent
+ * no-op would leave the Val on an old engine while Canonry moved.
+ */
+function rewriteValSpecifiers(version) {
+  const touched = []
+  let seen = 0
+  for (const relPath of valSourceFiles()) {
+    const absPath = join(repoRoot, relPath)
+    const before = readFileSync(absPath, 'utf8')
+    const matches = before.match(VAL_SPECIFIER)
+    if (!matches) continue
+    seen += matches.length
+    const after = before.replace(VAL_SPECIFIER, `npm:${DEP}@${version}`)
+    if (after === before) continue
+    writeFileSync(absPath, after)
+    touched.push(relPath)
+  }
+  if (seen === 0) {
+    throw new Error(`No \`npm:${DEP}@<version>\` specifier found under ${VAL_SOURCE_ROOTS.join(', ')}`)
+  }
+  return touched
+}
 // Published package + native-plugin manifests that must stay in lockstep (see
 // AGENTS.md → Versioning and scripts/sync-canonry-plugin.mjs).
 const VERSION_MANIFESTS = [
@@ -140,11 +186,15 @@ function main() {
     }
   }).filter(({ current, next }) => current !== next)
 
-  if (dependencyChanges.length === 0) {
+  // A manifest already at the target does not mean the Val is: the two are
+  // written in different places and can drift independently.
+  const valDrift = rewriteValSpecifiers(target)
+  if (dependencyChanges.length === 0 && valDrift.length === 0) {
     console.log(`${DEP} already synchronized at ${currentSpec} — nothing to bump.`)
     emitOutput({ changed: 'false', from: currentVersion, to: target })
     return
   }
+  for (const relPath of valDrift) console.log(`${relPath}: ${DEP} -> ${target}`)
 
   for (const change of dependencyChanges) {
     replaceField(change.path, DEP, change.current, change.next)
@@ -177,7 +227,10 @@ function main() {
     version_note: versionNote,
   })
 
-  console.log(`\nBumped ${DEP} ${currentVersion} -> ${target}. Next: run \`pnpm install\` and refresh apps/val-town/deno.lock from deno.json.`)
+  console.log(
+    `\nBumped ${DEP} ${currentVersion} -> ${target}. Next: run \`pnpm install\`, then refresh apps/val-town/deno.lock ` +
+      `with \`deno check --allow-import main.http.tsx\` from apps/val-town.`,
+  )
 }
 
 main()

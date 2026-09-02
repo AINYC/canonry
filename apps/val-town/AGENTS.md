@@ -120,6 +120,20 @@ checks the UI shows.
 - Segment geometry is SVG attributes, never inline style: the page CSP blocks inline styles. The checked site is the
   only coloured segment; rivals sit on a neutral ramp, because hues would imply a taxonomy that does not exist.
 
+## The engine pin lives in source, so the bump sweeps source
+
+Val Town ignores an import map, so every import is fully qualified inline:
+`npm:@canonry/aeo-audit@7.1.0`, repeated in each file that imports the engine. That is N places to drift instead of
+one `deno.json` key.
+
+`scripts/bump-aeo-audit.mjs` therefore SWEEPS `apps/val-town/src` and `main.http.tsx` rather than editing a manifest
+key, and `aeo-audit-dependency-contract.test.ts` asserts the set of inline specifiers collapses to exactly one version
+that equals Canonry's pin. Both were written against the import map the val briefly had; the bump would have thrown on
+every engine release and the val would have sat on an old engine while Canonry moved.
+
+A new file importing the engine is picked up with no change to either, which is the point of scanning rather than
+listing.
+
 ## A failed start must not look like a bounce
 
 `.form-busy` carries two different things: "Starting check…" and the reason a check failed. They used to be the same
