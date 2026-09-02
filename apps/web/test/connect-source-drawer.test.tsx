@@ -84,9 +84,8 @@ test('choosing a different source returns to the picker without closing the draw
   expect(screen.queryByText('Connect a Cloud Run service')).toBeNull()
 })
 
-test('connecting a Vercel source closes the drawer and kicks off a backfill', async () => {
+test('connecting a Vercel source closes the drawer without implicitly backfilling history', async () => {
   connectVercelMock.mockResolvedValue({ id: 'src_vercel_1' })
-  backfillMock.mockResolvedValue({ sourceId: 'src_vercel_1', runId: 'run_1', status: 'running' })
 
   renderDrawer()
 
@@ -99,17 +98,14 @@ test('connecting a Vercel source closes the drawer and kicks off a backfill', as
 
   fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
 
-  // A backfill is auto-started for the freshly-connected source.
-  await waitFor(() => {
-    expect(backfillMock).toHaveBeenCalledWith('test-project', 'src_vercel_1')
-  })
-
-  // The drawer closes on success.
+  // The drawer closes on success without starting a retention-limited history
+  // pull. Vercel captures forward traffic until an operator requests history.
   await waitFor(() => {
     expect(screen.queryByText('Connect a Vercel project')).toBeNull()
   })
+  expect(backfillMock).not.toHaveBeenCalled()
 
-  // And routes to the new source's detail page so the backfill is visible.
+  // And routes to the new source's detail page.
   expect(navigateMock).toHaveBeenCalledWith({
     to: '/traffic/$projectName/$sourceId',
     params: { projectName: 'test-project', sourceId: 'src_vercel_1' },
@@ -244,15 +240,18 @@ test('a whitespace-only team ID is caught by the validation chain', async () => 
 })
 
 test('a backfill kickoff failure keeps the drawer open and surfaces the error', async () => {
-  connectVercelMock.mockResolvedValue({ id: 'src_vercel_1' })
+  connectCloudRunMock.mockResolvedValue({ id: 'src_cr_1' })
   backfillMock.mockRejectedValue(new Error('500 internal'))
 
   renderDrawer()
 
-  fireEvent.click(screen.getByText('Vercel'))
-  fireEvent.change(screen.getByPlaceholderText(/prj_/i), { target: { value: 'prj_abc' } })
-  fireEvent.change(screen.getByLabelText(/team \/ account id/i), { target: { value: 'org_xyz' } })
-  fireEvent.change(screen.getByLabelText(/personal access token/i), { target: { value: 'vcp_secret' } })
+  fireEvent.click(screen.getByText('Google Cloud Run'))
+  fireEvent.change(screen.getByLabelText(/^GCP project ID/i), {
+    target: { value: 'my-prod-foo' },
+  })
+  fireEvent.change(screen.getByPlaceholderText(/service_account/i), {
+    target: { value: '{"type":"service_account"}' },
+  })
 
   fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
 
@@ -262,6 +261,6 @@ test('a backfill kickoff failure keeps the drawer open and surfaces the error', 
   await waitFor(() => {
     expect(screen.getByText(/starting the initial backfill failed: 500 internal/i)).toBeTruthy()
   })
-  expect(screen.getByText('Connect a Vercel project')).toBeTruthy()
+  expect(screen.getByText('Connect a Cloud Run service')).toBeTruthy()
   expect(navigateMock).not.toHaveBeenCalled()
 })

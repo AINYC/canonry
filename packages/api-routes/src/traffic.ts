@@ -1015,12 +1015,22 @@ function bindTrafficSyncSchedule(
   return { changed: true, created: true }
 }
 
-function vercelRetentionClampError(requestedStartMs: number, effectiveStartMs: number): Error {
-  return new Error(
-    `Vercel request-logs retention starts at ${new Date(effectiveStartMs).toISOString()}, `
-      + `after requested start ${new Date(requestedStartMs).toISOString()}; refusing to advance `
-      + 'because historical traffic would be skipped',
-  )
+class VercelRetentionClampError extends Error {
+  constructor(requestedStartMs: number, effectiveStartMs: number) {
+    super(
+      `Vercel request-logs retention starts at ${new Date(effectiveStartMs).toISOString()}, `
+        + `after requested start ${new Date(requestedStartMs).toISOString()}; refusing to advance `
+        + 'because historical traffic would be skipped',
+    )
+    this.name = 'VercelRetentionClampError'
+  }
+}
+
+function vercelRetentionClampError(
+  requestedStartMs: number,
+  effectiveStartMs: number,
+): VercelRetentionClampError {
+  return new VercelRetentionClampError(requestedStartMs, effectiveStartMs)
 }
 
 interface RunBackfillTaskOptions {
@@ -1056,7 +1066,7 @@ async function runBackfillTask(options: RunBackfillTaskOptions): Promise<void> {
     pullErrorPrefix,
   } = options
 
-  const markFailed = (msg: string) => {
+  const markFailed = (msg: string, preserveSourceState = false) => {
     const failedAt = new Date().toISOString()
     try {
       app.db.transaction((tx) => {
@@ -1067,7 +1077,8 @@ async function runBackfillTask(options: RunBackfillTaskOptions): Promise<void> {
           .run()
         const latestSource = tx.select().from(trafficSources)
           .where(eq(trafficSources.id, sourceRow.id)).get()
-        if (latestSource
+        if (!preserveSourceState
+          && latestSource
           && isAuthoritativeTrafficSource(tx, latestSource)
           && isSameTrafficSourceGeneration(latestSource, sourceRow)) {
           tx
@@ -1097,7 +1108,14 @@ async function runBackfillTask(options: RunBackfillTaskOptions): Promise<void> {
   try {
     allEvents = await pullForBackfill()
   } catch (e) {
-    markFailed(`${pullErrorPrefix}: ${describeError(e)}`)
+    // A Vercel retention miss is a rejected optional historical recovery, not
+    // a problem with the already-connected source. The failed run records the
+    // exact range, while the existing source state is left intact so its
+    // regular forward sync remains healthy.
+    markFailed(
+      `${pullErrorPrefix}: ${describeError(e)}`,
+      e instanceof VercelRetentionClampError,
+    )
     return
   }
 
@@ -3938,13 +3956,13 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
     const appliedDays = Math.min(requestedDays, MAX_BACKFILL_DAYS)
 
     const windowEnd = new Date()
-    const windowStart = new Date(windowEnd.getTime() - appliedDays * 86_400_000)
-    // Floor windowStart to the hour boundary so the boundary hour is fully
-    // replaced. Rollup `tsHour` is hour-truncated, so a raw mid-hour
-    // windowStart would leave an existing bucket at floor(windowStart, hour)
-    // outside the delete range while the new pull re-emits a bucket at the
-    // same tsHour, tripping the composite primary key on (projectId,
-    // sourceId, tsHour, botId, verificationStatus, pathNormalized, status).
+    const requestedWindowStartMs = windowEnd.getTime() - appliedDays * 86_400_000
+    // Backfill rollups are hourly, so replace the full lower-bound bucket.
+    // Rounding forward would silently omit up to 59 minutes while still
+    // reporting the requested number of days. A retention-limited adapter must
+    // reject the full-bucket pull instead; the failed run preserves both the
+    // existing rollups and the connected source state.
+    const windowStart = new Date(requestedWindowStartMs)
     windowStart.setUTCMinutes(0, 0, 0)
 
     // Build the per-source-type window pull closure. Credential and config

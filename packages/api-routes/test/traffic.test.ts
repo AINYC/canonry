@@ -1702,8 +1702,8 @@ describe('POST /traffic/sources/:id/backfill — Vercel', () => {
     runId: string,
     timeoutMs = 2000,
   ): Promise<typeof runs.$inferSelect> {
-    const deadline = Date.now() + timeoutMs
-    while (Date.now() < deadline) {
+    const deadline = performance.now() + timeoutMs
+    while (performance.now() < deadline) {
       const row = db.select().from(runs).where(eq(runs.id, runId)).get()
       if (row && row.status !== RunStatuses.running) return row
       await new Promise<void>((resolve) => setTimeout(resolve, 25))
@@ -1912,7 +1912,11 @@ describe('POST /traffic/sources/:id/backfill — Vercel', () => {
       expect(finalRun.error).toMatch(/refusing to advance/)
 
       const sourceRow = h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()!
-      expect(sourceRow.status).toBe(TrafficSourceStatuses.error)
+      // Retention is a limit on this optional historical recovery, not a
+      // broken Vercel connection. The run records the failed range while the
+      // source remains ready for forward sync.
+      expect(sourceRow.status).toBe(TrafficSourceStatuses.connected)
+      expect(sourceRow.lastError).toBeNull()
       // The failed backfill must not advance lastSyncedAt past the connect-time value.
       expect(sourceRow.lastSyncedAt).toBe(connectSyncedAt)
       expect(h.db.select().from(crawlerEventsHourly).all()).toEqual([])
@@ -3372,6 +3376,10 @@ describe('POST /traffic/sources/:id/sync — WordPress', () => {
 })
 
 describe('POST /traffic/sources/:id/backfill', () => {
+  // The boundary-hour case below pins Date. Restore it even if harness setup
+  // fails before that test reaches its local cleanup.
+  afterEach(() => { vi.useRealTimers() })
+
   // Helper that polls the run row until status moves off 'running' or
   // the timeout trips, so async tests don't depend on internal scheduling.
   async function waitForRunComplete(
@@ -3379,8 +3387,8 @@ describe('POST /traffic/sources/:id/backfill', () => {
     runId: string,
     timeoutMs = 2000,
   ): Promise<typeof runs.$inferSelect> {
-    const deadline = Date.now() + timeoutMs
-    while (Date.now() < deadline) {
+    const deadline = performance.now() + timeoutMs
+    while (performance.now() < deadline) {
       const row = db.select().from(runs).where(eq(runs.id, runId)).get()
       if (row && row.status !== RunStatuses.running) return row
       await new Promise<void>((resolve) => setTimeout(resolve, 25))
@@ -3834,18 +3842,20 @@ describe('POST /traffic/sources/:id/backfill', () => {
     }
   })
 
-  it('replaces the boundary-hour bucket cleanly when windowStart falls mid-hour', async () => {
-    // Without hour-flooring, an existing bucket at floor(windowStart, hour)
-    // has tsHour < raw windowStart so the delete misses it, but the new pull
-    // re-emits a bucket at the same tsHour — the plain insert then trips the
-    // composite primary key and rolls the whole transaction back.
-    const now = Date.now()
-    const rawWindowStart = new Date(now - 86_400_000) // matches days=1
+  it('replaces the full boundary hour without shortening the requested lookback', async () => {
+    // Fake only Date so the submitted window is exact while Fastify and the
+    // polling helper keep using real timers.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-05-08T12:30:00.000Z'))
+
+    const rawWindowStart = new Date(Date.now() - 86_400_000) // matches days=1
     const boundaryHour = new Date(rawWindowStart)
     boundaryHour.setUTCMinutes(0, 0, 0)
     const boundaryHourIso = boundaryHour.toISOString()
-    // New event sits inside the boundary hour, after raw windowStart.
-    const eventInBoundaryHour = new Date(boundaryHour.getTime() + 35 * 60_000).toISOString()
+    // This event is inside the requested lookback and its lower boundary hour.
+    // A forward-rounded start would skip it and leave the stale seeded bucket
+    // behind.
+    const eventInBoundaryHour = new Date(boundaryHour.getTime() + 45 * 60_000).toISOString()
 
     const events: NormalizedTrafficRequest[] = [
       buildEvent({
@@ -3855,7 +3865,7 @@ describe('POST /traffic/sources/:id/backfill', () => {
         observedAt: eventInBoundaryHour,
       }),
     ]
-    const h = await buildHarness(events, { bypassTimeFilter: true })
+    const h = await buildHarness(events)
     try {
       const connectRes = await h.app.inject({
         method: 'POST',
@@ -3889,6 +3899,7 @@ describe('POST /traffic/sources/:id/backfill', () => {
         payload: { days: 1 },
       })
       const submitted = JSON.parse(submitRes.payload)
+      expect(submitted.windowStart).toBe(boundaryHourIso)
       const finalRun = await waitForRunComplete(h.db, submitted.runId)
       expect(finalRun.status).toBe(RunStatuses.completed)
 
