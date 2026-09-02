@@ -75,6 +75,12 @@ const LEGEND_STYLE = { fontSize: 11, paddingTop: 6 } as const
  *  legend doubles its length and says nothing new. */
 const HIDDEN_FROM_LEGEND = new Set(['Pages crawled trend', 'Page fetches trend', 'Visits trend'])
 
+/** Trend points are linear interpolations, so they land on long floats
+ *  ("46.928533333333334"); every series in these charts is a count, so the
+ *  tooltip shows whole numbers. */
+const formatTooltipValue = (value: unknown) =>
+  typeof value === 'number' ? formatNumber(Math.round(value)) : String(value)
+
 /** Coerce a wire number that an older API may not send at all. */
 const num = (v: number | undefined): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
 
@@ -369,7 +375,8 @@ export function AiTrafficHistoryPanel({
           <RechartsTooltip contentStyle={CHART_TOOLTIP_STYLE.contentStyle}
                            labelStyle={CHART_TOOLTIP_STYLE.labelStyle}
                            itemStyle={CHART_TOOLTIP_STYLE.itemStyle}
-                           labelFormatter={formatChartDateLabel} />
+                           labelFormatter={formatChartDateLabel}
+                           formatter={formatTooltipValue} />
           {unmeasured && (
             <ReferenceArea x1={unmeasured.from} x2={unmeasured.to} fill="var(--color-overlay-hover)"
                            fillOpacity={0.5} stroke="none"
@@ -416,7 +423,8 @@ export function AiTrafficHistoryPanel({
           <RechartsTooltip contentStyle={CHART_TOOLTIP_STYLE.contentStyle}
                            labelStyle={CHART_TOOLTIP_STYLE.labelStyle}
                            itemStyle={CHART_TOOLTIP_STYLE.itemStyle}
-                           labelFormatter={formatChartDateLabel} />
+                           labelFormatter={formatChartDateLabel}
+                           formatter={formatTooltipValue} />
           {unmeasured && (
             <ReferenceArea x1={unmeasured.from} x2={unmeasured.to} fill="var(--color-overlay-hover)"
                            fillOpacity={0.5} stroke="none"
