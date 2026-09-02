@@ -78,9 +78,16 @@ export async function serveCommand(format: CliFormat = 'text'): Promise<void> {
   })
   const app = await createServer({ config, db, host, getAgentPluginState })
 
+  // Set the moment the server is bound and serving. Everything after that point
+  // in this `try` is reporting: console output, the skills nudge, telemetry.
+  // A throw there used to reach the catch below and `app.close()` a HEALTHY,
+  // listening server, turning a cosmetic failure into an outage.
+  let listening = false
+
   try {
     await app.listen({ host, port })
     await waitForServerRuntimeStartup(app)
+    listening = true
 
     // Install signal handlers only after bind succeeds. A failed listen must
     // leave neither a live Fastify app nor process-level listeners behind.
@@ -136,6 +143,12 @@ export async function serveCommand(format: CliFormat = 'text'): Promise<void> {
     })
   } catch (err) {
     const message = describeError(err)
+    if (listening) {
+      // Bound and serving already. Report the failure without tearing down a
+      // working server; the signal handlers are installed and own its shutdown.
+      process.stderr.write(`warning: server started but post-startup reporting failed: ${message}\n`)
+      return
+    }
     try {
       await app.close()
     } catch (closeErr) {

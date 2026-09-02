@@ -30,7 +30,7 @@ const SESSION_RECHECK_MS = 60_000
  * older shared-password screens, which apply only to an install that has no
  * accounts at all — and which the server refuses once any account exists.
  */
-type AuthState = 'checking' | 'ready' | 'setup' | 'login' | 'account-login'
+type AuthState = 'checking' | 'ready' | 'setup' | 'login' | 'account-login' | 'api-key-error'
 type SharedLoginMethod = 'password' | 'api-key'
 
 export function AuthGate() {
@@ -62,10 +62,15 @@ export function AuthGate() {
   const queryClientRef = useRef<ReturnType<typeof createQueryClient> | null>(null)
   const cachedForPrincipalRef = useRef<string | null>(null)
   const getRouter = () => {
+    // An injected browser key is ONE principal for the life of the page: it
+    // cannot change without a reload. Keying it by id meant the key moved from
+    // `api-key:pending` to `api-key:<id>` when `/keys/self` resolved, clearing
+    // the cache and rebuilding the router a moment after first paint, which
+    // discards in-flight queries and every piece of local component state.
     const principalKey = account
       ? `${account.name}:${account.role}`
-      : apiKeyPending
-        ? 'api-key:pending'
+      : explicitBrowserApiKey
+        ? 'api-key:explicit'
         : apiKey
           ? `api-key:${apiKey.id}`
           : 'no-accounts'
@@ -99,7 +104,12 @@ export function AuthGate() {
   // decides, exactly as it always did.
   useEffect(() => {
     let cancelled = false
-    const hydrateApiKey = () => fetchCurrentApiKey()
+    // What a FAILED hydration means depends on who asked, so the caller says.
+    // `apiKeyPending` is deliberately NOT cleared on failure: with no key and no
+    // account the provider falls through to NO_ACCOUNTS, which grants FULL
+    // access, so clearing it would turn a fail-closed state into a fail-open
+    // one. It stays pending and the new state makes that visible and retryable.
+    const hydrateApiKey = (onFailure: AuthState) => fetchCurrentApiKey()
       .then((key) => {
         if (cancelled) return
         setApiKey(key)
@@ -109,11 +119,11 @@ export function AuthGate() {
       .catch((err: unknown) => {
         if (cancelled) return
         setError(err instanceof Error ? err.message : 'Could not verify API key access')
-        if (!explicitBrowserApiKey) setAuthState('login')
+        setAuthState(onFailure)
       })
 
     if (explicitBrowserApiKey) {
-      void hydrateApiKey()
+      void hydrateApiKey('api-key-error')
       return () => { cancelled = true }
     }
 
@@ -134,7 +144,10 @@ export function AuthGate() {
 
         const session = legacyResult.value
         if (session.authenticated) {
-          void hydrateApiKey()
+          // The session cookie is valid on its own. Key hydration is best
+          // effort here, so a failed read must not present the password form
+          // to someone who is already signed in.
+          void hydrateApiKey('ready')
         } else {
           setApiKey(null)
           setApiKeyPending(false)
@@ -340,6 +353,25 @@ export function AuthGate() {
             <CardContent className="py-8">
               <p className="supporting-copy text-center">Connecting to Canonry…</p>
             </CardContent>
+          ) : authState === 'api-key-error' ? (
+            <>
+              <CardHeader>
+                <p className="eyebrow eyebrow-soft">Dashboard access</p>
+                <h1 className="font-medium tracking-tight text-primary">Could not verify API key access</h1>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <p className="supporting-copy">
+                  {error ?? 'The API key could not be checked, so the dashboard stayed read-only.'}
+                </p>
+                <Button
+                  type="button"
+                  className="w-full"
+                  onClick={() => { window.location.reload() }}
+                >
+                  Try again
+                </Button>
+              </CardContent>
+            </>
           ) : authState === 'account-login' ? (
             <>
               <CardHeader>

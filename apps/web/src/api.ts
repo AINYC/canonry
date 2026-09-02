@@ -1594,8 +1594,13 @@ export function fetchBingCoverage(project: string): Promise<ApiBingCoverageSumma
  * noise on every project visit.
  */
 export async function fetchConnectedBingCoverage(project: string): Promise<ApiBingCoverageSummary | null> {
-  const status = await fetchBingStatus(project)
-  if (!status.connected) return null
+  // The status read exists only to keep an UNCONFIGURED install quiet, so it
+  // stays in front deliberately. But a status read that FAILS has not answered
+  // "not connected": letting it reject discarded coverage the coverage endpoint
+  // would have returned fine, so an unknown status falls through to the real
+  // read instead of suppressing it.
+  const status = await fetchBingStatus(project).catch(() => null)
+  if (status && !status.connected) return null
   return fetchBingCoverage(project)
 }
 

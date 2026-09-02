@@ -1559,7 +1559,7 @@ function ProjectPageContent({
 }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const { canWrite } = useAccount()
+  const { canWrite, isAdmin } = useAccount()
   const initialDashboard = useInitialDashboard()
   const initialConfiguredApiProviders = initialDashboard
     ? initialDashboard.dashboard.settings.providerStatuses
@@ -1577,7 +1577,13 @@ function ProjectPageContent({
       ? providerSettingsQuery.data.providers
         .filter(provider => provider.configured)
         .map(provider => normalizeProviderName(provider.name))
-      : providerSettingsQuery.isError ? [] : undefined)
+      // GET /settings is admin-only. For a non-admin writer a failure is a
+      // statement about THIS principal's permission, not about whether any
+      // provider is configured, so it must read as UNKNOWN rather than as
+      // "none". Coercing it to [] told such a writer AI Visibility was
+      // unconfigured and sent them to a settings page that refuses them, with
+      // no way left to run a sweep.
+      : providerSettingsQuery.isError ? (isAdmin ? [] : undefined) : undefined)
   const projectProviders = model.project.providers.map(normalizeProviderName)
   const selectedApiProviderReady = configuredApiProviders?.some(provider => (
     projectProviders.length === 0 || projectProviders.includes(provider)

@@ -140,7 +140,11 @@ export function ProjectsPage() {
         </Card>
       )}
 
-      {canWrite && projects.length > 0 ? <YamlApplyPanel onApplied={() => { void refetch() }} /> : null}
+      {/* Not gated on having projects: a FRESH install is exactly where pasting
+          an existing canonry.yaml matters, and it is also where the inline
+          create form is gone and "Map a site" is admin-only, so gating this
+          left a non-admin writer with no way to create a project at all. */}
+      {canWrite ? <YamlApplyPanel onApplied={() => { void refetch() }} /> : null}
     </div>
   )
 }

@@ -132,8 +132,14 @@ export async function bootstrapCommand(opts?: { format?: CliFormat }): Promise<v
   })
 
   const apiUrl = env.apiUrl || existingRaw?.apiUrl || `http://127.0.0.1:${process.env.CANONRY_PORT || '4100'}`
+  // Spread the RAW on-disk config, never `loadConfig()`'s result: that one is
+  // mutated at load time from the environment (CANONRY_BASE_PATH overwrites
+  // `basePath`, CANONRY_EXTERNAL_MCP overwrites `externalMcpServers`). Spreading
+  // it persisted those process-only overrides into config.yaml, so a single
+  // `CANONRY_BASE_PATH=/cnry canonry bootstrap` permanently routed every later
+  // CLI invocation through /cnry. The explicit fields below are still written.
   const nextConfig = {
-    ...existingConfig,
+    ...existingRaw,
     apiUrl,
     database: databasePath,
     apiKey: rawApiKey,

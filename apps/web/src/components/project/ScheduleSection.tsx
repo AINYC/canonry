@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { getApiV1ProjectsByNameSchedulesQueryKey } from '@ainyc/canonry-api-client/react-query'
+import { getApiV1ProjectsByNameSchedulesOptions, getApiV1ProjectsByNameSchedulesQueryKey } from '@ainyc/canonry-api-client/react-query'
 
 import { Button } from '../ui/button.js'
 import { Card } from '../ui/card.js'
@@ -8,7 +8,7 @@ import { ToneBadge } from '../shared/ToneBadge.js'
 import { formatHour, buildPreset, parsePreset, scheduleLabel } from '../../lib/format-helpers.js'
 import { addToast } from '../../lib/toast-store.js'
 import { asyncHandler } from '../../lib/async-handler.js'
-import { fetchSchedules, heyClient, saveSchedule, removeSchedule, isEmbed, type ApiSchedule } from '../../api.js'
+import { heyClient, saveSchedule, removeSchedule, isEmbed, type ApiSchedule } from '../../api.js'
 
 // --- Schedule helpers ---
 const FREQ_OPTIONS = [
@@ -58,7 +58,15 @@ export function ScheduleSection({ projectName }: { projectName: string }) {
     let active = true
     setSchedule('loading')
     setLoadFailed(false)
-    fetchSchedules(projectName)
+    // Read through the SHARED query cache rather than issuing a bare fetch:
+    // ProjectPage already holds this exact key, so the imperative call made the
+    // settings tab perform the identical GET twice, and this component's own
+    // `refreshScheduleSummary()` invalidation targeted a cache it never read.
+    void queryClient
+      .ensureQueryData(getApiV1ProjectsByNameSchedulesOptions({
+        client: heyClient,
+        path: { name: projectName },
+      }))
       .then(schedules => {
         if (!active) return
         setSchedule(schedules.find(item => item.kind === 'answer-visibility') ?? null)

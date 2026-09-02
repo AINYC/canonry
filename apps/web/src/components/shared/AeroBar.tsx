@@ -388,9 +388,34 @@ export function AeroBar({ projectName }: AeroBarProps) {
 
   // Provider readiness is part of Aero's affordance, not a failure the user
   // should discover after sending a prompt. Resolve it before showing the bar.
-  // A missing provider gets one truthful recovery location; a failed readiness
-  // check stays quiet rather than advertising a control that may only error.
-  if (providersQuery.isPending || providersQuery.isError) return null
+  // A missing provider gets one truthful recovery location; a failed CHECK is
+  // reported as a failed check, since it is not evidence either way.
+  if (providersQuery.isPending) return null
+  if (providersQuery.isError) {
+    // A FAILED readiness check is not a finding that Aero is unavailable.
+    // Returning null here hid the launcher permanently while the layout still
+    // reserved space for it, so say what actually happened and offer a retry
+    // rather than either vanishing or claiming no provider is configured.
+    return (
+      <div className="pointer-events-none fixed inset-x-0 bottom-0 z-40 flex justify-center p-3">
+        <div
+          role="status"
+          className="flex w-full max-w-3xl flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-base bg-bg/95 px-4 py-2 text-sm shadow-lg"
+        >
+          <Radio className="h-4 w-4 text-muted" aria-hidden="true" />
+          <span className="font-medium text-strong">Aero could not check provider availability.</span>
+          <Button
+            variant="outline"
+            size="sm"
+            className="pointer-events-auto ml-auto"
+            onClick={() => { void providersQuery.refetch() }}
+          >
+            Try again
+          </Button>
+        </div>
+      </div>
+    )
+  }
   if (!activeProvider) {
     return (
       <div className="pointer-events-none fixed inset-x-0 bottom-0 z-40 flex justify-center p-3">
