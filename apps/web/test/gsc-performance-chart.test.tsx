@@ -317,7 +317,14 @@ test('the filter explanation is a tooltip, not a paragraph on the page', async (
   // assistive tech or for tests that look it up by accessible name.
   const trigger = screen.getByRole('button', { name: /case-insensitive substrings/ })
   expect(trigger).not.toBeNull()
-  expect(trigger.getAttribute('aria-label')).toMatch(/Tile percentages compare the trailing half of the selected window with the prior equal-length half/)
+  // Both ranges by name. "vs prior 2d" on a tile does not say WHICH two days,
+  // and a reader who cannot see the periods cannot check the percentage.
+  expect(trigger.getAttribute('aria-label')).toMatch(
+    /Tile percentages compare these 2 days \(2026-07-03 to 2026-07-04\) with the 2 days before them \(2026-07-01 to 2026-07-02\)\./,
+  )
+  // This fixture sends no `basis` — a server older than the field. It never
+  // claimed the window was split, so the tooltip must not claim it either.
+  expect(trigger.getAttribute('aria-label')).not.toMatch(/trailing half of the selected window/)
   expect(trigger.getAttribute('aria-label')).toMatch(/optional trend line shows the fitted direction/)
   expect(trigger.getAttribute('aria-label')).not.toMatch(/fitted trend's relative change/)
   expect(trigger.getAttribute('aria-label')).toMatch(/Click any day to filter/)
@@ -438,4 +445,49 @@ test('refuses to compare periods drawn from different data sources', async () =>
     // A flat property would otherwise read +44% clicks / -23% impressions.
     expect(tile(label).textContent).not.toMatch(/[+↑↓]\s*\d/)
   }
+})
+
+/**
+ * "vs prior 45d" under a button labelled 90d is what sent a reader looking for
+ * an explanation. The tile has room for a length and nothing more, so the
+ * heading tooltip is where the two periods get named — and, when the window was
+ * split rather than compared against the period before it, why.
+ */
+test('the tooltip names both compared periods when they are the window and the one before it', async () => {
+  renderSection(performanceDaily({
+    periodComparison: { ...performanceDaily().periodComparison, days: 4, basis: 'prior-window' },
+  }))
+  await waitFor(() => expect(tile('Clicks')).not.toBeNull())
+
+  const label = screen.getByRole('button', { name: /case-insensitive substrings/ }).getAttribute('aria-label')
+  expect(label).toMatch(
+    /Tile percentages compare these 4 days \(2026-07-03 to 2026-07-04\) with the 4 days before them \(2026-07-01 to 2026-07-02\)\./,
+  )
+  // Nothing was split, so the tooltip must not offer a reason for a split.
+  expect(label).not.toMatch(/split/)
+})
+
+test('the tooltip explains a split window instead of leaving the halved length unaccounted for', async () => {
+  renderSection(performanceDaily({
+    periodComparison: { ...performanceDaily().periodComparison, basis: 'split-window' },
+  }))
+  await waitFor(() => expect(tile('Clicks')).not.toBeNull())
+
+  const label = screen.getByRole('button', { name: /case-insensitive substrings/ }).getAttribute('aria-label')
+  // Same two ranges first — the reader still gets the dates behind the number.
+  expect(label).toMatch(
+    /Tile percentages compare these 2 days \(2026-07-03 to 2026-07-04\) with the 2 days before them \(2026-07-01 to 2026-07-02\)\./,
+  )
+  // Then the part the dates alone cannot say: this is half a window, and why.
+  expect(label).toMatch(/trailing half of the selected window against its own earlier half/)
+  expect(label).toMatch(/no equal-length period before the window with synced data/)
+})
+
+test('the tooltip still names the periods when the comparison is absent', async () => {
+  renderSection(performanceDaily({ periodComparison: undefined }))
+  await waitFor(() => expect(tile('Clicks')).not.toBeNull())
+
+  const label = screen.getByRole('button', { name: /case-insensitive substrings/ }).getAttribute('aria-label')
+  expect(label).toMatch(/compare the selected window with the equal-length period before it/)
+  expect(label).toMatch(/Click any day to filter/)
 })

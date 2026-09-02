@@ -395,3 +395,70 @@ describe('mixed measurement sources', () => {
     expect(result.change.clicks).toBeNull()
   })
 })
+
+/**
+ * The `basis` label is the module's whole statement about WHICH two periods it
+ * measured. `days` alone cannot say: 45 means "half of a 90-day window" under
+ * one basis and "a 45-day window and the 45 days before it" under the other,
+ * and a tile printing "vs prior 45d" for the first is what sent a reader here
+ * asking why pressing 90d produced 45.
+ */
+describe('computeGscPeriodComparison basis', () => {
+  const march = [
+    day('2026-03-01', 10, 100), day('2026-03-02', 10, 100),
+    day('2026-03-03', 10, 100), day('2026-03-04', 10, 100),
+    day('2026-03-05', 30, 100), day('2026-03-06', 30, 100),
+    day('2026-03-07', 30, 100), day('2026-03-08', 30, 100),
+  ]
+
+  it('defaults to split-window, so a caller that never opted in is unchanged', () => {
+    const result = computeGscPeriodComparison(march)
+    expect(result?.basis).toBe('split-window')
+    expect(result?.days).toBe(4)
+  })
+
+  it('reports the basis the caller passed without inferring it from the span', () => {
+    // The module does not decide the basis and must not try: the same eight-day
+    // span is a split 8-day window or a doubled 4-day one depending only on
+    // what the route asked for.
+    const result = computeGscPeriodComparison(march, {
+      startDate: '2026-03-01', endDate: '2026-03-08', basis: 'prior-window',
+    })
+    expect(result?.basis).toBe('prior-window')
+  })
+
+  /**
+   * The arithmetic the route depends on: hand in twice the selected window and
+   * the trailing half lands exactly on that window, the prior half exactly on
+   * the period before it. Nothing is dropped, because a doubled span is even.
+   */
+  it('puts the halves on the selected window and the period before it', () => {
+    const result = computeGscPeriodComparison(march, {
+      startDate: '2026-03-01', endDate: '2026-03-08', basis: 'prior-window',
+    })
+    expect(result?.days).toBe(4)
+    expect(result?.trailing).toMatchObject({
+      startDate: '2026-03-05', endDate: '2026-03-08', clicks: 120,
+    })
+    expect(result?.prior).toMatchObject({
+      startDate: '2026-03-01', endDate: '2026-03-04', clicks: 40,
+    })
+    expect(result?.change.clicks).toBe(2)
+  })
+
+  /**
+   * Same rows, same numbers on both sides — the ONLY difference between a
+   * doubled span and a window twice as wide is which two periods the reader is
+   * told about. That is exactly why the label has to travel with the figure.
+   */
+  it('produces identical periods for a doubled span and an equally wide split', () => {
+    const doubled = computeGscPeriodComparison(march, {
+      startDate: '2026-03-01', endDate: '2026-03-08', basis: 'prior-window',
+    })
+    const split = computeGscPeriodComparison(march, {
+      startDate: '2026-03-01', endDate: '2026-03-08',
+    })
+    expect({ ...doubled, basis: null }).toEqual({ ...split, basis: null })
+    expect(doubled?.basis).not.toBe(split?.basis)
+  })
+})

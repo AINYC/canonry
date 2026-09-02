@@ -18,10 +18,25 @@
  *    property's actual position went from 22.6 to 24.2, i.e. slightly WORSE.
  *    A number that points the opposite way to reality is worse than a blank.
  *
- * So the comparison is between two equal-length stretches of the known data
- * window. Nothing is extrapolated; omitted dates inside that observed frontier
- * are zero-count days, while dates beyond the frontier are kept out by the
- * route because their state is unknown.
+ * So the comparison is between two equal-length stretches of REAL recorded
+ * days. Nothing is extrapolated; omitted dates inside the observed frontier are
+ * zero-count days, while dates beyond the frontier are kept out by the route
+ * because their state is unknown.
+ *
+ * The caller chooses which span to hand in, and that choice is the `basis`:
+ *
+ * - `prior-window` — the span is TWICE the selected window, so the halves come
+ *   out as the selected window itself against the equal-length period
+ *   immediately before it. This is what a reader means by "90d": clicking 90d
+ *   and reading "vs prior 45d" was the split talking, not the button.
+ * - `split-window` — the span is the selected window, so the halves are its own
+ *   trailing and leading halves. The fallback, and the only thing available
+ *   when the selection is unbounded (`window=all` has nothing before it) or
+ *   when the period before it was never synced.
+ *
+ * Either way this module does one thing: split the span it is given down the
+ * middle of the CALENDAR and aggregate both sides. It does not decide the
+ * basis, it only records which one the caller asked for.
  *
  * No DB, no clock, no I/O — same posture as `gbp-summary.ts` and
  * `visibility-compare.ts`, so the whole thing is unit-testable from literals.
@@ -38,6 +53,17 @@
  * across every query x page x country x device row (over-counting impressions).
  */
 export type GscTotalsSource = 'property-daily' | 'dimensioned' | 'mixed' | 'empty'
+
+/**
+ * Which two periods the percentages compare.
+ *
+ * `prior-window` is the selected window against the equal-length period before
+ * it. `split-window` is the selected window's own two halves, so its `days` is
+ * HALF the selected window and a surface printing "vs prior {days}d" is naming
+ * a period shorter than the button the reader pressed. That is honest but
+ * surprising, which is exactly why it is labelled rather than left implicit.
+ */
+export type GscComparisonBasis = 'prior-window' | 'split-window'
 
 const DAY_MS = 86_400_000
 const GSC_CALENDAR_RANGE_CAP = 800
@@ -94,6 +120,11 @@ export interface GscPeriodChange {
 export interface GscPeriodComparison {
   /** Length of EACH period in calendar days. */
   days: number
+  /**
+   * Which two periods these are. Under `prior-window`, `days` equals the
+   * selected window; under `split-window` it is half of it.
+   */
+  basis: GscComparisonBasis
   prior: GscPeriodTotals
   trailing: GscPeriodTotals
   /**
@@ -205,7 +236,15 @@ function aggregate(
 }
 
 /**
- * Split the window into two equal, adjacent calendar periods and compare them.
+ * Split the given span into two equal, adjacent calendar periods and compare
+ * them.
+ *
+ * `bounds` is the whole span to divide, NOT the window the caller is showing.
+ * Hand in twice the selected window and the halves come out as that window
+ * against the equal-length period before it (`basis: 'prior-window'`); hand in
+ * the selected window itself and they come out as its own two halves
+ * (`basis: 'split-window'`). This module does not choose — the route does, and
+ * passes the `basis` so the number can be labelled for what it is.
  *
  * The split is over the CALENDAR, not over the row array. `daily` carries only
  * dates that produced data, so splitting it down the middle puts a different
@@ -215,13 +254,14 @@ function aggregate(
  *
  * When the span is an odd number of days the OLDEST day is dropped, because two
  * periods of equal length is the whole point of the comparison; an off-by-one
- * on the older side would quietly flatter or punish the trailing period.
+ * on the older side would quietly flatter or punish the trailing period. A
+ * `prior-window` span is even by construction and never loses a day.
  *
  * Returns null when the span cannot make two periods of at least one day each.
  */
 export function computeGscPeriodComparison(
   daily: readonly GscDailyRow[],
-  bounds?: { startDate: string; endDate: string },
+  bounds?: { startDate: string; endDate: string; basis?: GscComparisonBasis },
 ): GscPeriodComparison | null {
   const first = bounds?.startDate ?? daily[0]?.date
   const last = bounds?.endDate ?? daily[daily.length - 1]?.date
@@ -258,6 +298,7 @@ export function computeGscPeriodComparison(
 
   return {
     days: periodDays,
+    basis: bounds?.basis ?? 'split-window',
     prior,
     trailing,
     comparable,

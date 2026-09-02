@@ -368,6 +368,17 @@ export async function googlePerformanceDaily(project: string, opts: {
       `\nLast ${cmp.days} day${cmp.days === 1 ? '' : 's'} (${cmp.trailing.startDate} to ${cmp.trailing.endDate})`
       + ` vs prior ${cmp.days} (${cmp.prior.startDate} to ${cmp.prior.endDate}):`,
     )
+    // Under `split-window` the two periods came out of the selected window
+    // itself, so the length above is HALF the window that was asked for. The
+    // dates already say so, but only to a reader who subtracts them; say it.
+    //
+    // Absent `basis` is a server older than the field. Every such server split
+    // the window, but it did not claim that, so neither does this.
+    if (cmp.basis === 'split-window') {
+      console.log(
+        `  (no equal-length period with synced data before this window, so it was split in two)`,
+      )
+    }
     for (const [label, ratio, prior, trailing, inverted] of [
       ['Clicks', cmp.change.clicks, cmp.prior.clicks, cmp.trailing.clicks, false],
       ['Impressions', cmp.change.impressions, cmp.prior.impressions, cmp.trailing.impressions, false],

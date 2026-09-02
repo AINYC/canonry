@@ -171,3 +171,44 @@ describe('mixed data sources', () => {
     expect(out).not.toMatch(/Clicks:\s+[+-]\d/)
   })
 })
+
+/**
+ * The CLI names both date ranges outright, so a reader can always subtract them
+ * and see the period length. The `basis` line says the thing subtraction does
+ * NOT reveal: whether those dates are the window that was asked for, or half of
+ * it because nothing comparable sits before it.
+ */
+describe('canonry google performance-daily — comparison basis', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('says nothing extra when the periods are the window and the one before it', async () => {
+    gscPerformanceDaily.mockResolvedValue(response({
+      periodComparison: { ...response().periodComparison, basis: 'prior-window' as const },
+    }))
+    const out = await captureLog(() => googlePerformanceDaily('demo', { format: 'text' }))
+    expect(out).toContain('Last 2 days (2026-07-03 to 2026-07-04) vs prior 2 (2026-07-01 to 2026-07-02)')
+    expect(out).not.toContain('split in two')
+  })
+
+  it('says the window was split when that is what happened', async () => {
+    gscPerformanceDaily.mockResolvedValue(response({
+      periodComparison: { ...response().periodComparison, basis: 'split-window' as const },
+    }))
+    const out = await captureLog(() => googlePerformanceDaily('demo', { format: 'text' }))
+    expect(out).toContain('split in two')
+  })
+
+  /**
+   * A server older than the field returns the comparison with no `basis`. It
+   * never claimed the window was split, so neither does the CLI — asserting a
+   * basis nobody sent is the same class of error as inventing a percentage.
+   */
+  it('claims no basis when the server sent none', async () => {
+    gscPerformanceDaily.mockResolvedValue(response())
+    const out = await captureLog(() => googlePerformanceDaily('demo', { format: 'text' }))
+    expect(out).toContain('Last 2 days (2026-07-03 to 2026-07-04) vs prior 2 (2026-07-01 to 2026-07-02)')
+    expect(out).not.toContain('split in two')
+  })
+})

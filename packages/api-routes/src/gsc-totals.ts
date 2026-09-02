@@ -1,4 +1,4 @@
-import { and, asc, eq, sql, max } from 'drizzle-orm'
+import { and, asc, eq, sql, max, min } from 'drizzle-orm'
 import { gscDailyTotals, gscQueryDailyTotals, gscSearchData, gscDataWatermarks } from '@ainyc/canonry-db'
 import type { DatabaseClient } from '@ainyc/canonry-db'
 import { shiftIsoCalendarDate, type MetricsWindow } from '@ainyc/canonry-contracts'
@@ -155,6 +155,41 @@ export function readLatestGscDataDate(db: DatabaseClient, projectId: string): st
   return [watermark, property, dimensioned]
     .filter((d): d is string => d !== null)
     .reduce<string | null>((maxDate, d) => (maxDate === null || d > maxDate ? d : maxDate), null)
+}
+
+/**
+ * The earliest GSC reporting date a project has stored — the floor under any
+ * period a surface is willing to reach back to.
+ *
+ * The mirror of `readLatestGscDataDate`, and it exists for the same reason.
+ * Search Analytics omits days with no data, so a date carrying no stored row is
+ * ambiguous: INSIDE the synced span it is a real zero-count day, but BEFORE the
+ * earliest row it may equally be a day nobody ever fetched. Counting the second
+ * as zero lets a half-synced baseline manufacture growth — a prior period the
+ * backfill only half reaches reads as half the traffic it actually had, and the
+ * tile above it prints a rise that never happened.
+ *
+ * There is no `data_from_date` watermark to consult: `gsc_data_watermarks`
+ * records only how far FORWARD a sync has reached. The observed minimum across
+ * both stored tables is therefore the frontier, and a quiet LEADING stretch
+ * walks it forward — withholding a comparison that could have been made. That
+ * is the safe direction to be wrong in, and it is the same trade the top-end
+ * frontier already takes.
+ *
+ * Both tables are consulted for the same reason `readLatestGscDataDate`
+ * consults both: they sync independently, and a project from before
+ * `gsc_daily_totals` existed has only dimensioned rows. A period that reaches
+ * into dimensioned-only history is not silently trusted either — it aggregates
+ * to `source: 'dimensioned'`, which the comparison marks not comparable.
+ */
+export function readEarliestGscDataDate(db: DatabaseClient, projectId: string): string | null {
+  const property = db.select({ earliest: min(gscDailyTotals.date) })
+    .from(gscDailyTotals).where(eq(gscDailyTotals.projectId, projectId)).get()?.earliest ?? null
+  const dimensioned = db.select({ earliest: min(gscSearchData.date) })
+    .from(gscSearchData).where(eq(gscSearchData.projectId, projectId)).get()?.earliest ?? null
+  return [property, dimensioned]
+    .filter((d): d is string => d !== null)
+    .reduce<string | null>((earliest, d) => (earliest === null || d < earliest ? d : earliest), null)
 }
 
 /**
