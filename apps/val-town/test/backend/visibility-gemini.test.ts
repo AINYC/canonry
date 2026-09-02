@@ -190,16 +190,34 @@ Deno.test('planner accepts only complete non-brand buyer query plans', () => {
   equal(prompt.includes('exactly 3 non-brand buyer-intent queries'), true)
 })
 
-Deno.test('planner parser rejects an incomplete three-query plan', () => {
+Deno.test('an incomplete plan is a smaller sample, not a failed check', () => {
+  // Requiring an EXACT count meant a planner that produced two usable queries
+  // out of three destroyed the whole visibility half of the report, and the
+  // reader got nothing instead of two answers.
+  const plan = parseGeminiQueryPlan({
+    responseText: JSON.stringify({
+      brandNames: ['Example Co'],
+      queries: [
+        'What are the best answer engine optimization tools?',
+        'How can a marketing team improve AI search citations?',
+      ],
+    }),
+    target: { canonicalDomain: 'example.com', brandNames: ['Example Co'] },
+    maxQueries: 3,
+    requestedModel: 'gemini-2.5-flash',
+    servedModel: null,
+    generatedAt: '2026-09-01T12:00:00.000Z',
+  })
+  equal(plan.queries.length, 2, 'two usable queries are two probes, not zero')
+})
+
+Deno.test('a plan with nothing to probe is still a failure', () => {
+  // Zero is different in kind: there is no question to ask. The only query
+  // here is branded, and a branded query hands the model the answer, so it is
+  // dropped and nothing usable is left.
   try {
     parseGeminiQueryPlan({
-      responseText: JSON.stringify({
-        brandNames: ['Example Co'],
-        queries: [
-          'What are the best answer engine optimization tools?',
-          'How can a marketing team improve AI search citations?',
-        ],
-      }),
+      responseText: JSON.stringify({ brandNames: ['Example Co'], queries: ['what does Example Co do?'] }),
       target: { canonicalDomain: 'example.com', brandNames: ['Example Co'] },
       maxQueries: 3,
       requestedModel: 'gemini-2.5-flash',
@@ -207,10 +225,10 @@ Deno.test('planner parser rejects an incomplete three-query plan', () => {
       generatedAt: '2026-09-01T12:00:00.000Z',
     })
   } catch (error) {
-    if (error instanceof Error && error.message.includes('did not return 3 non-brand buyer queries')) return
+    if (error instanceof Error && error.message.includes('did not return any non-brand buyer queries')) return
     throw error
   }
-  throw new Error('expected an incomplete plan to be rejected')
+  throw new Error('expected a plan with no usable query to be rejected')
 })
 
 Deno.test('domain-only planning requests grounded unstructured JSON and returns three valid queries', async () => {
@@ -260,7 +278,7 @@ Deno.test('domain-only planning requests grounded unstructured JSON and returns 
   ])
 })
 
-Deno.test('the Val host fixes one planner, three probes, one extraction, a single probe wave, and zero retries', async () => {
+Deno.test('the Val host fixes one planner, three probes, one extraction, a single probe wave, and one retry', async () => {
   const calls: unknown[] = []
   const client: GeminiContentClient = {
     models: {
@@ -320,11 +338,11 @@ Deno.test('the Val host fixes one planner, three probes, one extraction, a singl
     probeTimeoutMs: 20_000,
     probeConcurrency: 3,
   })
-  // One planner, three probes, one brand extraction. The first probe is a
-  // retryable 429, so a SIXTH call would prove the public billing limits were
-  // no longer fixed. This is the number that changes when a feature adds a
-  // provider call, and it is meant to be noticed when it does.
-  equal(calls.length, 5)
+  // One planner, three probes, one brand extraction, plus ONE retry: the first
+  // probe answers a retryable 429 and is attempted again, which is the point of
+  // the retry and is what turns a transient blip into an answer instead of a
+  // lost row. A SEVENTH call would mean the retry budget grew past one.
+  equal(calls.length, 6)
   deepEqual(
     {
       successfulChecks: report.summary.successfulChecks,
@@ -333,6 +351,60 @@ Deno.test('the Val host fixes one planner, three probes, one extraction, a singl
       mentionRate: report.summary.mentionRate,
       citationRate: report.summary.citationRate,
     },
-    { successfulChecks: 2, failedChecks: 1, evidenceCount: 3, mentionRate: 1, citationRate: 1 },
+    // The retryable 429 now succeeds on its second attempt, so the answer that
+    // used to be lost is measured. This IS the fix: a transient blip cost a
+    // third of the report before, and costs nothing now.
+    { successfulChecks: 3, failedChecks: 0, evidenceCount: 3, mentionRate: 1, citationRate: 1 },
   )
+})
+
+Deno.test('a planning failure never discards questions the visitor typed', () => {
+  // A real check produced ZERO evidence rows: the planner threw, and the whole
+  // phase rejected with it. If the visitor supplied their own questions, those
+  // are perfectly good probes — losing them because OUR generator hiccuped
+  // hands back an empty report for work the visitor already specified.
+  const calls: unknown[] = []
+  const client = {
+    models: {
+      generateContent(params: unknown) {
+        calls.push(params)
+        // The planner is always the first call, and it fails outright.
+        if (calls.length === 1) return Promise.reject(new Error('The query planner returned invalid JSON.'))
+        return Promise.resolve({
+          modelVersion: 'gemini-2.5-flash',
+          candidates: [{ content: { parts: [{ text: 'Example Co is a good option.' }] } }],
+        })
+      },
+    },
+  }
+  const probe = createGeminiValVisibilityProbe({ apiKey: 'test-key', client: client as never })
+  return probe.probe({
+    domain: 'example.com',
+    userQueries: ['which tool tracks AI answer visibility'],
+    signal: AbortSignal.timeout(5_000),
+  } as unknown as VisibilityProbeInput).then((report) => {
+    equal(report.evidence.length, 1, "the visitor's own question is still probed")
+    equal(report.evidence[0]?.query, 'which tool tracks AI answer visibility')
+    equal(report.summary.failedChecks, 0, 'and it is a real measured answer, not a failure row')
+  })
+})
+
+Deno.test('a planning failure with nothing else to ask still fails', () => {
+  // With no supplied question there is no probe to run, so the phase must
+  // reject rather than report an empty success.
+  const client = {
+    models: {
+      generateContent: () => Promise.reject(new Error('The query planner returned invalid JSON.')),
+    },
+  }
+  const probe = createGeminiValVisibilityProbe({ apiKey: 'test-key', client: client as never })
+  return probe.probe({ domain: 'example.com', signal: AbortSignal.timeout(5_000) } as unknown as VisibilityProbeInput)
+    .then(
+      () => {
+        throw new Error('expected the phase to fail when there is nothing to probe')
+      },
+      (error: unknown) => {
+        if (!(error instanceof Error)) throw new Error('expected an Error')
+      },
+    )
 })

@@ -6,7 +6,7 @@ import {
   type GeminiContentClient,
 } from './gemini.ts'
 import { createGeminiBrandExtractor } from './mention-extract.ts'
-import type { VisibilityProbeCheck, VisibilityProbeReport } from './contracts.ts'
+import type { VisibilityProbeCheck, VisibilityProbeReport, VisibilityQueryPlan } from './contracts.ts'
 import { runVisibilityProbe } from './runner.ts'
 import type {
   VisibilityEvidence,
@@ -53,14 +53,17 @@ export function createGeminiValVisibilityProbe(options: GeminiValVisibilityProbe
   const planner = createGeminiVisibilityQueryPlanner({
     apiKey: options.apiKey,
     model: options.model,
-    maxRetries: 0,
+    // Retries run inside the per-call deadline, so they cost no extra budget.
+    maxRetries: 1,
     maxOutputTokens: 700,
     client: options.client,
   })
   const adapter = createGeminiVisibilityAdapter({
     apiKey: options.apiKey,
     model: options.model,
-    maxRetries: 0,
+    // A transient 503 on one probe used to lose that answer outright. The
+    // retry is bounded by the same 20s probe deadline.
+    maxRetries: 1,
     maxOutputTokens: 1_000,
     client: options.client,
   })
@@ -78,17 +81,27 @@ export function createGeminiValVisibilityProbe(options: GeminiValVisibilityProbe
 
       // A caller who supplied the full set gets no planning call at all: it
       // would cost a Gemini request to produce questions nothing then asks.
-      const plan = generateCount > 0
-        ? await planner.plan({
-          canonicalDomain: input.domain,
-          brandNames: [],
-          maxQueries: generateCount,
-          signal: AbortSignal.any([
-            input.signal,
-            AbortSignal.timeout(VAL_TOWN_GEMINI_VISIBILITY_LIMITS.plannerTimeoutMs),
-          ]),
-        })
-        : null
+      //
+      // A planning failure is only fatal when it leaves NOTHING to ask. If the
+      // visitor typed their own questions, those are still perfectly good
+      // probes, and losing them because OUR generator hiccuped hands back an
+      // empty report for work the visitor already specified.
+      let plan: VisibilityQueryPlan | null = null
+      if (generateCount > 0) {
+        try {
+          plan = await planner.plan({
+            canonicalDomain: input.domain,
+            brandNames: [],
+            maxQueries: generateCount,
+            signal: AbortSignal.any([
+              input.signal,
+              AbortSignal.timeout(VAL_TOWN_GEMINI_VISIBILITY_LIMITS.plannerTimeoutMs),
+            ]),
+          })
+        } catch (error) {
+          if (supplied.length === 0) throw error
+        }
+      }
 
       // The caller's questions come first, so a partial list is never displaced
       // by generated ones when the probe budget is spent.

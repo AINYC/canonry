@@ -185,6 +185,26 @@ empty sample is still an `error`: hitting a ceiling cannot upgrade one. The reas
 bypasses Turnstile, and the notice is rendered from the record status by the UI. It took one real submission through
 the form to see it.
 
+## One flaky call must not cost the whole visibility phase
+
+Three things each turned a single transient failure into TOTAL visibility loss. All three are fixed, and all three
+were found by reading real failed checks rather than by testing.
+
+- **The planner demanded an EXACT query count.** Two usable queries out of three threw, and the reader got nothing
+  instead of two answers. Fewer than requested is a smaller sample; only ZERO is a failure, because then there is
+  nothing to ask.
+- **Nothing retried.** `maxRetries: 0` on both the planner and the probe adapter, with `withBoundedRetry` wired and
+  disabled. A transient 503 on one probe lost that answer outright, and one on the planner lost the entire phase.
+  Both now retry once, INSIDE the deadline the call already holds, so the budget arithmetic is unchanged. The
+  regression fixture proves the value: its retryable 429 used to report 2 successful / 1 failed and now reports 3 / 0.
+- **A planning failure discarded questions the VISITOR typed.** `probe()` rejected whole when `planner.plan()` threw,
+  even with supplied queries in hand. Those are perfectly good probes; losing them because our generator hiccuped
+  returns an empty report for work the visitor already specified. A planning failure is now fatal only when it leaves
+  nothing to probe.
+
+The call-count pin in `visibility-gemini.test.ts` moved 5 -> 6 to cover the retry. That number is meant to be noticed:
+it is the check on what a public visitor can make this val spend.
+
 ## The probe budget is arithmetic, not a guess
 
 Three deadlines in three files have to fit inside one ceiling: `plannerTimeoutMs` + probe waves x `probeTimeoutMs` +

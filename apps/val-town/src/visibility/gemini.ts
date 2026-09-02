@@ -118,9 +118,11 @@ export function createGeminiVisibilityQueryPlanner(options: GeminiVisibilityAdap
               },
             }),
           deadline.signal,
-          // Planning is one logical and one provider call in the public
-          // funnel. Hosts may re-admit a new plan explicitly if desired.
-          { ...config, maxRetries: 0 },
+          // One retry, spent inside the deadline this call already holds, so
+          // the budget is unchanged. Planning is the single point whose failure
+          // costs the WHOLE visibility phase; refusing to retry a transient 503
+          // there traded a cheap second attempt for the entire report.
+          { ...config, maxRetries: 1 },
         )
         return parseGeminiQueryPlan({
           responseText: extractAnswerText(response),
@@ -364,8 +366,13 @@ export function parseGeminiQueryPlan(input: GeminiQueryPlanParseInput): Visibili
     })
     .slice(0, input.maxQueries)
     .map((text, index) => ({ id: `planned-query-${index + 1}`, text }))
-  if (queries.length !== input.maxQueries) {
-    throw new Error(`The query planner did not return ${input.maxQueries} non-brand buyer queries.`)
+  // Fewer than asked for is a smaller sample, not a failed check. Requiring an
+  // EXACT count meant a planner that returned two usable queries out of three
+  // destroyed the entire visibility half of the report, and the reader got
+  // nothing rather than two answers. Zero is still a failure: there is nothing
+  // to probe.
+  if (queries.length === 0) {
+    throw new Error('The query planner did not return any non-brand buyer queries.')
   }
   return {
     target: { canonicalDomain: target.canonicalDomain, brandNames: target.brandNames },
