@@ -1702,8 +1702,8 @@ describe('POST /traffic/sources/:id/backfill — Vercel', () => {
     runId: string,
     timeoutMs = 2000,
   ): Promise<typeof runs.$inferSelect> {
-    const deadline = Date.now() + timeoutMs
-    while (Date.now() < deadline) {
+    const deadline = performance.now() + timeoutMs
+    while (performance.now() < deadline) {
       const row = db.select().from(runs).where(eq(runs.id, runId)).get()
       if (row && row.status !== RunStatuses.running) return row
       await new Promise<void>((resolve) => setTimeout(resolve, 25))
@@ -1912,7 +1912,11 @@ describe('POST /traffic/sources/:id/backfill — Vercel', () => {
       expect(finalRun.error).toMatch(/refusing to advance/)
 
       const sourceRow = h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()!
-      expect(sourceRow.status).toBe(TrafficSourceStatuses.error)
+      // Retention is a limit on this optional historical recovery, not a
+      // broken Vercel connection. The run records the failed range while the
+      // source remains ready for forward sync.
+      expect(sourceRow.status).toBe(TrafficSourceStatuses.connected)
+      expect(sourceRow.lastError).toBeNull()
       // The failed backfill must not advance lastSyncedAt past the connect-time value.
       expect(sourceRow.lastSyncedAt).toBe(connectSyncedAt)
       expect(h.db.select().from(crawlerEventsHourly).all()).toEqual([])
@@ -3379,8 +3383,8 @@ describe('POST /traffic/sources/:id/backfill', () => {
     runId: string,
     timeoutMs = 2000,
   ): Promise<typeof runs.$inferSelect> {
-    const deadline = Date.now() + timeoutMs
-    while (Date.now() < deadline) {
+    const deadline = performance.now() + timeoutMs
+    while (performance.now() < deadline) {
       const row = db.select().from(runs).where(eq(runs.id, runId)).get()
       if (row && row.status !== RunStatuses.running) return row
       await new Promise<void>((resolve) => setTimeout(resolve, 25))
@@ -3834,33 +3838,49 @@ describe('POST /traffic/sources/:id/backfill', () => {
     }
   })
 
-  it('replaces the boundary-hour bucket cleanly when windowStart falls mid-hour', async () => {
-    // Without hour-flooring, an existing bucket at floor(windowStart, hour)
-    // has tsHour < raw windowStart so the delete misses it, but the new pull
-    // re-emits a bucket at the same tsHour — the plain insert then trips the
-    // composite primary key and rolls the whole transaction back.
-    const now = Date.now()
-    const rawWindowStart = new Date(now - 86_400_000) // matches days=1
+  it('uses the next full hour so a Vercel retention boundary is never rounded backward', async () => {
+    // Fake only Date so the retention boundary and submitted window are exact
+    // while Fastify and the polling helper keep using real timers.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-05-08T12:30:00.000Z'))
+
+    const rawWindowStart = new Date(Date.now() - 86_400_000) // matches days=1
     const boundaryHour = new Date(rawWindowStart)
     boundaryHour.setUTCMinutes(0, 0, 0)
+    boundaryHour.setUTCHours(boundaryHour.getUTCHours() + 1)
     const boundaryHourIso = boundaryHour.toISOString()
-    // New event sits inside the boundary hour, after raw windowStart.
+    // New event sits inside the first fully-covered hour. An existing bucket
+    // at that hour must be replaced rather than causing a composite-key clash.
     const eventInBoundaryHour = new Date(boundaryHour.getTime() + 35 * 60_000).toISOString()
 
     const events: NormalizedTrafficRequest[] = [
-      buildEvent({
+      buildVercelEvent({
         userAgent: 'GPTBot/1.0',
         path: '/blog/foo',
         status: 200,
         observedAt: eventInBoundaryHour,
       }),
     ]
-    const h = await buildHarness(events, { bypassTimeFilter: true })
+    const h = await buildHarness([], {
+      vercelPullPages: ({ startDate, endDate }) => {
+        const eventsInWindow = events.filter((event) => {
+          const observedMs = new Date(event.observedAt).getTime()
+          return observedMs >= startDate && observedMs < endDate
+        })
+        return {
+          events: eventsInWindow,
+          rawEntryCount: eventsInWindow.length,
+          skippedEntryCount: 0,
+          hasMore: false,
+          endpoint: '',
+        }
+      },
+    })
     try {
       const connectRes = await h.app.inject({
         method: 'POST',
-        url: '/api/v1/projects/test-project/traffic/connect/cloud-run',
-        payload: { gcpProjectId: 'openclaw-nyc', keyJson: SA_KEY },
+        url: '/api/v1/projects/test-project/traffic/connect/vercel',
+        payload: { projectId: 'prj_hour_ceiling', teamId: 'team_hour_ceiling', token: 'vercel-secret' },
       })
       const source = JSON.parse(connectRes.payload)
 
@@ -3889,6 +3909,7 @@ describe('POST /traffic/sources/:id/backfill', () => {
         payload: { days: 1 },
       })
       const submitted = JSON.parse(submitRes.payload)
+      expect(submitted.windowStart).toBe(boundaryHourIso)
       const finalRun = await waitForRunComplete(h.db, submitted.runId)
       expect(finalRun.status).toBe(RunStatuses.completed)
 
@@ -3898,6 +3919,7 @@ describe('POST /traffic/sources/:id/backfill', () => {
       // Replaced (1), not the seeded 5 nor the additive 6.
       expect(buckets[0].hits).toBe(1)
     } finally {
+      vi.useRealTimers()
       await h.close()
     }
   })
