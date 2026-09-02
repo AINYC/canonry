@@ -75,9 +75,10 @@ const LEGEND_STYLE = { fontSize: 11, paddingTop: 6 } as const
  *  legend doubles its length and says nothing new. */
 const HIDDEN_FROM_LEGEND = new Set(['Pages crawled trend', 'Page fetches trend', 'Visits trend'])
 
-/** Trend points are linear interpolations, so they land on long floats
- *  ("46.928533333333334"); every series in these charts is a count, so the
- *  tooltip shows whole numbers. */
+/** Trend series carry tooltipType="none": a fitted line's per-point value is
+ *  an interpolation ("46.928533333333334"), not a reading, so it has no place
+ *  in the tooltip. This formatter guards the remaining series - all counts -
+ *  so any future float series still renders as a whole number. */
 const formatTooltipValue = (value: unknown) =>
   typeof value === 'number' ? formatNumber(Math.round(value)) : String(value)
 
@@ -391,11 +392,11 @@ export function AiTrafficHistoryPanel({
                   stroke={FETCH_COLOR} fill={FETCH_COLOR} fillOpacity={0.18} strokeWidth={1.6} />
           )}
           {showTrend && (
-            <Line type="linear" dataKey="crawlTrend" name="Pages crawled trend" dot={false}
+            <Line type="linear" dataKey="crawlTrend" name="Pages crawled trend" dot={false} tooltipType="none"
                   stroke={CRAWLER_COLOR} strokeWidth={1.4} strokeDasharray="5 4" connectNulls />
           )}
           {showTrend && showFetches && (
-            <Line type="linear" dataKey="fetchTrend" name="Page fetches trend" dot={false}
+            <Line type="linear" dataKey="fetchTrend" name="Page fetches trend" dot={false} tooltipType="none"
                   stroke={FETCH_COLOR} strokeWidth={1.3} strokeDasharray="5 4" connectNulls />
           )}
         </ComposedChart>
@@ -442,7 +443,7 @@ export function AiTrafficHistoryPanel({
                   dot={isolatedPointDot(chartRows.map((r) => r.ga4Visits), GA4_COLOR)} />
           )}
           {showTrend && visitSource !== 'ga4' && (
-            <Line type="linear" dataKey="visitTrend" name="Visits trend" dot={false}
+            <Line type="linear" dataKey="visitTrend" name="Visits trend" dot={false} tooltipType="none"
                   stroke={VISIT_COLOR} strokeWidth={1.3} strokeDasharray="5 4" connectNulls />
           )}
         </ComposedChart>
