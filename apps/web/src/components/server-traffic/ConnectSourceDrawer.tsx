@@ -161,22 +161,26 @@ function WizardHeader({
 }
 
 /**
- * After a source connects, hand off to its detail page: kick off a backfill
- * so the source has historical data without a manual sync, then close the
- * drawer and route to the source detail page where the run is visible.
- * Backfill, not an incremental sync, is the first-load primitive: a sync's
- * default window can overrun an adapter's per-sync page budget.
+ * After a source connects, hand off to its detail page. Adapters with a safe
+ * initial history window can kick off a backfill before navigation; adapters
+ * with retention-limited history capture forward traffic and leave history as
+ * an explicit operator action.
  *
- * Rejects if the backfill kickoff fails. A failed kickoff creates no run
+ * Rejects if a requested backfill kickoff fails. A failed kickoff creates no run
  * row, so the caller keeps the drawer open and shows the error instead of
- * routing to a detail page with nothing on it. `afterBackfillStarted` runs
- * only once the kickoff has succeeded.
+ * routing to a detail page with nothing on it. `afterConnected` runs only
+ * once the optional kickoff has succeeded.
  */
 function useConnectedSourceHandoff(projectName: string, onClose: () => void) {
   const navigate = useNavigate()
-  return async (sourceId: string, afterBackfillStarted?: () => void) => {
-    await triggerServerTrafficBackfill(projectName, sourceId)
-    afterBackfillStarted?.()
+  return async (
+    sourceId: string,
+    options: { startInitialBackfill: boolean; afterConnected?: () => void },
+  ) => {
+    if (options.startInitialBackfill) {
+      await triggerServerTrafficBackfill(projectName, sourceId)
+    }
+    options.afterConnected?.()
     onClose()
     void navigate({
       to: '/traffic/$projectName/$sourceId',
@@ -200,7 +204,9 @@ function useConnectFlow(projectName: string, onClose: () => void) {
     validate: () => string | null
     /** Fire the typed connect mutation and resolve with the created source. */
     mutate: () => Promise<{ id: string }>
-    /** Runs once connect and the backfill kickoff both succeed, e.g. to clear the secret field. */
+    /** Whether this adapter can safely start an implicit history backfill. */
+    startInitialBackfill?: boolean
+    /** Runs once connect and any requested backfill kickoff succeed. */
     onConnected?: () => void
   }) => {
     setError(null)
@@ -218,12 +224,14 @@ function useConnectFlow(projectName: string, onClose: () => void) {
       return
     }
 
-    // The source row exists now. Kick off the backfill and route to its
-    // detail page. A backfill kickoff failure (bad credentials, 5xx,
-    // network) creates no run row, so keep the drawer open and surface the
-    // error rather than routing to a detail page with nothing to show.
+    // The source row exists now. Start history only for adapters that can do
+    // so safely, then route to its detail page. A requested backfill kickoff
+    // failure creates no run row, so keep the drawer open and surface it.
     try {
-      await handoff(source.id, steps.onConnected)
+      await handoff(source.id, {
+        startInitialBackfill: steps.startInitialBackfill ?? true,
+        afterConnected: steps.onConnected,
+      })
     } catch (e) {
       setError(`Source connected, but starting the initial backfill failed: ${extractErrorMessage(e)}`)
     }
@@ -592,6 +600,9 @@ function VercelSourceForm({
           environment,
           displayName: displayName.trim() || undefined,
         }),
+      // New Vercel sources start at NOW so regular sync stays inside upstream
+      // retention. Historical recovery is explicit and user-sized.
+      startInitialBackfill: false,
       // Don't keep the token around in memory after submit.
       onConnected: () => setToken(''),
     })

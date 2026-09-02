@@ -3957,13 +3957,13 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
 
     const windowEnd = new Date()
     const requestedWindowStartMs = windowEnd.getTime() - appliedDays * 86_400_000
-    // Backfill rollups are hourly, so use a whole-hour lower bound. Round
-    // forward rather than back: the previous floor reached up to 59 minutes
-    // *before* the operator's requested lookback, which could turn an
-    // otherwise supported Vercel retention window into a 400. Starting at the
-    // next hour also keeps replacement inserts disjoint from the partial
-    // boundary bucket that remains outside the delete range.
-    const windowStart = new Date(Math.ceil(requestedWindowStartMs / 3_600_000) * 3_600_000)
+    // Backfill rollups are hourly, so replace the full lower-bound bucket.
+    // Rounding forward would silently omit up to 59 minutes while still
+    // reporting the requested number of days. A retention-limited adapter must
+    // reject the full-bucket pull instead; the failed run preserves both the
+    // existing rollups and the connected source state.
+    const windowStart = new Date(requestedWindowStartMs)
+    windowStart.setUTCMinutes(0, 0, 0)
 
     // Build the per-source-type window pull closure. Credential and config
     // validation happens up-front (synchronously throws validationError on

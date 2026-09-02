@@ -3376,6 +3376,10 @@ describe('POST /traffic/sources/:id/sync — WordPress', () => {
 })
 
 describe('POST /traffic/sources/:id/backfill', () => {
+  // The boundary-hour case below pins Date. Restore it even if harness setup
+  // fails before that test reaches its local cleanup.
+  afterEach(() => { vi.useRealTimers() })
+
   // Helper that polls the run row until status moves off 'running' or
   // the timeout trips, so async tests don't depend on internal scheduling.
   async function waitForRunComplete(
@@ -3838,49 +3842,35 @@ describe('POST /traffic/sources/:id/backfill', () => {
     }
   })
 
-  it('uses the next full hour so a Vercel retention boundary is never rounded backward', async () => {
-    // Fake only Date so the retention boundary and submitted window are exact
-    // while Fastify and the polling helper keep using real timers.
+  it('replaces the full boundary hour without shortening the requested lookback', async () => {
+    // Fake only Date so the submitted window is exact while Fastify and the
+    // polling helper keep using real timers.
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date('2026-05-08T12:30:00.000Z'))
 
     const rawWindowStart = new Date(Date.now() - 86_400_000) // matches days=1
     const boundaryHour = new Date(rawWindowStart)
     boundaryHour.setUTCMinutes(0, 0, 0)
-    boundaryHour.setUTCHours(boundaryHour.getUTCHours() + 1)
     const boundaryHourIso = boundaryHour.toISOString()
-    // New event sits inside the first fully-covered hour. An existing bucket
-    // at that hour must be replaced rather than causing a composite-key clash.
-    const eventInBoundaryHour = new Date(boundaryHour.getTime() + 35 * 60_000).toISOString()
+    // This event is inside the requested lookback and its lower boundary hour.
+    // A forward-rounded start would skip it and leave the stale seeded bucket
+    // behind.
+    const eventInBoundaryHour = new Date(boundaryHour.getTime() + 45 * 60_000).toISOString()
 
     const events: NormalizedTrafficRequest[] = [
-      buildVercelEvent({
+      buildEvent({
         userAgent: 'GPTBot/1.0',
         path: '/blog/foo',
         status: 200,
         observedAt: eventInBoundaryHour,
       }),
     ]
-    const h = await buildHarness([], {
-      vercelPullPages: ({ startDate, endDate }) => {
-        const eventsInWindow = events.filter((event) => {
-          const observedMs = new Date(event.observedAt).getTime()
-          return observedMs >= startDate && observedMs < endDate
-        })
-        return {
-          events: eventsInWindow,
-          rawEntryCount: eventsInWindow.length,
-          skippedEntryCount: 0,
-          hasMore: false,
-          endpoint: '',
-        }
-      },
-    })
+    const h = await buildHarness(events)
     try {
       const connectRes = await h.app.inject({
         method: 'POST',
-        url: '/api/v1/projects/test-project/traffic/connect/vercel',
-        payload: { projectId: 'prj_hour_ceiling', teamId: 'team_hour_ceiling', token: 'vercel-secret' },
+        url: '/api/v1/projects/test-project/traffic/connect/cloud-run',
+        payload: { gcpProjectId: 'openclaw-nyc', keyJson: SA_KEY },
       })
       const source = JSON.parse(connectRes.payload)
 
@@ -3919,7 +3909,6 @@ describe('POST /traffic/sources/:id/backfill', () => {
       // Replaced (1), not the seeded 5 nor the additive 6.
       expect(buckets[0].hits).toBe(1)
     } finally {
-      vi.useRealTimers()
       await h.close()
     }
   })
