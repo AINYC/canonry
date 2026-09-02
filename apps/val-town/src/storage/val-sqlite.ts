@@ -297,7 +297,7 @@ export class ValSqliteCheckStore implements CheckStore {
       {
         sql: `INSERT INTO canonry_quota (scope, subject, day, count)
           SELECT ?, ?, ?, 1
-          WHERE EXISTS (
+          WHERE ? > 0 AND EXISTS (
             SELECT 1 FROM canonry_checks WHERE id = ? AND error_code = ?
           )
           ON CONFLICT(scope, subject, day) DO UPDATE SET count = count + 1
@@ -307,6 +307,7 @@ export class ValSqliteCheckStore implements CheckStore {
           input.clientQuota.scope,
           input.clientQuota.subject,
           input.clientQuota.day,
+          input.clientQuota.max,
           candidate.id,
           ADMISSION_PENDING,
           input.clientQuota.max,
@@ -325,7 +326,7 @@ export class ValSqliteCheckStore implements CheckStore {
       {
         sql: `INSERT INTO canonry_quota (scope, subject, day, count)
           SELECT ?, ?, ?, 1
-          WHERE EXISTS (
+          WHERE ? > 0 AND EXISTS (
             SELECT 1 FROM canonry_checks WHERE id = ? AND error_code = ?
           )
           ON CONFLICT(scope, subject, day) DO UPDATE SET count = count + 1
@@ -335,6 +336,7 @@ export class ValSqliteCheckStore implements CheckStore {
           input.globalQuota.scope,
           input.globalQuota.subject,
           input.globalQuota.day,
+          input.globalQuota.max,
           candidate.id,
           ADMISSION_CLIENT_CLAIMED,
           input.globalQuota.max,
@@ -429,11 +431,11 @@ export class ValSqliteCheckStore implements CheckStore {
     // requests cannot both spend the final remaining slot.
     const result = await this.sqlite.execute({
       sql: `INSERT INTO canonry_quota (scope, subject, day, count)
-        VALUES (?, ?, ?, 1)
+        SELECT ?, ?, ?, 1 WHERE ? > 0
         ON CONFLICT(scope, subject, day) DO UPDATE SET count = count + 1
           WHERE canonry_quota.count < ?
         RETURNING count`,
-      args: [scope, subject, day, max],
+      args: [scope, subject, day, max, max],
     })
     return result.rows.length > 0
   }

@@ -197,7 +197,12 @@ async function dispatch(
     }
 
     default:
-      // Streamable HTTP pairs an unknown method with 404, which is how a client
+      // A notification (no id) must never be answered, even for an unknown
+      // method: returning null yields the 202 no-body the handler sends for
+      // notifications. A roots-capable client's notifications/roots/list_changed
+      // would otherwise get a 404 it can read as "endpoint gone".
+      if (request.isNotification) return null
+      // Streamable HTTP pairs an unknown request with 404, which is how a client
       // tells a modern server apart from a legacy endpoint that lacks this route.
       return {
         status: 404,

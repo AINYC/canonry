@@ -1,5 +1,12 @@
 const MAX_DOMAIN_INPUT_LENGTH = 253
 
+// Special-use / private-use name suffixes that must never leave the box, the
+// name-based mirror of the RFC-1918 / link-local IP ranges blocked below.
+// `.internal` was reserved by ICANN in 2024 for private use and is the suffix of
+// `metadata.google.internal`; `.corp` / `.home` / `.lan` are never-delegated
+// names common on internal networks. None is a valid public TLD.
+const BLOCKED_HOST_SUFFIXES = ['.localhost', '.local', '.internal', '.corp', '.home', '.lan']
+
 export class PublicUrlError extends Error {
   override name = 'PublicUrlError'
 }
@@ -71,7 +78,7 @@ export function normalizePublicDomain(input: unknown): NormalizedPublicDomain {
   if (url.pathname !== '/' || url.search || url.hash) throw new PublicUrlError('Enter a domain, not a page URL.')
 
   const hostname = url.hostname.toLowerCase().replace(/\.$/, '')
-  if (!hostname || hostname === 'localhost' || hostname.endsWith('.localhost') || hostname.endsWith('.local')) {
+  if (!hostname || hostname === 'localhost' || BLOCKED_HOST_SUFFIXES.some((suffix) => hostname.endsWith(suffix))) {
     throw new PublicUrlError('Private and local hosts cannot be checked.')
   }
   if (isBlockedIpv4(hostname)) {

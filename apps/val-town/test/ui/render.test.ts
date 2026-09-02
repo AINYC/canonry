@@ -1346,7 +1346,10 @@ Deno.test('no caution anywhere unless a page actually failed', () => {
   const withFailure = toCanonryDemoViewModel(recordWithFailedPage())
   const html = renderCanonryDemo(withFailure)
   assert(html.includes('Partial site sample'), 'a failed page must still raise the caution')
-  assert(html.includes('could not be audited'), 'and the caution must count them')
+  assert(
+    html.includes('1 of 5 sampled pages could not be audited'),
+    'the caution pluralizes on the sample size, not the single-failure count',
+  )
 })
 
 /** One completed check whose crawl audited four pages and failed one. */

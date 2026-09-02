@@ -59,9 +59,19 @@ export function buildSiteMap(
   const internal = edges.filter((edge) => edge.classification === 'internal' && edge.from !== edge.to)
   if (pages.length === 0 && internal.length === 0) return null
 
+  // Count one link per (from, to) pair. The engine keys edge observations by
+  // (from, to, type), so a page that both anchor-links a target and points at it
+  // via rel=canonical (or a redirect) emits several observations for one link;
+  // tallying each would inflate the inbound/outbound counts the sampled-pages
+  // table shows. `uniquePairs` is the deduped edge total, reused below.
   const inbound = new Map<string, number>()
   const outbound = new Map<string, number>()
+  const uniquePairs = new Set<string>()
   for (const edge of internal) {
+    // A space cannot occur in a URL, so it is a safe (from, to) separator.
+    const pair = `${edge.from} ${edge.to}`
+    if (uniquePairs.has(pair)) continue
+    uniquePairs.add(pair)
     outbound.set(edge.from, (outbound.get(edge.from) ?? 0) + 1)
     inbound.set(edge.to, (inbound.get(edge.to) ?? 0) + 1)
   }
@@ -108,8 +118,11 @@ export function buildSiteMap(
     nodes,
     edges: dedupedEdges,
     totalPages: candidates.size,
-    totalEdges: dedupe(internal.map((edge) => ({ from: edge.from, to: edge.to, followable: true }))).length,
-    truncated: candidates.size > nodes.length || internal.length > dedupedEdges.length,
+    totalEdges: uniquePairs.size,
+    // Compare deduped-to-deduped. `internal.length` counts per-type observations,
+    // so using it here reported "showing N of N, truncated" whenever a pair had
+    // more than one edge type even though every unique edge was displayed.
+    truncated: candidates.size > nodes.length || uniquePairs.size > dedupedEdges.length,
   }
 }
 

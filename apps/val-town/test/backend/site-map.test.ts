@@ -41,12 +41,19 @@ function page(url: string, options: { depth?: number; score?: number; indexable?
   } as unknown as CrawlPageObservation
 }
 
-function edge(from: string, to: string, options: { internal?: boolean; followable?: boolean } = {}) {
+function edge(
+  from: string,
+  to: string,
+  options: { internal?: boolean; followable?: boolean; type?: 'anchor' | 'redirect' | 'canonical' } = {},
+) {
+  const type = options.type ?? 'anchor'
   return {
-    key: `${from}->${to}`,
+    // The engine's key is endpoint-AND-type-derived, so one (from,to) pair with
+    // two link types is two distinct observations.
+    key: `${type}->${from}->${to}`,
     from,
     to,
-    type: 'anchor',
+    type,
     classification: options.internal === false ? 'external' : 'internal',
     totalOccurrences: 1,
     followableOccurrences: options.followable === false ? 0 : 1,
@@ -169,6 +176,25 @@ Deno.test('duplicate observations of one link collapse to a single edge', () => 
   assert(map, 'expected a map')
   equal(map.edges.length, 1, 'one edge per page pair')
   equal(map.edges[0]?.followable, true, 'any followable occurrence makes the edge followable')
+})
+
+Deno.test('a pair linked by two edge types counts as one link, not two', () => {
+  // The engine keys observations by (from, to, type), so a page that both
+  // anchor-links a target and canonicals to it emits two internal edges for one
+  // link. Counting each would inflate inbound/outbound and falsely truncate.
+  const map = buildSiteMap(
+    [page(ROOT, { depth: 0 }), page(PRICING, { depth: 1 })],
+    [edge(ROOT, PRICING), edge(ROOT, PRICING, { type: 'canonical' })],
+  )
+  assert(map, 'expected a map')
+  equal(map.edges.length, 1, 'one displayed edge per pair')
+  equal(map.totalEdges, 1, 'one unique link total')
+  equal(map.truncated, false, 'nothing is truncated when the only pair is shown')
+
+  const pricing = map.nodes.find((node) => node.url === PRICING)!
+  equal(pricing.inboundLinks, 1, 'one page links here, not two edge types')
+  const root = map.nodes.find((node) => node.url === ROOT)!
+  equal(root.outboundLinks, 1, 'one outbound link, not two edge types')
 })
 
 Deno.test('a crawl with nothing to draw returns null rather than an empty diagram', () => {

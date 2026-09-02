@@ -81,6 +81,43 @@ Deno.test('the target is counted from its own verdict, not from the extraction',
   equal(target.answers, 1, 'the verdict wins in both directions')
 })
 
+Deno.test('one rival named in different casing across answers is a single row', () => {
+  // Rivals are keyed by the same case-folded brand identity every other match
+  // uses, so a source writing "GitHub" and another writing "github" are one
+  // rival present in both answers, not two 50% rows.
+  const share = computeMentionShare([
+    answer({ mentioned: false, brands: ['GitHub'] }),
+    answer({ mentioned: false, brands: ['github'] }),
+  ], 'Acme')
+  assert(share, 'expected a table')
+
+  const rivals = share.entries.filter((entry) => !entry.isTarget)
+  equal(rivals.length, 1, 'the two spellings collapse to one row')
+  equal(rivals[0]?.answers, 2, 'the rival is present in both answers')
+  equal(rivals[0]?.share, 1, 'one rival across two answers is 100%')
+})
+
+Deno.test('the target is not double-counted when the prose cases its name differently', () => {
+  // targetLabel carries the approved-alias casing; the extraction copies the
+  // prose's casing. Keying the target by the case-folded identity collapses the
+  // extraction's copy into the target's own verdict, so it never appears as both
+  // its own row and a phantom rival, and never leaks in when not mentioned.
+  const share = computeMentionShare([
+    answer({ mentioned: true, brands: ['stripe'] }),
+    answer({ mentioned: false, brands: ['stripe', 'Adyen'] }),
+  ], 'Stripe')
+  assert(share, 'expected a table')
+
+  const targets = share.entries.filter((entry) => entry.isTarget)
+  equal(targets.length, 1, 'the target is one row, never doubled')
+  equal(targets[0]?.domain, 'Stripe', 'the target shows its approved-alias casing')
+  equal(targets[0]?.answers, 1, 'counted only where its own verdict says mentioned')
+  assert(
+    !share.entries.some((entry) => !entry.isTarget && entry.domain.toLowerCase() === 'stripe'),
+    'the prose-cased copy of the target is not a phantom rival',
+  )
+})
+
 Deno.test('an answer the extraction never covered is excluded, not counted as naming nobody', () => {
   // Counting an unmeasured answer in the denominator would deflate every share
   // by an outage rather than reporting the outage.

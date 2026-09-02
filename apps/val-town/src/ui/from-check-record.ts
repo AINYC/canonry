@@ -335,7 +335,7 @@ function mapSiteHealth(sample: SiteHealthSample, checkedAt: string): NonNullable
       ? {
         tone: 'caution',
         title: 'Partial site sample',
-        detail: `${failed} of ${attempted} sampled ${failed === 1 ? 'page' : 'pages'} could not be audited. ` +
+        detail: `${failed} of ${attempted} sampled ${attempted === 1 ? 'page' : 'pages'} could not be audited. ` +
           'Only completed pages contribute to the shown evidence.',
       }
       : sample.warnings.length

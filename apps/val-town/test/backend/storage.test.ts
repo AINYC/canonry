@@ -223,6 +223,25 @@ for (const fixtureFactory of fixtures) {
     }
   })
 
+  Deno.test(`${fixtureFactory.name} admission rejects a zero client quota without persisting a check`, async () => {
+    const fixture = fixtureFactory.create()
+    try {
+      await fixture.store.initialize()
+      // A cap of 0 must admit nothing on either store. The SQLite fresh-insert
+      // path once claimed a slot a zero cap forbids, persisting a check while
+      // memory rejected it — a store-parity gap.
+      const result = await fixture.store.admit({
+        ...admission(candidate(`zero-${fixtureFactory.name}`)),
+        clientQuota: { scope: 'client', subject: 'client-a', day: DAY, max: 0 },
+      })
+      equal(result.kind, 'quota-exhausted')
+      equal(await fixture.checkRowCount(), 0, 'no check row is left behind')
+      equal(await fixture.quotaRowCount(), 0, 'no quota row is created for a zero cap')
+    } finally {
+      fixture.close()
+    }
+  })
+
   Deno.test(`${fixtureFactory.name} admission coalesces concurrent same-domain requests before quota spend`, async () => {
     const fixture = fixtureFactory.create()
     try {

@@ -45,6 +45,24 @@ Deno.test('rejects paths, credentials, private ranges, and local hosts', () => {
   ) throws(() => normalizePublicDomain(input), input)
 })
 
+Deno.test('rejects special-use internal name suffixes, including cloud metadata', () => {
+  for (
+    const host of [
+      'metadata.google.internal',
+      'foo.internal',
+      'server.corp',
+      'nas.home',
+      'printer.lan',
+    ]
+  ) {
+    equal(
+      errorMessage(() => normalizePublicDomain(host), host),
+      'Private and local hosts cannot be checked.',
+      host,
+    )
+  }
+})
+
 Deno.test('only applies IPv6 private prefixes to IPv6 literals and rejects public literals deliberately', () => {
   for (const domain of ['fda.gov', 'fdic.gov', 'fc2.com']) {
     equal(normalizePublicDomain(domain).domain, domain)

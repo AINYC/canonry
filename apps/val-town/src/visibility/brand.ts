@@ -69,7 +69,7 @@ function normalizedWords(value: string): string[] {
   return words
 }
 
-function brandKey(value: string): string {
+export function brandKey(value: string): string {
   return normalizedWords(value).join('')
 }
 
@@ -113,7 +113,12 @@ export function hostOf(value: string | null | undefined): string | null {
 
 export function hostMatchesDomain(candidate: string | null | undefined, domain: string): boolean {
   const candidateHost = hostOf(candidate)
-  return candidateHost === domain || Boolean(candidateHost?.endsWith(`.${domain}`))
+  // Normalize the target the same way as the candidate (strip `www.`, lowercase),
+  // so a `www.`-prefixed input domain still matches its own `www.`-stripped cited
+  // hosts. `hostOf` is idempotent, so an already-normalized `canonicalDomain`
+  // passed here is unchanged.
+  const targetHost = hostOf(domain) ?? domain
+  return candidateHost === targetHost || Boolean(candidateHost?.endsWith(`.${targetHost}`))
 }
 
 export function normalizeTarget(target: VisibilityProbeTarget): NormalizedTarget {

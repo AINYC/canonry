@@ -26,7 +26,7 @@
  * documentation site is one site holding one answer, and counting links would
  * let a single well-linked page outrank a domain cited across every answer.
  */
-import { hostMatchesDomain } from './brand.ts'
+import { brandKey, hostMatchesDomain } from './brand.ts'
 import type { VisibilityEvidence } from '../runtime/types.ts'
 
 /** Rows past this are folded into a single remainder, so the bar stays readable. */
@@ -127,6 +127,10 @@ function rank(
   unattributedAnswers: number,
   targetKey: string,
   basis: ShareBasis,
+  // Display label per key. Grouping, ordering, the display cut, and the target
+  // identity all ride the KEY; only the rendered `domain` uses the label. Absent
+  // for citation share, where the key is already the display domain.
+  labels?: ReadonlyMap<string, string>,
 ): ShareOfVoice | null {
   const totalAppearances = [...answersByKey.values()].reduce((sum, count) => sum + count, 0)
   if (totalAppearances === 0) return null
@@ -149,7 +153,7 @@ function rank(
   }
 
   const entries: ShareEntry[] = head.map((entry) => ({
-    domain: entry.domain,
+    domain: labels?.get(entry.domain) ?? entry.domain,
     answers: entry.answers,
     share: entry.answers / totalAppearances,
     isTarget: entry.domain === targetKey,
@@ -192,19 +196,28 @@ export function computeMentionShare(
   const measured = evidence.filter((row) => row.mentioned !== null && row.namedBrands !== null)
   if (measured.length === 0) return null
 
+  // Group by the same case-folded brand identity every other brand match uses
+  // (`brandKey`), so "GitHub" and "github" are one row, not two. A display label
+  // is tracked per key; the target always shows its approved-alias casing.
+  const targetKey = brandKey(targetLabel)
+  const labels = new Map<string, string>([[targetKey, targetLabel]])
   const answersByBrand = new Map<string, number>()
   let unattributedAnswers = 0
 
   for (const row of measured) {
     const seen = new Set<string>()
     for (const name of row.namedBrands ?? []) {
-      const key = cleanBrand(name)
-      if (key) seen.add(key)
+      const key = brandKey(name)
+      if (!key) continue
+      seen.add(key)
+      if (!labels.has(key)) labels.set(key, cleanBrand(name))
     }
-    // The target's row is its own verdict. Its aliases were approved by the
-    // planner and matched exactly; the extraction's list is only proposals.
-    if (row.mentioned === true) seen.add(targetLabel)
-    else seen.delete(targetLabel)
+    // The target's row is its own verdict, never the extraction. Keying by the
+    // case-folded identity also collapses the extraction's own differently-cased
+    // copy of the target into this single decision, so the target can never
+    // appear twice (its row plus a phantom rival) or leak in when not mentioned.
+    if (row.mentioned === true) seen.add(targetKey)
+    else seen.delete(targetKey)
 
     if (seen.size === 0) {
       unattributedAnswers++
@@ -213,10 +226,10 @@ export function computeMentionShare(
     for (const key of seen) answersByBrand.set(key, (answersByBrand.get(key) ?? 0) + 1)
   }
 
-  return rank(answersByBrand, measured.length, unattributedAnswers, targetLabel, 'mention')
+  return rank(answersByBrand, measured.length, unattributedAnswers, targetKey, 'mention', labels)
 }
 
-/** Trim and collapse whitespace so two spellings of one name are one row. */
+/** Display casing for a proposed rival name: trim and collapse whitespace. */
 function cleanBrand(value: string): string {
   return value.trim().replace(/\s+/g, ' ')
 }

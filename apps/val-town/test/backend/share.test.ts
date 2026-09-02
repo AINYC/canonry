@@ -91,6 +91,26 @@ Deno.test('the checked site absorbs its own subdomains', () => {
   assert(!share.entries.some((entry) => entry.domain === 'docs.mine.example'), 'no separate subdomain row')
 })
 
+Deno.test('a www.-prefixed target still groups its own citations', () => {
+  // The input domain keeps its www. (normalizePublicDomain never strips it),
+  // while cited hosts are www.-stripped. The target must still match its own
+  // citations rather than appear as a rival stranded at 0%.
+  const share = computeShareOfVoice([
+    answer(['stripe.com', 'rival.com']),
+    answer(['docs.stripe.com']),
+  ], 'www.stripe.com')
+  assert(share, 'expected a share table')
+
+  const target = share.entries.find((entry) => entry.isTarget)!
+  equal(target.answers, 2, 'stripe.com and docs.stripe.com are the checked site')
+  assert(target.share > 0, 'the target is not stranded at 0%')
+  assert((share.targetShare ?? 0) > 0, 'targetShare reflects the grouped citations')
+  assert(
+    !share.entries.some((entry) => !entry.isTarget && entry.domain === 'stripe.com'),
+    'the target is not listed as its own rival',
+  )
+})
+
 Deno.test('a site that is never cited is a measured zero, not a missing row', () => {
   const share = computeShareOfVoice([answer(['rival.com']), answer(['other.com'])], 'mine.example')
   assert(share, 'expected a share table')

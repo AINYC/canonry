@@ -379,6 +379,20 @@ Deno.test('get_check reports mention and citation as separate rates with their s
   equal((payload.siteHealth as Record<string, unknown>).score, 72)
 })
 
+Deno.test('a check with caller-supplied queries is not labeled non-brand', async () => {
+  // Supplied queries may be branded, so the basket is not guaranteed non-brand;
+  // labeling it non-brand would break "the class travels with the number".
+  const { app } = createHarness([completedRecord({ userQueries: ['is Example the best widget vendor?'] })])
+  const { body } = await rpc(app, call('get_check', { checkId: '11111111-2222-4333-8444-555555555555' }))
+  const visibility = toolPayload(body!).aiVisibility as Record<string, unknown>
+
+  equal(visibility.scope, 'mixed', 'a mixed basket must not claim to be non-brand')
+  truthy(
+    !String(visibility.scopeNote).includes('generated non-brand'),
+    'the note must not claim generated non-brand queries for a caller-supplied basket',
+  )
+})
+
 Deno.test('get_check resolves a domain to its cached check', async () => {
   const { app } = createHarness()
   const { body } = await rpc(app, call('get_check', { domain: 'https://EXAMPLE.com' }))
@@ -565,6 +579,15 @@ Deno.test('an unknown method answers 404 so a client can tell this endpoint from
   const { status, body } = await rpc(app, { jsonrpc: '2.0', id: 1, method: 'completion/complete' })
   equal(status, 404)
   equal((body?.error as { code: number }).code, -32601)
+})
+
+Deno.test('an unknown notification is accepted with 202, never answered with 404', async () => {
+  const { app } = createHarness()
+  // No id => a notification. Even for an unrecognized method (a roots-capable
+  // client's notifications/roots/list_changed), JSON-RPC forbids a reply.
+  const { status, body } = await rpc(app, { jsonrpc: '2.0', method: 'notifications/roots/list_changed' })
+  equal(status, 202)
+  equal(body, null, 'a notification gets no body')
 })
 
 Deno.test('the endpoint accepts POST only', async () => {

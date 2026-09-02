@@ -144,10 +144,16 @@ function recordEnvelope(record: CheckRecord) {
 function visibilitySummary(record: CheckRecord) {
   const visibility = record.result?.visibility
   if (!visibility) return { measured: false as const }
+  // Only a fully generated basket is guaranteed non-brand. Caller-supplied
+  // queries may be branded, so labeling a mixed basket "non-brand" would break
+  // the "class travels with the number" rule.
+  const hasSuppliedQueries = record.userQueries.length > 0
   return {
     measured: true as const,
-    scope: 'non-brand',
-    scopeNote: 'Queries are generated non-brand queries, so the project cannot be handed its own answer.',
+    scope: hasSuppliedQueries ? 'mixed' : 'non-brand',
+    scopeNote: hasSuppliedQueries
+      ? 'Includes caller-supplied queries, which may be branded, so rates are not restricted to non-brand queries.'
+      : 'Queries are generated non-brand queries, so the project cannot be handed its own answer.',
     successfulChecks: visibility.summary.successfulChecks,
     failedChecks: visibility.summary.failedChecks,
     mentionRate: visibility.summary.mentionRate,
