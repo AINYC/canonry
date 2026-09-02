@@ -134,6 +134,23 @@ every engine release and the val would have sat on an old engine while Canonry m
 A new file importing the engine is picked up with no change to either, which is the point of scanning rather than
 listing.
 
+## "Partial" was written in THREE places, and fixing one hid the other two
+
+Reaching a configured ceiling was framed as a failure in three independent spots, all keyed off the same frozen
+`status`:
+
+1. the top-level `Partial result` banner (`statusCopy` in `render.ts`, via `mapStatus`),
+2. a `Partial site sample` notice inside Site Health (`mapSiteHealth`), and
+3. `Partial termination: <reason>` in the Sample scope disclosure.
+
+Each was fixed in turn, and after each one the banner "was gone" — because the fix was verified by grepping for that
+one string. Grep for the CONCEPT (`grep -oiE 'partial[a-z ]*'`) and render a real record, not for the sentence you
+just changed.
+
+All three now key off whether work actually failed. The third keeps the reason visible as evidence and only changes
+the framing: `Stopped at a configured limit: max pages` for a `max-*` reason, `Crawl ended early: <reason>` for
+anything else.
+
 ## The caution is read from the evidence, not from a stored flag
 
 `record.status` is decided once, when the check runs, and persisted. That makes it the wrong thing to warn a reader

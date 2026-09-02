@@ -1221,7 +1221,13 @@ Deno.test('site-health mapping preserves not-applicable factors and partial prov
   assert(html.includes('Not applicable'), 'renderer should distinguish non-applicability from unavailable')
   assert(html.includes('<strong>3</strong> pages discovered'), 'renderer should disclose bounded crawl discovery count')
   assert(html.includes('2 sampled pages.'), 'renderer should show the affected sampled-page count for a live fix')
-  assert(html.includes('Partial termination: max duration.'), 'partial termination must remain visible as evidence')
+  // The reason stays visible as evidence; only the framing changed. Reaching a
+  // limit this app configured is the sample working, not a partial failure.
+  assert(
+    html.includes('Stopped at a configured limit: max duration.'),
+    'the termination reason must remain visible as evidence',
+  )
+  assert(!html.includes('Partial termination'), 'and must not be framed as a failure')
   assert(html.includes('Crawl schema 1.2 · Engine audit-1.2.0'), 'crawl provenance must remain visible as evidence')
 })
 
@@ -1319,3 +1325,82 @@ Deno.test('a stored partial with nothing failed does not warn the reader', () =>
   withPhaseError.result.errors = [{ area: 'visibility', code: 'unavailable', message: 'boom' }]
   assert(toCanonryDemoViewModel(withPhaseError).status === 'partial', 'a phase error must still raise the caution')
 })
+
+Deno.test('no caution anywhere unless a page actually failed', () => {
+  // There were TWO of these, keyed off the same frozen status: the top-level
+  // "Partial result" and a "Partial site sample" inside Site Health. Fixing one
+  // and grepping for its exact title missed the other, so the banner appeared
+  // to be gone and was not.
+  const base = completedViewModel()
+  const health = base.siteHealth!
+
+  const clean = renderCanonryDemo({
+    ...base,
+    siteHealth: { ...health, failedPages: 0, completedPages: 5, attemptedPages: 5, notice: undefined },
+  })
+  for (const caution of ['Partial result', 'Partial site sample']) {
+    assert(!clean.includes(caution), `"${caution}" must not appear when nothing failed`)
+  }
+
+  // A page that genuinely could not be audited still warns, and says how many.
+  const withFailure = toCanonryDemoViewModel(recordWithFailedPage())
+  const html = renderCanonryDemo(withFailure)
+  assert(html.includes('Partial site sample'), 'a failed page must still raise the caution')
+  assert(html.includes('could not be audited'), 'and the caution must count them')
+})
+
+/** One completed check whose crawl audited four pages and failed one. */
+function recordWithFailedPage() {
+  const page = (url: string, ok: boolean) => ({
+    url,
+    status: ok ? 'success' : 'error',
+    score: ok ? 80 : null,
+    depth: 0,
+    indexability: 'indexable',
+    factors: [],
+    criticalDefects: [],
+    error: ok ? null : 'This page could not be audited.',
+  })
+  return {
+    id: '11111111-2222-4333-8444-555555555555',
+    fingerprint: 'f',
+    userQueries: [],
+    domain: 'example.com',
+    status: 'complete',
+    createdAt: '2026-09-02T00:00:00.000Z',
+    updatedAt: '2026-09-02T00:00:20.000Z',
+    expiresAt: null,
+    errorCode: null,
+    errorMessage: null,
+    leaseOwner: null,
+    leaseUntil: null,
+    result: {
+      schemaVersion: '1.0',
+      domain: 'example.com',
+      generatedAt: '2026-09-02T00:00:20.000Z',
+      errors: [],
+      visibility: null,
+      siteHealth: {
+        schemaVersion: '1',
+        label: '5-page Technical AEO sample',
+        domain: 'example.com',
+        rootUrl: 'https://example.com/',
+        finalRootUrl: 'https://example.com/',
+        status: 'complete',
+        score: 80,
+        pagesDiscovered: 5,
+        pagesFetched: 5,
+        pagesObserved: 5,
+        elapsedMs: 900,
+        terminationReason: 'max-pages',
+        warnings: [],
+        siteMap: null,
+        attemptedHosts: ['example.com'],
+        error: null,
+        factors: [],
+        pages: [page('https://example.com/a', true), page('https://example.com/b', false)],
+      },
+    },
+    // deno-lint-ignore no-explicit-any
+  } as any
+}

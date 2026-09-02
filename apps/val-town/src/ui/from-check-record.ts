@@ -327,11 +327,16 @@ function mapSiteHealth(sample: SiteHealthSample, checkedAt: string): NonNullable
         title: 'Site sample unavailable',
         detail: sample.error ?? 'The Technical AEO sample could not complete.',
       }
-      : sample.status === 'partial'
+      // Same rule as the top-level caution: warn about pages that FAILED, not
+      // about a stored status. A crawl that stopped at its own page cap is the
+      // sample working, and `sample.status` is frozen at check time so a
+      // corrected rule never reaches a record already written.
+      : failed > 0
       ? {
         tone: 'caution',
         title: 'Partial site sample',
-        detail: 'Only completed pages contribute to the shown evidence.',
+        detail: `${failed} of ${attempted} sampled ${failed === 1 ? 'page' : 'pages'} could not be audited. ` +
+          'Only completed pages contribute to the shown evidence.',
       }
       : sample.warnings.length
       ? { tone: 'caution', title: 'Sample warning', detail: sample.warnings[0]! }

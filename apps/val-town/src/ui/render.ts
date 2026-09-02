@@ -576,8 +576,15 @@ function renderSiteHealth(siteHealth: CanonryDemoViewModel['siteHealth'], idPref
       escapeHtml(defect.recommendation)
     }</p></li>`
   ).join('')
+  // "Partial termination" was the third place that called a bounded sample
+  // reaching its own ceiling a failure. Every `max-*` reason names a limit this
+  // app configured, so say that; anything else really did end the crawl early.
   const termination = siteHealth.terminationReason
-    ? `<p>Partial termination: ${escapeHtml(readableValue(siteHealth.terminationReason))}.</p>`
+    ? `<p>${
+      siteHealth.terminationReason.startsWith('max-')
+        ? `Stopped at a configured limit: ${escapeHtml(readableValue(siteHealth.terminationReason))}`
+        : `Crawl ended early: ${escapeHtml(readableValue(siteHealth.terminationReason))}`
+    }.</p>`
     : ''
   const provenance = [
     siteHealth.provenance?.schemaVersion ? `Crawl schema ${siteHealth.provenance.schemaVersion}` : '',
