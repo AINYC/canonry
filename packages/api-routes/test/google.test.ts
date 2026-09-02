@@ -1856,7 +1856,7 @@ describe('googleRoutes: GET /projects/:name/google/gsc/performance/daily', () =>
     }
   })
 
-  it('compares the requested window when its prior half has no returned rows', async () => {
+  it('compares the requested window against the period before it when that period has no returned rows', async () => {
     const now = '2026-01-01T00:00:00.000Z'
     context.db.insert(gscDailyTotals).values([
       { id: crypto.randomUUID(), projectId, date: '2026-03-09', clicks: 5, impressions: 50, position: '8', createdAt: now },
@@ -1872,6 +1872,7 @@ describe('googleRoutes: GET /projects/:name/google/gsc/performance/daily', () =>
       daily: Array<{ date: string }>
       periodComparison: {
         days: number
+        basis: string
         comparable: boolean
         prior: { startDate: string; endDate: string; clicks: number; source: string }
         trailing: { startDate: string; endDate: string; clicks: number; source: string }
@@ -1880,13 +1881,20 @@ describe('googleRoutes: GET /projects/:name/google/gsc/performance/daily', () =>
     }
 
     expect(body.daily.map(row => row.date)).toEqual(['2026-03-09', '2026-03-10'])
-    expect(body.periodComparison.days).toBe(5)
-    expect(body.periodComparison.prior).toMatchObject({
-      startDate: '2026-03-01', endDate: '2026-03-05', clicks: 0, source: 'empty',
-    })
+    // The requested window is 10 days, so the comparison is 10 days against the
+    // 10 before it — NOT the window's own two 5-day halves. The `beforeEach`
+    // dimensioned rows put the data frontier back at 2026-01-05, so February is
+    // inside it and its absent rows are measured zeroes.
+    expect(body.periodComparison.basis).toBe('prior-window')
+    expect(body.periodComparison.days).toBe(10)
     expect(body.periodComparison.trailing).toMatchObject({
-      startDate: '2026-03-06', endDate: '2026-03-10', clicks: 10, source: 'property-daily',
+      startDate: '2026-03-01', endDate: '2026-03-10', clicks: 10, source: 'property-daily',
     })
+    expect(body.periodComparison.prior).toMatchObject({
+      startDate: '2026-02-19', endDate: '2026-02-28', clicks: 0, source: 'empty',
+    })
+    // An empty period is a real zero, so it is comparable — but zero is not a
+    // baseline a percentage can divide by.
     expect(body.periodComparison.comparable).toBe(true)
     expect(body.periodComparison.change.clicks).toBeNull()
   })
@@ -1919,6 +1927,11 @@ describe('googleRoutes: GET /projects/:name/google/gsc/performance/daily', () =>
 
   it('does compare a quiet trailing half inside the known data frontier', async () => {
     const now = '2026-01-01T00:00:00.000Z'
+    // This property's data starts on March 1: drop the `beforeEach` January
+    // rows so the EARLIEST frontier is honest. February was never synced, so
+    // there is no prior 10-day window to compare against and the window splits
+    // — which is the arrangement this test is about.
+    context.db.delete(gscSearchData).run()
     context.db.insert(gscDailyTotals).values([
       { id: crypto.randomUUID(), projectId, date: '2026-03-01', clicks: 5, impressions: 50, position: '8', createdAt: now },
       { id: crypto.randomUUID(), projectId, date: '2026-03-02', clicks: 5, impressions: 50, position: '8', createdAt: now },
@@ -1939,9 +1952,215 @@ describe('googleRoutes: GET /projects/:name/google/gsc/performance/daily', () =>
     })
     expect(res.statusCode).toBe(200)
     const comparison = (res.json() as GscPerformanceDailyDto).periodComparison
+    expect(comparison?.basis).toBe('split-window')
     expect(comparison?.prior.source).toBe('property-daily')
     expect(comparison?.trailing.source).toBe('empty')
     expect(comparison?.change.clicks).toBe(-1)
+  })
+
+  /**
+   * The defect a reader reported: pressing `90d` and reading "vs prior 45d".
+   *
+   * The number was never wrong — it named the period it measured, and that
+   * period was half the window, because the window's own rows were the only
+   * evidence on hand. Reading one window further back makes the percentage
+   * answer the question the control asked.
+   */
+  it('compares the selected window against the equal-length period before it', async () => {
+    const now = '2026-01-01T00:00:00.000Z'
+    // Eight property-daily days. The last four are the selected window; the
+    // four before them are the prior period, and both are fully synced.
+    context.db.insert(gscDailyTotals).values([
+      { id: crypto.randomUUID(), projectId, date: '2026-03-01', clicks: 10, impressions: 100, position: '10', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-03-02', clicks: 10, impressions: 100, position: '10', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-03-03', clicks: 10, impressions: 100, position: '10', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-03-04', clicks: 10, impressions: 100, position: '10', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-03-05', clicks: 30, impressions: 100, position: '8', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-03-06', clicks: 30, impressions: 100, position: '8', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-03-07', clicks: 30, impressions: 100, position: '8', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-03-08', clicks: 30, impressions: 100, position: '8', createdAt: now },
+    ]).run()
+
+    const res = await context.app.inject({
+      method: 'GET',
+      url: '/projects/perf/google/gsc/performance/daily?startDate=2026-03-05&endDate=2026-03-08',
+    })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as GscPerformanceDailyDto
+
+    // Four days selected, so the comparison is four days against four — NOT
+    // the two-and-two the window's own halves would have given.
+    expect(body.periodComparison?.basis).toBe('prior-window')
+    expect(body.periodComparison?.days).toBe(4)
+    expect(body.periodComparison?.trailing).toMatchObject({
+      startDate: '2026-03-05', endDate: '2026-03-08', clicks: 120,
+    })
+    expect(body.periodComparison?.prior).toMatchObject({
+      startDate: '2026-03-01', endDate: '2026-03-04', clicks: 40,
+    })
+    // 120 vs 40 is +200%. Split down the middle the same rows read 0% — both
+    // periods sit inside the flat trailing stretch — so this is not a cosmetic
+    // relabel of the same figure.
+    expect(body.periodComparison?.change.clicks).toBe(2)
+  })
+
+  /**
+   * The prior period is EVIDENCE, not extra days of chart. Widening the
+   * returned series would move the totals and the fitted trend with it, and the
+   * window label printed above them would then name a shorter range than the
+   * data underneath.
+   */
+  it('reads the prior period without reporting it as part of the window', async () => {
+    const now = '2026-01-01T00:00:00.000Z'
+    context.db.insert(gscDailyTotals).values([
+      { id: crypto.randomUUID(), projectId, date: '2026-03-01', clicks: 10, impressions: 100, position: '10', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-03-02', clicks: 10, impressions: 100, position: '10', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-03-03', clicks: 30, impressions: 300, position: '6', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-03-04', clicks: 30, impressions: 300, position: '6', createdAt: now },
+    ]).run()
+
+    const res = await context.app.inject({
+      method: 'GET',
+      url: '/projects/perf/google/gsc/performance/daily?startDate=2026-03-03&endDate=2026-03-04',
+    })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as GscPerformanceDailyDto
+
+    // The prior period was read — the comparison names it.
+    expect(body.periodComparison?.prior).toMatchObject({
+      startDate: '2026-03-01', endDate: '2026-03-02', clicks: 20,
+    })
+    // And it appears nowhere else. Series, totals, position weighting, and the
+    // reported window all stop at the selection.
+    expect(body.daily.map(row => row.date)).toEqual(['2026-03-03', '2026-03-04'])
+    expect(body.totals).toEqual({
+      clicks: 60, impressions: 600, ctr: 0.1, position: 6, positionDays: 2, days: 2,
+    })
+    expect(body.window).toMatchObject({ startDate: '2026-03-03', endDate: '2026-03-04' })
+  })
+
+  /**
+   * The mirror of the trailing-frontier guard, and the reason it is needed:
+   * days the sync never reached are not days of zero traffic. Counting them as
+   * zero halves the baseline and prints a rise that never happened.
+   */
+  it('will not build a prior period out of days that were never synced', async () => {
+    const now = '2026-01-01T00:00:00.000Z'
+    // This property's data starts 2026-03-05 — drop the `beforeEach` January
+    // rows so the earliest frontier says so.
+    context.db.delete(gscSearchData).run()
+    context.db.insert(gscDailyTotals).values([
+      { id: crypto.randomUUID(), projectId, date: '2026-03-05', clicks: 90, impressions: 100, position: '10', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-03-06', clicks: 90, impressions: 100, position: '10', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-03-07', clicks: 10, impressions: 100, position: '10', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-03-08', clicks: 10, impressions: 100, position: '10', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-03-09', clicks: 10, impressions: 100, position: '10', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-03-10', clicks: 10, impressions: 100, position: '10', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-03-11', clicks: 10, impressions: 100, position: '10', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-03-12', clicks: 10, impressions: 100, position: '10', createdAt: now },
+    ]).run()
+
+    const res = await context.app.inject({
+      method: 'GET',
+      url: '/projects/perf/google/gsc/performance/daily?startDate=2026-03-07&endDate=2026-03-12',
+    })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as GscPerformanceDailyDto
+
+    // A prior six days would run 2026-03-01..2026-03-06, of which only the last
+    // two were ever synced. Aggregated, that reads 180 clicks where the real
+    // six days are unknown — and 60 trailing against a baseline built from a
+    // partial period is a number about the backfill, not the property.
+    expect(body.periodComparison?.basis).toBe('split-window')
+    expect(body.periodComparison?.days).toBe(3)
+    expect(body.periodComparison?.prior).toMatchObject({
+      startDate: '2026-03-07', endDate: '2026-03-09', clicks: 30,
+    })
+    expect(body.periodComparison?.trailing).toMatchObject({
+      startDate: '2026-03-10', endDate: '2026-03-12', clicks: 30,
+    })
+    // Both halves sit inside the synced span, so this is a real 0%.
+    expect(body.periodComparison?.change.clicks).toBe(0)
+  })
+
+  /**
+   * A prior period that reaches back only into dimensioned-only history is not
+   * a synced prior window: `SUM(gsc_search_data)` is invalid for property
+   * totals, so the comparison marks it not comparable. The observed frontier
+   * (`readEarliestGscDataDate`) spans both tables and cannot see that, so it
+   * would commit to `prior-window` and drop the tile percentage entirely — even
+   * though the fully-property-daily selection still compares cleanly when split.
+   * The split-window fallback is what preserves that number.
+   */
+  it('falls back to split-window when the prior period is dimensioned-only', async () => {
+    const now = '2026-01-01T00:00:00.000Z'
+    // The selected window is fully property-daily.
+    context.db.insert(gscDailyTotals).values([
+      { id: crypto.randomUUID(), projectId, date: '2026-03-05', clicks: 10, impressions: 100, position: '10', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-03-06', clicks: 10, impressions: 100, position: '10', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-03-07', clicks: 30, impressions: 100, position: '8', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-03-08', clicks: 30, impressions: 100, position: '8', createdAt: now },
+    ]).run()
+    // The prior period 2026-03-01..2026-03-04 has ONLY dimensioned rows, and the
+    // `beforeEach` January rows put the earliest frontier back at 2026-01-05, so
+    // the reach test treats the prior period as synced.
+    const syncRunId = crypto.randomUUID()
+    context.db.insert(runs).values({
+      id: syncRunId, projectId, kind: 'gsc-sync', status: 'completed', trigger: 'manual', createdAt: now,
+    }).run()
+    for (const date of ['2026-03-01', '2026-03-02', '2026-03-03', '2026-03-04']) {
+      context.db.insert(gscSearchData).values({
+        id: crypto.randomUUID(), projectId, syncRunId, date, query: 'q', page: '/p',
+        country: 'usa', device: 'DESKTOP', impressions: 100, clicks: 5, ctr: '0.05', position: '5', createdAt: now,
+      }).run()
+    }
+
+    const res = await context.app.inject({
+      method: 'GET',
+      url: '/projects/perf/google/gsc/performance/daily?startDate=2026-03-05&endDate=2026-03-08',
+    })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as GscPerformanceDailyDto
+
+    // The dimensioned-only prior period cannot support the ratio, so rather than
+    // dropping the number the selection is split into its own two halves — both
+    // property-daily, both comparable.
+    expect(body.periodComparison?.basis).toBe('split-window')
+    expect(body.periodComparison?.days).toBe(2)
+    expect(body.periodComparison?.comparable).toBe(true)
+    expect(body.periodComparison?.prior).toMatchObject({
+      startDate: '2026-03-05', endDate: '2026-03-06', clicks: 20, source: 'property-daily',
+    })
+    expect(body.periodComparison?.trailing).toMatchObject({
+      startDate: '2026-03-07', endDate: '2026-03-08', clicks: 60, source: 'property-daily',
+    })
+    // 60 vs 20 is +200%, a real comparison that the prior-window path would have
+    // blanked. And the dimensioned prior days never enter the reported series.
+    expect(body.periodComparison?.change.clicks).toBe(2)
+    expect(body.daily.map(row => row.date)).toEqual(['2026-03-05', '2026-03-06', '2026-03-07', '2026-03-08'])
+  })
+
+  /**
+   * `window=all` has no lower bound, so there is no period before it to fetch.
+   * The split is not a fallback there, it is the only thing that exists.
+   */
+  it('splits an unbounded window, which has nothing before it to compare with', async () => {
+    const now = '2026-01-01T00:00:00.000Z'
+    context.db.insert(gscDailyTotals).values([
+      { id: crypto.randomUUID(), projectId, date: '2026-01-05', clicks: 5, impressions: 100, position: '10', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-01-06', clicks: 5, impressions: 100, position: '10', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-01-07', clicks: 20, impressions: 200, position: '8', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-01-08', clicks: 20, impressions: 200, position: '8', createdAt: now },
+    ]).run()
+
+    const res = await context.app.inject({
+      method: 'GET',
+      url: '/projects/perf/google/gsc/performance/daily?window=all',
+    })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as GscPerformanceDailyDto
+    expect(body.periodComparison?.basis).toBe('split-window')
+    expect(body.periodComparison?.days).toBe(2)
   })
 
   it('returns no comparison for an explicitly empty requested window', async () => {

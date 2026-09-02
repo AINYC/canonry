@@ -132,6 +132,13 @@ const GSC_TREND_PERCENT_FORMATTER = new Intl.NumberFormat(undefined, {
  * Position reverses only the desirability arrow, not the math: a rank number
  * going UP is a WORSE result, so `inverted` flips which direction reads as an
  * improvement.
+ *
+ * `comparison.days` is the length of ONE period, and under
+ * `basis: 'split-window'` that is half the selected window — which is why
+ * pressing `90d` could produce "vs prior 45d". The number was always accurate;
+ * it names the period it measured, not the button. Every string here is built
+ * from `days` for that reason, and the heading tooltip explains which basis is
+ * in force.
  */
 export function formatGscPeriodChange(
   comparison: GscPeriodComparison | null | undefined,
@@ -170,6 +177,41 @@ export function formatGscPeriodChange(
     : `${GSC_TREND_PERCENT_FORMATTER.format(percent)}%`
   const improving = inverted ? ratio < 0 : ratio > 0
   return `${improving ? '↑' : '↓'} ${formatted} vs prior ${days}d`
+}
+
+/**
+ * The sentence in the section tooltip that says which two periods the tiles
+ * compare, and — when they are not the ones the window control implies — why.
+ *
+ * Pressing `90d` and reading "vs prior 45d" was the whole confusion this
+ * answers: the tile names the period it measured, and under `split-window` that
+ * period is half the selection. Naming both date ranges outright means a reader
+ * never has to infer it from a length.
+ */
+export function gscComparisonBasisText(
+  comparison: GscPeriodComparison | null | undefined,
+): string {
+  if (!comparison) {
+    return 'Tile percentages compare the selected window with the equal-length period before it.'
+  }
+  const { days, basis, prior, trailing } = comparison
+  const unit = days === 1 ? 'day' : 'days'
+  const priorRange = `${prior.startDate} to ${prior.endDate}`
+  const trailingRange = `${trailing.startDate} to ${trailing.endDate}`
+  // True under either basis: the two periods are always adjacent and equal
+  // length, and naming both ranges is what makes the percentage checkable.
+  const ranges = `Tile percentages compare these ${days} ${unit} (${trailingRange})`
+    + ` with the ${days} ${unit} before them (${priorRange}).`
+  // Only an EXPLICIT split-window earns the explanation. Absent basis is a
+  // server older than the field: it did not say the window was split, so
+  // neither do we — the ranges above already say everything it sent.
+  if (basis !== 'split-window') return ranges
+  // Either the selection has no lower bound (all history) or the period before
+  // it was never synced, and unsynced days counted as zero would manufacture
+  // growth. Both come out as one honest statement.
+  return `${ranges} That is the trailing half of the selected window against its own`
+    + ' earlier half: there is no equal-length period before the window with synced data'
+    + ' to compare it against.'
 }
 
 function sitemapDiscoveredUrlCount(sitemap: ApiGscSitemap): number {
@@ -1118,7 +1160,7 @@ export function GscSection({
                     <p className="eyebrow eyebrow-soft">Performance</p>
                     <div className="flex items-center gap-1.5">
                       <h3>Search performance</h3>
-                      <InfoTooltip text={`Tile percentages compare the trailing half of the selected window with the prior equal-length half. The optional trend line shows the fitted direction. Click any day to filter the table below to that date. Query and page filters match case-insensitive substrings and run on Apply filters. Filtering and sorting examine up to ${EXPANDED_PERFORMANCE_LIMIT.toLocaleString()} matching rows while the table shows ${DEFAULT_TABLE_PAGE_SIZE} per page.`} />
+                      <InfoTooltip text={`${gscComparisonBasisText(performanceDaily?.periodComparison)} The optional trend line shows the fitted direction. Click any day to filter the table below to that date. Query and page filters match case-insensitive substrings and run on Apply filters. Filtering and sorting examine up to ${EXPANDED_PERFORMANCE_LIMIT.toLocaleString()} matching rows while the table shows ${DEFAULT_TABLE_PAGE_SIZE} per page.`} />
                     </div>
                     {/* The window ends where Google's data ends, not today.
                         Naming the real range is what stops a lagging tail

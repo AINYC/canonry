@@ -138,7 +138,7 @@ const gscPeriodTotalsSchema = z.object({
 })
 
 /**
- * The window's trailing half measured against the equal-length half before it.
+ * The selected window measured against the equal-length period before it.
  *
  * This is what the headline percentages are computed from. It replaced the
  * fitted trend line's start-to-end movement, which had two failure modes on
@@ -148,14 +148,41 @@ const gscPeriodTotalsSchema = z.object({
  * LINE rather than the property — average position read as a 45.8% improvement
  * over a window in which the real position got worse.
  *
- * Both periods are real, adjacent, equal-length stretches of the window, split
- * over the CALENDAR rather than the row array, since Search Analytics omits
- * zero-data days. `null` when the window is too short to make two periods, has
- * no evidence, or extends beyond the project's known GSC data frontier.
+ * Both periods are real, adjacent, equal-length stretches of recorded days,
+ * split over the CALENDAR rather than the row array, since Search Analytics
+ * omits zero-data days. Read `basis` before reading `days`: under
+ * `split-window` the two periods come out of the selected window itself, so
+ * `days` is HALF of it. `null` when there is no span to divide, no evidence, or
+ * the span extends beyond the project's known GSC data frontier.
  */
 export const gscPeriodComparisonSchema = z.object({
-  /** Length of EACH period in calendar days. */
+  /**
+   * Length of EACH period in calendar days. Equals the selected window under
+   * `basis: 'prior-window'`, and half of it under `basis: 'split-window'`.
+   */
   days: z.number(),
+  /**
+   * Which two periods these are, so a surface can say what it is showing.
+   *
+   * `prior-window` — the selected window against the equal-length period
+   * immediately before it. What a reader means by "vs prior 90d".
+   *
+   * `split-window` — the selected window's own trailing and leading halves.
+   * Used when there is nothing before the window to compare with: an unbounded
+   * selection (`window=all`), or a prior period the sync never reached, whose
+   * unsynced days would otherwise be counted as zeroes and manufacture growth.
+   * A surface printing "vs prior {days}d" here is naming a period HALF the
+   * length of the control the reader pressed, which is honest but surprising —
+   * hence the label.
+   *
+   * Optional for the same reason as `window` and `trends`: a server older than
+   * this field returns the comparison WITHOUT it, and declaring it required
+   * would tell a generated consumer it may dereference the field safely against
+   * a legacy response. Absent means the basis is unstated; every such server
+   * split the window, but a surface should render the absence with its
+   * period-length copy rather than assert a basis nobody sent.
+   */
+  basis: z.enum(['prior-window', 'split-window']).optional(),
   prior: gscPeriodTotalsSchema,
   trailing: gscPeriodTotalsSchema,
   /**
@@ -213,9 +240,9 @@ export const gscPerformanceDailyDtoSchema = z.object({
   trends: gscPerformanceTrendsSchema.optional(),
   /**
    * Optional for the same reason as `window` and `trends`, and additionally
-   * null when the window is too short to split into two periods, has no
-   * evidence, or extends beyond the project's known GSC data frontier. A
-   * consumer must render the absence rather than substitute a percentage.
+   * null when there is no span to divide into two periods, no evidence, or the
+   * span extends beyond the project's known GSC data frontier. A consumer must
+   * render the absence rather than substitute a percentage.
    */
   periodComparison: gscPeriodComparisonSchema.nullable().optional(),
 })

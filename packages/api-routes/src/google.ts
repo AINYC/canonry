@@ -17,13 +17,16 @@ import {
   linearTrend,
   calendarDateRange,
   describeError,
+  inclusiveDayCount,
+  shiftIsoCalendarDate,
 } from '@ainyc/canonry-contracts'
 import { extractPlaceAmenities, type PlaceDetails } from '@ainyc/canonry-integration-google-places'
-import { computeGscPeriodComparison } from './gsc-period-comparison.js'
+import { computeGscPeriodComparison, type GscComparisonBasis } from './gsc-period-comparison.js'
 import { buildGbpSummary } from './gbp-summary.js'
 import {
   mergeGscDailyTotalsWithFallback, readGscDailyTotals,
-  readLatestGscDataDate, resolveGscWindowRange, resolveGscWindowDays, type GscWindowRange,
+  readEarliestGscDataDate, readLatestGscDataDate,
+  resolveGscWindowRange, resolveGscWindowDays, type GscWindowRange,
 } from './gsc-totals.js'
 import { assertNotProjectScoped } from './auth.js'
 import { resolveProject, writeAuditLog } from './helpers.js'
@@ -916,6 +919,7 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
       gscToday(),
     )
     const cutoffDate = startDate ? null : resolvedWindow.startDate
+    const reportedWindow = resolveReportedWindow(resolvedWindow, startDate, endDate)
 
     // Prefer the property-level daily totals on dates where they exist (match
     // Google's property total). Fall back to summing `gsc_search_data` for
@@ -923,11 +927,50 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
     // after their first post-migration sync.
     const windowStart = startDate ?? cutoffDate ?? ''
     const windowEnd = endDate ?? resolvedWindow.endDate ?? '9999-12-31'
-    const dailyTotals = readGscDailyTotals(app.db, project.id, windowStart, windowEnd)
+
+    // The equal-length period immediately BEFORE the selected window — what the
+    // tile percentages should be measured against.
+    //
+    // Pressing `90d` and reading "vs prior 45d" is what happens when the only
+    // evidence on hand is the window itself: the comparison has to come from
+    // somewhere, so it splits the selection. Reaching one window further back
+    // makes the percentage answer the question the button asked.
+    //
+    // Only a BOUNDED selection has such a period. `window=all` has no lower
+    // bound, so there is nothing before it to fetch, and it keeps the split.
+    const priorPeriodStart = reportedWindow.startDate !== null && reportedWindow.endDate !== null
+      ? (() => {
+          const span = inclusiveDayCount(reportedWindow.startDate, reportedWindow.endDate)
+          return span !== null && span > 0
+            ? shiftIsoCalendarDate(reportedWindow.startDate, -span)
+            : null
+        })()
+      : null
+
+    // A period the sync never reached is not a period of zeroes. Search
+    // Analytics omits days with no data, so a prior window that only PARTIALLY
+    // predates the earliest stored row aggregates its unsynced days as zero,
+    // halves its own baseline, and prints a rise that never happened. The
+    // top-end frontier already refuses the mirror case (dates past the last
+    // published day cannot support a decline); this is the same refusal at the
+    // other end, and it applies ONLY to the days this change newly reaches for.
+    // Read only when there is a prior period to validate, so the default
+    // unbounded window does not pay for two aggregates it cannot use.
+    const earliestDataDate = priorPeriodStart === null
+      ? null
+      : readEarliestGscDataDate(app.db, project.id)
+    const priorWindowIsSynced = priorPeriodStart !== null
+      && earliestDataDate !== null
+      && priorPeriodStart >= earliestDataDate
+
+    // Read back to the prior period so the comparison has real rows to
+    // aggregate. Everything the RESPONSE reports — daily, totals, trends,
+    // window — stays scoped to the selected window below.
+    const fetchStart = priorWindowIsSynced ? priorPeriodStart : windowStart
+    const dailyTotals = readGscDailyTotals(app.db, project.id, fetchStart, windowEnd)
 
     const conditions = [eq(gscSearchData.projectId, project.id)]
-    if (startDate) conditions.push(sql`${gscSearchData.date} >= ${startDate}`)
-    else if (cutoffDate) conditions.push(sql`${gscSearchData.date} >= ${cutoffDate}`)
+    if (fetchStart) conditions.push(sql`${gscSearchData.date} >= ${fetchStart}`)
     if (endDate) conditions.push(sql`${gscSearchData.date} <= ${endDate}`)
 
     const dimensionedRows = app.db
@@ -947,7 +990,9 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
     // property's mean), so those dates report `null` rather than a `0` that
     // would read as rank #0 on an inverted axis.
     const propertyDates = new Set(dailyTotals.map((d) => d.date))
-    const daily = mergeGscDailyTotalsWithFallback(
+    // Spans the selected window AND the prior period, so the comparison has
+    // both sides to aggregate.
+    const comparisonDaily = mergeGscDailyTotalsWithFallback(
       dailyTotals,
       dimensionedRows.map((r) => ({
         date: r.date,
@@ -962,6 +1007,13 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
       ctr: d.impressions > 0 ? d.clicks / d.impressions : 0,
       position: propertyDates.has(d.date) ? d.position : null,
     }))
+    // Everything the response REPORTS covers the selected window only. The
+    // prior period is evidence for the percentage, not extra days of chart:
+    // widening `daily` would move the totals and the fitted trend too, and the
+    // window label above them would then name a shorter range than the data.
+    const daily = fetchStart === windowStart
+      ? comparisonDaily
+      : comparisonDaily.filter((d) => d.date >= windowStart && d.date <= windowEnd)
     const totalClicks = daily.reduce((sum, d) => sum + d.clicks, 0)
     const totalImpressions = daily.reduce((sum, d) => sum + d.impressions, 0)
 
@@ -996,8 +1048,6 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
         const row = byDate.get(date)
         return row ? pick(row) : null
       })
-    const reportedWindow = resolveReportedWindow(resolvedWindow, startDate, endDate)
-    const comparisonStart = reportedWindow.startDate ?? daily[0]?.date
     const comparisonEnd = reportedWindow.endDate ?? daily[daily.length - 1]?.date
     // A missing row INSIDE the monotonic observed-data frontier is a real
     // zero-count day. A date AFTER that frontier is ambiguous: it may be quiet
@@ -1006,6 +1056,37 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
     // requested/reported window.
     const comparisonEndsWithinKnownData = reportedWindow.latestDataDate !== null
       && comparisonEnd <= reportedWindow.latestDataDate
+
+    // The span the comparison divides, tagged with each day's source. Fed from
+    // `comparisonDaily` (which reaches back over the prior period); `daily`
+    // alone would leave that half empty and read as growth from nothing. The
+    // tag is the module's INPUT — `daily` on the wire stays what the DTO says.
+    const taggedComparisonDaily = comparisonDaily.map((d) => ({
+      ...d,
+      fromPropertyTotals: propertyDates.has(d.date),
+    }))
+    // `prior-window` reaches one window earlier so the halves land on the
+    // selection and the period before it; `split-window` divides the selection
+    // itself into its own two halves (the `reportedWindow.startDate` fallback,
+    // matching an unbounded `window=all` with no lower bound of its own).
+    const comparisonFor = (basis: GscComparisonBasis, startDate: string | null | undefined) =>
+      startDate && comparisonEnd && comparisonEndsWithinKnownData
+        ? computeGscPeriodComparison(taggedComparisonDaily, { startDate, endDate: comparisonEnd, basis })
+        : null
+    // Prefer the prior-window comparison, but keep it only if it actually
+    // COMPARES. Only property-daily (or empty) evidence in the prior period can
+    // support the ratio; a prior period that lands on dimensioned-only history
+    // comes back non-comparable, and that blank is strictly worse than the
+    // number the fully-property-daily selection still yields when split. The
+    // `comparable` verdict is the arbiter because the reach test behind
+    // `priorWindowIsSynced` reads the observed frontier — which includes the
+    // invalid-for-totals dimensioned table — and so cannot see the source.
+    const priorWindowComparison = priorWindowIsSynced
+      ? comparisonFor('prior-window', priorPeriodStart)
+      : null
+    const periodComparison = priorWindowComparison?.comparable
+      ? priorWindowComparison
+      : comparisonFor('split-window', reportedWindow.startDate ?? daily[0]?.date)
 
     return {
       totals: {
@@ -1048,14 +1129,7 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
       // it goes negative for a metric that cannot be. Computed server-side for
       // the same UI/CLI parity reason as the fit: a percentage derived in a
       // chart component is invisible to an agent.
-      periodComparison: comparisonStart && comparisonEnd && comparisonEndsWithinKnownData
-        ? computeGscPeriodComparison(
-            // The source tag is the comparison module's input, NOT part of the
-            // response: `daily` on the wire stays exactly what the DTO declares.
-            daily.map((d) => ({ ...d, fromPropertyTotals: propertyDates.has(d.date) })),
-            { startDate: comparisonStart, endDate: comparisonEnd },
-          )
-        : null,
+      periodComparison,
     }
   })
 

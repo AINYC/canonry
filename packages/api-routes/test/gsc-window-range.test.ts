@@ -5,7 +5,9 @@ import path from 'node:path'
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { createClient, migrate, projects, runs, gscSearchData, gscDailyTotals, gscDataWatermarks } from '@ainyc/canonry-db'
 
-import { readLatestGscDataDate, resolveGscWindowDays, resolveGscWindowRange } from '../src/gsc-totals.js'
+import {
+  readEarliestGscDataDate, readLatestGscDataDate, resolveGscWindowDays, resolveGscWindowRange,
+} from '../src/gsc-totals.js'
 import { assertForwardRange, resolveReportedWindow } from '../src/google.js'
 
 /**
@@ -160,6 +162,108 @@ describe('readLatestGscDataDate', () => {
 
     seedProperty('2026-08-11')
     expect(readLatestGscDataDate(db, projectId)).toBe('2026-08-11')
+  })
+})
+
+/**
+ * The floor under any period a surface reaches back to.
+ *
+ * Search Analytics omits days with no data, so an absent row is only a real
+ * zero INSIDE the synced span. Before the earliest row it may equally be a day
+ * nobody fetched, and counting those as zero is what lets a half-synced prior
+ * period halve its own baseline and print growth that never happened.
+ */
+describe('readEarliestGscDataDate', () => {
+  let db: ReturnType<typeof createClient>
+  let tmpDir: string
+  let projectId: string
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsc-earliest-test-'))
+    db = createClient(path.join(tmpDir, 'test.db'))
+    migrate(db)
+    projectId = crypto.randomUUID()
+    const now = '2026-08-12T00:00:00.000Z'
+    db.insert(projects).values({
+      id: projectId, name: 'perf', displayName: 'Perf', canonicalDomain: 'perf.example.com',
+      country: 'US', language: 'en', createdAt: now, updatedAt: now,
+    }).run()
+  })
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  function seedDimensioned(date: string) {
+    const syncRunId = crypto.randomUUID()
+    db.insert(runs).values({
+      id: syncRunId, projectId, kind: 'gsc-sync', status: 'completed', trigger: 'manual',
+      createdAt: '2026-08-12T00:00:00.000Z',
+    }).run()
+    db.insert(gscSearchData).values({
+      id: crypto.randomUUID(), projectId, syncRunId, date, query: 'q', page: '/p',
+      country: 'usa', device: 'DESKTOP', impressions: 10, clicks: 1, ctr: '0.1', position: '5',
+      createdAt: '2026-08-12T00:00:00.000Z',
+    }).run()
+  }
+
+  function seedProperty(date: string) {
+    db.insert(gscDailyTotals).values({
+      id: crypto.randomUUID(), projectId, date, clicks: 1, impressions: 10, position: '5',
+      createdAt: '2026-08-12T00:00:00.000Z',
+    }).run()
+  }
+
+  it('returns null for a project with no GSC data', () => {
+    expect(readEarliestGscDataDate(db, projectId)).toBeNull()
+  })
+
+  it('reads the property table when it is the only source', () => {
+    seedProperty('2026-07-01')
+    seedProperty('2026-08-09')
+    expect(readEarliestGscDataDate(db, projectId)).toBe('2026-07-01')
+  })
+
+  it('reads the dimensioned table for a project that predates property totals', () => {
+    seedDimensioned('2026-06-02')
+    expect(readEarliestGscDataDate(db, projectId)).toBe('2026-06-02')
+  })
+
+  /**
+   * The mirror of the latest-date rule, and it must take the EARLIER of the
+   * two. Reading only the property table would place the frontier after
+   * dimensioned history the endpoint can already serve, and refuse comparisons
+   * the data supports.
+   */
+  it('takes the earlier of the two independently synced tables', () => {
+    seedProperty('2026-07-01')
+    seedDimensioned('2026-05-14')
+    expect(readEarliestGscDataDate(db, projectId)).toBe('2026-05-14')
+  })
+
+  /**
+   * The watermark records only how far FORWARD a sync reached, so it says
+   * nothing about where history begins and must not be consulted here. A
+   * project whose backfill starts in July does not gain June by having a
+   * watermark.
+   */
+  it('ignores the forward-only watermark', () => {
+    seedProperty('2026-07-01')
+    db.insert(gscDataWatermarks).values({
+      projectId, dataThroughDate: '2026-08-11', syncedThroughDate: '2026-08-11',
+      updatedAt: '2026-08-12T00:00:00.000Z',
+    }).run()
+    expect(readEarliestGscDataDate(db, projectId)).toBe('2026-07-01')
+  })
+
+  /**
+   * A quiet LEADING stretch walks the frontier forward, which withholds a
+   * comparison that could have been made rather than inventing one. Being
+   * conservative in that direction is the whole point.
+   */
+  it('walks forward with a quiet lead rather than assuming unrecorded days', () => {
+    seedProperty('2026-07-05')
+    expect(readEarliestGscDataDate(db, projectId)).toBe('2026-07-05')
   })
 })
 

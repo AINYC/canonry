@@ -3088,6 +3088,7 @@ export type GscPerformanceDailyDto = {
     };
     periodComparison?: {
         days: number;
+        basis?: 'prior-window' | 'split-window';
         prior: {
             startDate: string;
             endDate: string;
