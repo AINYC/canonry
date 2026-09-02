@@ -134,6 +134,22 @@ every engine release and the val would have sat on an old engine while Canonry m
 A new file importing the engine is picked up with no change to either, which is the point of scanning rather than
 listing.
 
+## The caution is read from the evidence, not from a stored flag
+
+`record.status` is decided once, when the check runs, and persisted. That makes it the wrong thing to warn a reader
+off. Correcting the rule behind it does NOT correct the records already written: every check from before the
+bounded-sample fix kept `status: 'partial'` for its whole 24h life, so a reader opening a shared link still got
+"Partial result — Failed checks are shown separately" over a run with zero failed probes and a completed crawl. The
+fix shipped and the screenshot still showed the banner, because the fix could only reach checks that had not happened
+yet.
+
+`hasFailedWork` reads the result instead: a probe left unmeasured (`mentioned` and `cited` both null), a crawl with
+`status: 'error'`, or a recorded phase error. A stored `partial` with none of those reads as `ready`. Any of them
+still raises the caution, so a real failure is never swallowed.
+
+This is the same principle as the factor ordering: a presentation decision over stored data belongs at READ time, not
+frozen into the row. It also makes the next semantic correction retroactive for free.
+
 ## A bounded sample reaching its own ceiling is COMPLETE
 
 The crawler's `summary.complete` means "the crawler saw the whole site". This sample is designed never to do that:

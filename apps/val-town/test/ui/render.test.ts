@@ -1224,3 +1224,98 @@ Deno.test('site-health mapping preserves not-applicable factors and partial prov
   assert(html.includes('Partial termination: max duration.'), 'partial termination must remain visible as evidence')
   assert(html.includes('Crawl schema 1.2 · Engine audit-1.2.0'), 'crawl provenance must remain visible as evidence')
 })
+
+Deno.test('a stored partial with nothing failed does not warn the reader', () => {
+  // `record.status` is decided once and stored. When the rule behind it was
+  // corrected, every check already written kept the old verdict for its whole
+  // 24h life — so a reader opening a shared link still saw "Partial result /
+  // Failed checks are shown separately" over a run where nothing failed.
+  // The evidence is in the result, so the caution reads that instead.
+  const record = {
+    id: '11111111-2222-4333-8444-555555555555',
+    fingerprint: 'f',
+    userQueries: [],
+    domain: 'example.com',
+    status: 'partial',
+    createdAt: '2026-09-02T00:00:00.000Z',
+    updatedAt: '2026-09-02T00:00:20.000Z',
+    expiresAt: null,
+    errorCode: null,
+    errorMessage: null,
+    leaseOwner: null,
+    leaseUntil: null,
+    result: {
+      schemaVersion: '1.0',
+      domain: 'example.com',
+      generatedAt: '2026-09-02T00:00:20.000Z',
+      errors: [],
+      visibility: {
+        schemaVersion: '1',
+        domain: 'example.com',
+        startedAt: '2026-09-02T00:00:00.000Z',
+        completedAt: '2026-09-02T00:00:20.000Z',
+        summary: { successfulChecks: 3, failedChecks: 0, mentionRate: 0, citationRate: 0 },
+        evidence: [{
+          query: 'q',
+          provider: 'gemini',
+          requestedModel: 'm',
+          servedModel: 'm',
+          completedAt: '2026-09-02T00:00:10.000Z',
+          answerText: 'text',
+          mentioned: false,
+          matchedTerms: [],
+          cited: false,
+          citedDomains: [],
+          citedUrls: [],
+          matchedCitationDomains: [],
+          matchedCitationUrls: [],
+          sources: [],
+          searchQueries: [],
+          namedBrands: [],
+          retrievalStatus: 'grounded',
+          error: null,
+        }],
+      },
+      // A crawl that stopped at its own page cap, which is the sample working.
+      siteHealth: {
+        schemaVersion: '1',
+        label: '5-page Technical AEO sample',
+        domain: 'example.com',
+        rootUrl: 'https://example.com/',
+        finalRootUrl: 'https://example.com/',
+        status: 'partial',
+        score: 80,
+        pagesDiscovered: 5,
+        pagesFetched: 5,
+        pagesObserved: 5,
+        elapsedMs: 900,
+        terminationReason: 'max-pages',
+        warnings: [],
+        siteMap: null,
+        attemptedHosts: ['example.com'],
+        error: null,
+        factors: [],
+        pages: [],
+      },
+    },
+    // deno-lint-ignore no-explicit-any
+  } as any
+
+  const clean = toCanonryDemoViewModel(record)
+  assert(clean.status === 'ready', `a stored partial with no failure reads as ready, got ${clean.status}`)
+  assert(!renderCanonryDemo(clean).includes('Partial result'), 'and paints no caution banner')
+
+  // But a real failure still warns: one unmeasured probe is a failed check.
+  const withFailure = structuredClone(record)
+  withFailure.result.visibility.evidence[0].mentioned = null
+  withFailure.result.visibility.evidence[0].cited = null
+  assert(
+    toCanonryDemoViewModel(withFailure).status === 'partial',
+    'a probe that never completed must still raise the caution',
+  )
+
+  // And so does a recorded phase error, even with every probe fine.
+  const withPhaseError = structuredClone(record)
+  withPhaseError.result.errors = [{ area: 'visibility', code: 'unavailable', message: 'boom' }]
+  assert(toCanonryDemoViewModel(withPhaseError).status === 'partial', 'a phase error must still raise the caution')
+})

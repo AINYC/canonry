@@ -63,6 +63,28 @@ export function toCanonryDemoViewModel(
   }
 }
 
+/**
+ * Did anything in this check actually fail?
+ *
+ * `record.status` is decided once, when the check runs, and stored. That makes
+ * it the wrong thing to warn a reader off: when the rule behind it is corrected
+ * the stored value stays wrong for the record's whole 24h life, and a reader
+ * opening a shared link sees the old verdict forever. Every check written
+ * before the bounded-sample rule was fixed still says `partial` with zero
+ * failed probes and a completed crawl.
+ *
+ * The evidence is right here in the result, so read it instead of the flag: a
+ * probe that failed, a crawl that errored, or a recorded phase error. Nothing
+ * failed means no caution, whatever the stored status says.
+ */
+function hasFailedWork(record: CheckRecord): boolean {
+  const result = record.result
+  if (!result) return false
+  if (result.errors && result.errors.length > 0) return true
+  if (result.siteHealth && result.siteHealth.status === 'error') return true
+  return (result.visibility?.evidence ?? []).some((row) => row.mentioned === null && row.cited === null)
+}
+
 function mapStatus(record: CheckRecord): CanonryDemoViewModel['status'] {
   if (record.errorCode === PUBLIC_RATE_LIMITED_ERROR_CODE) return 'rate-limited'
   switch (record.status) {
@@ -70,7 +92,9 @@ function mapStatus(record: CheckRecord): CanonryDemoViewModel['status'] {
     case 'running':
       return 'loading'
     case 'partial':
-      return 'partial'
+      // A stored `partial` is only worth a caution when something in the
+      // result actually failed. See `hasFailedWork`.
+      return hasFailedWork(record) ? 'partial' : 'ready'
     case 'failed':
       return 'error'
     case 'complete':
