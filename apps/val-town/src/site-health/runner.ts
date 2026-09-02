@@ -97,7 +97,11 @@ function toSample(domain: string, report: SiteCrawlReport, attemptedHosts: strin
   // v7 always reports this count. Treat a missing legacy/mock field as unknown
   // rather than inventing an error; an explicit zero is never a valid sample.
   const hasAuditedPages = summary.auditRollup.auditedPages !== 0
-  const status = !hasAuditedPages ? 'error' : summary.complete ? 'complete' : 'partial'
+  const status = !hasAuditedPages
+    ? 'error'
+    : isCompleteBoundedSample(summary.terminationReason)
+    ? 'complete'
+    : 'partial'
   return {
     schemaVersion: summary.crawlSchemaVersion,
     label: '5-page Technical AEO sample',
@@ -127,6 +131,26 @@ function toSample(domain: string, report: SiteCrawlReport, attemptedHosts: strin
     attemptedHosts,
     error: hasAuditedPages ? null : 'No public pages could be audited in the Technical AEO sample.',
   }
+}
+
+/**
+ * A bounded sample that reached its OWN ceiling is complete, not partial.
+ *
+ * `summary.complete` means "the crawler saw the whole site", which this sample
+ * is designed never to do: `maxPages` is 5, so any real site stops at
+ * `max-pages` and every check reported `partial`. That marked the whole record
+ * partial and painted an amber "Partial result — Only completed checks are
+ * included below. Failed checks are shown separately." over a run where
+ * nothing failed. A caution banner on 100% of results is not a caution.
+ *
+ * Every `max-*` reason names a limit configured in
+ * `VAL_TOWN_SITE_HEALTH_LIMITS`, so hitting one is the sample working. Anything
+ * else — today only `root-host-redirect`, which means the crawl never reached
+ * the host that was asked for — is a genuinely degraded outcome and stays
+ * partial. The reason itself is reported either way, under "Sample scope".
+ */
+function isCompleteBoundedSample(terminationReason: string | null | undefined): boolean {
+  return !terminationReason || terminationReason.startsWith('max-')
 }
 
 function toPage(page: CrawlPageObservation): SiteHealthPageSample {

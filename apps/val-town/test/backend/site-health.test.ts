@@ -275,3 +275,63 @@ Deno.test({
     }
   },
 })
+
+/** One crawl report, parameterised on how the crawl ended. */
+function crawlEndingWith(terminationReason: string | null, complete: boolean) {
+  return {
+    mode: 'full',
+    summary: {
+      crawlSchemaVersion: '1.2',
+      rootUrl: 'https://example.com/',
+      finalRootUrl: 'https://example.com/',
+      complete,
+      terminationReason,
+      pagesDiscovered: 5,
+      pagesFetched: 5,
+      pagesObserved: 5,
+      elapsedMs: 900,
+      auditRollup: { aggregateScore: 74, auditedPages: 5, factors: [] },
+      warnings: [],
+    },
+    pages: [],
+    edges: [],
+    deadLinks: { state: 'disabled', findings: [] },
+  } as never
+}
+
+Deno.test('a bounded sample that reached its own ceiling is complete, not partial', async () => {
+  // `summary.complete` means the crawler saw the WHOLE site, which a 5-page
+  // sample is designed never to do. Every real check therefore came back
+  // `partial`, which marked the record partial and painted an amber
+  // "Partial result / Failed checks are shown separately" over a run where
+  // nothing failed. A caution on 100% of results is not a caution.
+  for (const reason of ['max-pages', 'max-sitemap-fanout', 'max-duration', 'max-depth', 'max-edges']) {
+    const runner = createSiteHealthRunner(() => Promise.resolve(crawlEndingWith(reason, false)))
+    const result = await runner.run('example.com', AbortSignal.timeout(1_000))
+    equal(result.status, 'complete', `${reason} is a configured ceiling, so the sample is complete`)
+    // The reason is still reported; it is the STATUS that was wrong.
+    equal(result.terminationReason, reason)
+  }
+})
+
+Deno.test('an ending that is not one of our ceilings stays partial', async () => {
+  // root-host-redirect means the crawl never reached the host that was asked
+  // for. That is a degraded result, and the only non-`max-` reason today.
+  const runner = createSiteHealthRunner(() => Promise.resolve(crawlEndingWith('root-host-redirect', false)))
+  const result = await runner.run('example.com', AbortSignal.timeout(1_000))
+  equal(result.status, 'partial', 'a crawl that missed the host is genuinely partial')
+})
+
+Deno.test('a sample that audited nothing is still an error, not a complete zero', async () => {
+  const runner = createSiteHealthRunner(() =>
+    Promise.resolve({
+      ...(crawlEndingWith('max-pages', false) as unknown as Record<string, unknown>),
+      summary: {
+        ...((crawlEndingWith('max-pages', false) as unknown as { summary: Record<string, unknown> }).summary),
+        auditRollup: { aggregateScore: 0, auditedPages: 0, factors: [] },
+      },
+    } as never)
+  )
+  const result = await runner.run('example.com', AbortSignal.timeout(1_000))
+  equal(result.status, 'error', 'hitting a ceiling cannot upgrade an empty sample')
+})
