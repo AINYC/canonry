@@ -1,5 +1,5 @@
 import crypto from 'node:crypto'
-import { and, eq } from 'drizzle-orm'
+import { and, asc, eq } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { schedules, trafficSources } from '@ainyc/canonry-db'
 import {
@@ -177,7 +177,23 @@ export async function scheduleRoutes(app: FastifyInstance, opts: ScheduleRoutesO
     return reply.status(existing ? 200 : 201).send(formatSchedule(schedule))
   })
 
-  // GET /projects/:name/schedule[?kind=...] — get schedule(s).
+  // GET /projects/:name/schedules — list every configured schedule.
+  // An empty project returns [] rather than a 404 so discovery callers can
+  // distinguish "none configured" without treating expected absence as a
+  // failed resource load. The singular route below keeps its legacy contract.
+  app.get<{ Params: { name: string } }>('/projects/:name/schedules', async (request, reply) => {
+    const project = resolveProject(app.db, request.params.name)
+    const rows = app.db
+      .select()
+      .from(schedules)
+      .where(eq(schedules.projectId, project.id))
+      .orderBy(asc(schedules.kind))
+      .all()
+
+    return reply.send(rows.map(formatSchedule))
+  })
+
+  // GET /projects/:name/schedule[?kind=...] — get one schedule.
   // Returns the single schedule matching the requested kind (default
   // 'answer-visibility'). The legacy callsite that didn't pass a kind keeps
   // working unchanged.

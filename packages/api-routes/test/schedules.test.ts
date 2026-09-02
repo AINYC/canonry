@@ -117,6 +117,52 @@ describe('schedule per-kind invariants', () => {
   beforeEach(async () => { harness = await buildHarness() })
   afterEach(async () => { await teardown(harness) })
 
+  it('lists schedules with a successful empty result and keeps projects isolated', async () => {
+    const emptyRes = await harness.app.inject({
+      method: 'GET',
+      url: '/api/v1/projects/site-a/schedules',
+    })
+    expect(emptyRes.statusCode).toBe(200)
+    expect(JSON.parse(emptyRes.payload)).toEqual([])
+
+    const answerVisibility = await harness.app.inject({
+      method: 'PUT',
+      url: '/api/v1/projects/site-a/schedule',
+      payload: { kind: 'answer-visibility', preset: 'daily' },
+    })
+    expect(answerVisibility.statusCode).toBe(201)
+    const dataRefresh = await harness.app.inject({
+      method: 'PUT',
+      url: '/api/v1/projects/site-a/schedule',
+      payload: { kind: 'data-refresh', preset: 'daily' },
+    })
+    expect(dataRefresh.statusCode).toBe(201)
+    const foreign = await harness.app.inject({
+      method: 'PUT',
+      url: '/api/v1/projects/site-b/schedule',
+      payload: { kind: 'gbp-sync', preset: 'daily' },
+    })
+    expect(foreign.statusCode).toBe(201)
+
+    const listRes = await harness.app.inject({
+      method: 'GET',
+      url: '/api/v1/projects/site-a/schedules',
+    })
+    expect(listRes.statusCode).toBe(200)
+    expect(JSON.parse(listRes.payload).map((schedule: { kind: string }) => schedule.kind)).toEqual([
+      'answer-visibility',
+      'data-refresh',
+    ])
+  })
+
+  it('preserves the singular schedule 404 contract when the collection is empty', async () => {
+    const res = await harness.app.inject({
+      method: 'GET',
+      url: '/api/v1/projects/site-a/schedule',
+    })
+    expect(res.statusCode).toBe(404)
+  })
+
   it('rejects PUT /schedule with kind=traffic-sync and no sourceId', async () => {
     const res = await harness.app.inject({
       method: 'PUT',

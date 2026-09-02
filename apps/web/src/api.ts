@@ -1,4 +1,4 @@
-import type { EmbedClientConfig, ErrorCode, GroundingSource, ProjectOverviewDto, ScheduleDto, NotificationDto, GscCoverageSummaryDto, GscCoverageSnapshotDto, GscPerformanceDailyDto, IndexingRequestResultDto, MetricsWindow, BrandMetricsDto, GA4AiReferralDailyDto, GA4AiReferralHistoryEntry, GA4SessionHistoryEntry, GA4SocialReferralHistoryEntry, InsightDto, ProjectReportDto, ReportAudience, ResultsExportFormat, CitationVisibilityResponse, BacklinkSource, BacklinkSummaryDto, BacklinkDomainDto, BacklinkListResponse, BacklinkHistoryEntry, BacklinksInstallStatusDto, BacklinksInstallResultDto, CcAvailableRelease, CcCachedRelease, CcReleaseSyncDto, TrafficSourceDto, TrafficSourceDetailDto, TrafficSourceListResponse, TrafficStatusResponse, TrafficEventsResponse, TrafficConnectCloudRunRequest, TrafficConnectWordpressRequest, TrafficConnectVercelRequest, TrafficSyncResponse, TrafficBackfillResponse, DiscoveryRunRequest, DiscoverySessionDto, DiscoverySessionDetailDto, DiscoveryPromotePreview, DiscoveryPromoteRequest, DiscoveryPromoteResult, ProjectDto, ProjectCreateRequest, ProjectUpsertRequest, QueryDto, CompetitorDto, LocationContext, GoogleConnectionDto, GscUrlInspectionDto, GscDeindexedRowDto, BingUrlInspectionDto, BingCoverageSummaryDto, BingKeywordStatsDto, BingStatusDto, BingConnectResponseDto, BingSetSiteResponseDto, BingSitesResponseDto, GscSearchDataDto, GscPerformanceResponseDto, GscPerformanceOrderBy, ContentTargetDismissalDto, ContentTargetDismissRequest, SiteAuditRunRequest, SiteAuditRunResponseDto, GscSitemapDto, GscSitemapListResponseDto, GscSubmitSitemapsResponseDto, GscDiscoverSitemapsResponseDto, OnboardingTelemetryEvent, TelemetryEventAcceptedDto } from '@ainyc/canonry-contracts'
+import type { ApiKeyDto, EmbedClientConfig, ErrorCode, GroundingSource, ProjectOverviewDto, ScheduleDto, NotificationDto, GscCoverageSummaryDto, GscCoverageSnapshotDto, GscPerformanceDailyDto, IndexingRequestResultDto, MetricsWindow, BrandMetricsDto, GA4AiReferralDailyDto, GA4AiReferralHistoryEntry, GA4SessionHistoryEntry, GA4SocialReferralHistoryEntry, InsightDto, ProjectReportDto, ReportAudience, ResultsExportFormat, CitationVisibilityResponse, BacklinkSource, BacklinkSummaryDto, BacklinkDomainDto, BacklinkListResponse, BacklinkHistoryEntry, BacklinksInstallStatusDto, BacklinksInstallResultDto, CcAvailableRelease, CcCachedRelease, CcReleaseSyncDto, TrafficSourceDto, TrafficSourceDetailDto, TrafficSourceListResponse, TrafficStatusResponse, TrafficEventsResponse, TrafficConnectCloudRunRequest, TrafficConnectWordpressRequest, TrafficConnectVercelRequest, TrafficSyncResponse, TrafficBackfillResponse, DiscoveryRunRequest, DiscoverySessionDto, DiscoverySessionDetailDto, DiscoveryPromotePreview, DiscoveryPromoteRequest, DiscoveryPromoteResult, ProjectDto, ProjectCreateRequest, ProjectUpsertRequest, QueryDto, CompetitorDto, LocationContext, GoogleConnectionDto, GscUrlInspectionDto, GscDeindexedRowDto, BingUrlInspectionDto, BingCoverageSummaryDto, BingKeywordStatsDto, BingStatusDto, BingConnectResponseDto, BingSetSiteResponseDto, BingSitesResponseDto, GscSearchDataDto, GscPerformanceResponseDto, GscPerformanceOrderBy, ContentTargetDismissalDto, ContentTargetDismissRequest, SiteAuditRunRequest, SiteAuditRunResponseDto, GscSitemapDto, GscSitemapListResponseDto, GscSubmitSitemapsResponseDto, GscDiscoverSitemapsResponseDto, OnboardingTelemetryEvent, TelemetryEventAcceptedDto } from '@ainyc/canonry-contracts'
 import {
   createClient as createHeyClient,
   // Projects + queries + competitors + locations + runs + apply + settings + telemetry
@@ -36,6 +36,7 @@ import {
   putApiV1SettingsCdp,
   // Schedules / notifications
   getApiV1ProjectsByNameSchedule,
+  getApiV1ProjectsByNameSchedules,
   putApiV1ProjectsByNameSchedule,
   deleteApiV1ProjectsByNameSchedule,
   getApiV1ProjectsByNameNotifications,
@@ -124,6 +125,7 @@ import {
   getApiV1ProjectsByNameBacklinksHistory,
   postApiV1ProjectsByNameBacklinksExtract,
   postApiV1TelemetryOnboarding,
+  getApiV1KeysSelf,
 } from '@ainyc/canonry-api-client'
 import type { RunDto, RunDetailDto } from '@ainyc/canonry-api-client'
 export type { ProjectOverviewDto }
@@ -968,6 +970,23 @@ export function loginWithPassword(password: string): Promise<ApiSessionState> {
 }
 
 /**
+ * Supported recovery path for the legacy shared-password gate. The server
+ * binds the browser session to this exact key, so its existing scopes and
+ * project boundary remain authoritative; the dashboard password is unchanged.
+ */
+export function loginWithApiKey(apiKey: string): Promise<ApiSessionState> {
+  return apiFetch('/session', {
+    method: 'POST',
+    body: JSON.stringify({ apiKey }),
+  })
+}
+
+/** Safe metadata for the key bound to the current browser session. */
+export function fetchCurrentApiKey(): Promise<ApiKeyDto> {
+  return invokeWeb<ApiKeyDto>(() => getApiV1KeysSelf({ client: heyClient }))
+}
+
+/**
  * Whether this install has named accounts, and who is signed in.
  *
  * `authRequired: false` is an install with no accounts at all: no sign-in
@@ -1049,6 +1068,13 @@ export function updateGoogleAuthConfig(body: {
 }
 
 export type ApiSchedule = ScheduleDto
+
+/** Browser-friendly schedule discovery: absence is an empty list, never a 404. */
+export function fetchSchedules(project: string): Promise<ApiSchedule[]> {
+  return invokeWeb<ApiSchedule[]>(() =>
+    getApiV1ProjectsByNameSchedules({ client: heyClient, path: { name: project } }),
+  )
+}
 
 export async function fetchSchedule(project: string): Promise<ApiSchedule | null> {
   try {
@@ -1559,6 +1585,18 @@ export function fetchBingCoverage(project: string): Promise<ApiBingCoverageSumma
   return invokeWeb<ApiBingCoverageSummary>(() =>
     getApiV1ProjectsByNameBingCoverage({ client: heyClient, path: { name: project } }),
   )
+}
+
+/**
+ * Dashboard-safe Bing summary read. Coverage requires a durable Bing
+ * connection and answers 400 when none exists, so resolve the cheap status
+ * endpoint first instead of turning a normal unconfigured state into console
+ * noise on every project visit.
+ */
+export async function fetchConnectedBingCoverage(project: string): Promise<ApiBingCoverageSummary | null> {
+  const status = await fetchBingStatus(project)
+  if (!status.connected) return null
+  return fetchBingCoverage(project)
 }
 
 export function fetchBingInspections(

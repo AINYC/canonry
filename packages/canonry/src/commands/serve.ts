@@ -1,12 +1,13 @@
 import { loadConfig } from '../config.js'
 import { createClient, migrate } from '@ainyc/canonry-db'
-import { createServer } from '../server.js'
+import { createServer, waitForServerRuntimeStartup } from '../server.js'
 import { trackEvent, setTelemetrySource } from '../telemetry.js'
 import { CliError, type CliFormat, isMachineFormat } from '../cli-error.js'
 import { backfillAiReferralPaths, backfillNormalizedPaths } from './backfill.js'
 import { getMissingUserSkillsNudge } from './skills.js'
 import { detectCanonryAgentPlugin } from '../agent-plugin.js'
 import { describeError } from '@ainyc/canonry-contracts'
+import { operatorHttpUrl } from '../operator-url.js'
 
 /**
  * Precedence: `CANONRY_PORT` env var (also set by `--port`) > config.yaml `port:` > 4100.
@@ -77,29 +78,30 @@ export async function serveCommand(format: CliFormat = 'text'): Promise<void> {
   })
   const app = await createServer({ config, db, host, getAgentPluginState })
 
-  // Graceful shutdown on SIGTERM (sent by `canonry stop`) and SIGINT (Ctrl+C)
-  // Guard against double-fire: rapid Ctrl+C or concurrent SIGTERM+SIGINT
-  // would call app.close() multiple times, causing unhandled rejections.
-  let shuttingDown = false
-  const shutdown = (signal: string): void => {
-    if (shuttingDown) return
-    shuttingDown = true
-    if (format === 'text') {
-      console.log(`\nReceived ${signal}, stopping server...`)
-    }
-    app.close().then(() => {
-      process.exit(0)
-    }).catch((err) => {
-      console.error('Error during shutdown:', err)
-      process.exit(1)
-    })
-  }
-  process.on('SIGTERM', () => shutdown('SIGTERM'))
-  process.on('SIGINT', () => shutdown('SIGINT'))
-
   try {
     await app.listen({ host, port })
-    const url = `http://${host === '0.0.0.0' ? 'localhost' : host}:${port}`
+    await waitForServerRuntimeStartup(app)
+
+    // Install signal handlers only after bind succeeds. A failed listen must
+    // leave neither a live Fastify app nor process-level listeners behind.
+    let shuttingDown = false
+    const shutdown = (signal: string): void => {
+      if (shuttingDown) return
+      shuttingDown = true
+      if (format === 'text') {
+        console.log(`\nReceived ${signal}, stopping server...`)
+      }
+      app.close().then(() => {
+        process.exit(0)
+      }).catch((err) => {
+        console.error('Error during shutdown:', err)
+        process.exit(1)
+      })
+    }
+    process.on('SIGTERM', () => shutdown('SIGTERM'))
+    process.on('SIGINT', () => shutdown('SIGINT'))
+
+    const url = operatorHttpUrl(host, port)
 
     if (isMachineFormat(format)) {
       console.log(JSON.stringify({
@@ -110,7 +112,7 @@ export async function serveCommand(format: CliFormat = 'text'): Promise<void> {
       }, null, 2))
     } else {
       console.log(`\nCanonry server running at ${url}`)
-      console.log(`Open ${url}/setup to finish onboarding and run your first visibility check.`)
+      console.log(`Open ${url}/setup to map your site and run your first Page Health scan.`)
       if (host === '0.0.0.0') {
         console.log('First-run dashboard password setup is unauthenticated only on loopback; complete setup from this machine first or use a bearer cnry_... key.')
       }
@@ -134,6 +136,11 @@ export async function serveCommand(format: CliFormat = 'text'): Promise<void> {
     })
   } catch (err) {
     const message = describeError(err)
+    try {
+      await app.close()
+    } catch (closeErr) {
+      process.stderr.write(`warning: failed to close server after startup error: ${describeError(closeErr)}\n`)
+    }
     throw new CliError({
       code: 'SERVE_START_FAILED',
       message: `Failed to start server: ${message}`,

@@ -5,6 +5,7 @@ import { getConfigDir } from '../config.js'
 import type { CliFormat } from '../cli-error.js'
 import { CliError, isMachineFormat } from '../cli-error.js'
 import { describeError } from '@ainyc/canonry-contracts'
+import { operatorHttpUrl } from '../operator-url.js'
 
 function getPidPath(): string {
   return path.join(getConfigDir(), 'canonry.pid')
@@ -22,7 +23,7 @@ function isProcessAlive(pid: number): boolean {
 }
 
 async function waitForReady(host: string, port: string, maxMs = 10000): Promise<boolean> {
-  const url = `http://${host === '0.0.0.0' ? '127.0.0.1' : host}:${port}/health`
+  const url = `${operatorHttpUrl(host, port)}/health`
   const deadline = Date.now() + maxMs
   while (Date.now() < deadline) {
     try {
@@ -142,7 +143,7 @@ export async function startDaemon(opts: ServeForwardOpts & { format?: CliFormat 
     process.stderr.write('\n')
   }
 
-  const url = `http://${host === '0.0.0.0' ? 'localhost' : host}:${port}`
+  const url = operatorHttpUrl(host, port)
   if (isMachineFormat(format)) {
     console.log(JSON.stringify({
       started: true,

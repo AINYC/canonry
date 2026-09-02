@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { getApiV1ProjectsByNameSchedulesQueryKey } from '@ainyc/canonry-api-client/react-query'
 
 import { Button } from '../ui/button.js'
 import { Card } from '../ui/card.js'
@@ -6,7 +8,7 @@ import { ToneBadge } from '../shared/ToneBadge.js'
 import { formatHour, buildPreset, parsePreset, scheduleLabel } from '../../lib/format-helpers.js'
 import { addToast } from '../../lib/toast-store.js'
 import { asyncHandler } from '../../lib/async-handler.js'
-import { fetchSchedule, saveSchedule, removeSchedule, isEmbed, type ApiSchedule } from '../../api.js'
+import { fetchSchedules, heyClient, saveSchedule, removeSchedule, isEmbed, type ApiSchedule } from '../../api.js'
 
 // --- Schedule helpers ---
 const FREQ_OPTIONS = [
@@ -37,6 +39,7 @@ const COMMON_TIMEZONES = [
 
 
 export function ScheduleSection({ projectName }: { projectName: string }) {
+  const queryClient = useQueryClient()
   const [schedule, setSchedule] = useState<ApiSchedule | null | 'loading'>('loading')
   const [editing, setEditing] = useState(false)
   const [freq, setFreq] = useState('daily')
@@ -48,10 +51,34 @@ export function ScheduleSection({ projectName }: { projectName: string }) {
   const [saving, setSaving] = useState(false)
   const [removing, setRemoving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [loadAttempt, setLoadAttempt] = useState(0)
 
   useEffect(() => {
-    fetchSchedule(projectName).then(setSchedule).catch(() => setSchedule(null))
-  }, [projectName])
+    let active = true
+    setSchedule('loading')
+    setLoadFailed(false)
+    fetchSchedules(projectName)
+      .then(schedules => {
+        if (!active) return
+        setSchedule(schedules.find(item => item.kind === 'answer-visibility') ?? null)
+      })
+      .catch(() => {
+        if (!active) return
+        setSchedule(null)
+        setLoadFailed(true)
+      })
+    return () => { active = false }
+  }, [loadAttempt, projectName])
+
+  const refreshScheduleSummary = () => {
+    void queryClient.invalidateQueries({
+      queryKey: getApiV1ProjectsByNameSchedulesQueryKey({
+        client: heyClient,
+        path: { name: projectName },
+      }),
+    })
+  }
 
   const startEditing = () => {
     if (schedule && schedule !== 'loading') {
@@ -85,6 +112,7 @@ export function ScheduleSection({ projectName }: { projectName: string }) {
       else body.preset = buildPreset(freq, hour)
       const result = await saveSchedule(projectName, body)
       setSchedule(result)
+      refreshScheduleSummary()
       setEditing(false)
       addToast({
         title: 'Schedule saved',
@@ -113,6 +141,7 @@ export function ScheduleSection({ projectName }: { projectName: string }) {
       else body.cron = schedule.cronExpr
       const nextSchedule = await saveSchedule(projectName, body)
       setSchedule(nextSchedule)
+      refreshScheduleSummary()
       addToast({
         title: nextSchedule.enabled ? 'Schedule resumed' : 'Schedule paused',
         detail: scheduleLabel(nextSchedule.preset ?? null, nextSchedule.cronExpr, nextSchedule.timezone),
@@ -133,6 +162,7 @@ export function ScheduleSection({ projectName }: { projectName: string }) {
     try {
       await removeSchedule(projectName)
       setSchedule(null)
+      refreshScheduleSummary()
       setEditing(false)
       addToast({
         title: 'Schedule removed',
@@ -155,7 +185,7 @@ export function ScheduleSection({ projectName }: { projectName: string }) {
           <p className="eyebrow eyebrow-soft">Automation</p>
           <h2>Scheduled runs</h2>
         </div>
-        {!isEmbed() && schedule !== 'loading' && !editing && (
+        {!isEmbed() && schedule !== 'loading' && !loadFailed && !editing && (
           <Button type="button" variant="outline" size="sm" onClick={startEditing}>
             {schedule ? 'Edit schedule' : '+ Set schedule'}
           </Button>
@@ -164,13 +194,28 @@ export function ScheduleSection({ projectName }: { projectName: string }) {
 
       {schedule === 'loading' && <p className="supporting-copy">Loading...</p>}
 
-      {schedule !== 'loading' && !editing && schedule === null && (
+      {schedule !== 'loading' && loadFailed && (
+        <Card className="surface-card compact-card">
+          <p className="supporting-copy">Canonry could not verify this schedule.</p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="mt-3"
+            onClick={() => setLoadAttempt(attempt => attempt + 1)}
+          >
+            Retry
+          </Button>
+        </Card>
+      )}
+
+      {schedule !== 'loading' && !loadFailed && !editing && schedule === null && (
         <Card className="surface-card compact-card">
           <p className="supporting-copy">No schedule configured. Set one to automatically trigger visibility sweeps.</p>
         </Card>
       )}
 
-      {schedule !== 'loading' && !editing && schedule !== null && (
+      {schedule !== 'loading' && !loadFailed && !editing && schedule !== null && (
         <Card className="surface-card compact-card">
           <div className="flex items-start justify-between gap-4">
             <div className="space-y-1">

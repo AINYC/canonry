@@ -15700,6 +15700,27 @@ export type PutApiV1ProjectsByNameScheduleResponses = {
 
 export type PutApiV1ProjectsByNameScheduleResponse = PutApiV1ProjectsByNameScheduleResponses[keyof PutApiV1ProjectsByNameScheduleResponses];
 
+export type GetApiV1ProjectsByNameSchedulesData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/schedules';
+};
+
+export type GetApiV1ProjectsByNameSchedulesResponses = {
+    /**
+     * Schedules returned.
+     */
+    200: Array<ScheduleDto>;
+};
+
+export type GetApiV1ProjectsByNameSchedulesResponse = GetApiV1ProjectsByNameSchedulesResponses[keyof GetApiV1ProjectsByNameSchedulesResponses];
+
 export type GetApiV1NotificationsEventsData = {
     body?: never;
     path?: never;

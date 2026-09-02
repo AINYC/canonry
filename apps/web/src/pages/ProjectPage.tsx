@@ -80,6 +80,7 @@ import {
 } from '../api.js'
 import { filterEmbedProjectTabs, isEmbedProjectTabAllowed, resolveEmbedProjectTab } from '../embed.js'
 import {
+  getApiV1CdpStatusOptions,
   getApiV1ProjectsByNameBingCoverageOptions,
   getApiV1ProjectsByNameBingInspectionsOptions,
   getApiV1ProjectsByNameBingPerformanceOptions,
@@ -88,12 +89,13 @@ import {
   getApiV1ProjectsByNameGoogleConnectionsOptions,
   getApiV1ProjectsByNameMeasurementOverviewInfiniteOptions,
   getApiV1ProjectsByNameMeasurementPlanOptions,
-  getApiV1ProjectsByNameScheduleOptions,
+  getApiV1ProjectsByNameSchedulesOptions,
   getApiV1ProjectsByNameMeasurementReportOptions,
   getApiV1ProjectsByNameMeasurementSetupOptions,
   getApiV1ProjectsByNameQueriesOptions,
   getApiV1ProjectsQueryKey,
   getApiV1ProjectsByNameQueryKey,
+  getApiV1SettingsOptions,
 } from '@ainyc/canonry-api-client/react-query'
 import { useAppendQueries, useTriggerRun } from '../queries/mutations.js'
 import { GSC_STALE_MS } from '../queries/query-client.js'
@@ -104,6 +106,11 @@ import { useProjectDashboard } from '../queries/use-project-dashboard.js'
 import { useInitialDashboard } from '../contexts/dashboard-context.js'
 import { useDrawer } from '../hooks/use-drawer.js'
 import { useAccount } from '../contexts/account-context.js'
+import {
+  CDP_PROVIDER_NAME,
+  normalizeProviderName,
+  resolveAiVisibilityProviderReadiness,
+} from '../lib/ai-visibility-provider-readiness.js'
 import type { ProjectCommandCenterVm, RunHistoryPoint } from '../view-models.js'
 
 export type ProjectPageTab = 'overview' | 'portfolio' | 'search-console' | 'conversions' | 'local' | 'discovery' | 'report' | 'activity' | 'backlinks' | 'technical-aeo' | 'history' | 'settings'
@@ -1102,7 +1109,11 @@ function OverviewBrief({
   const citationMovement = model.citationMovement
   const mentionMovement = model.mentionMovement
   const comparison = model.movementComparison
-  const latestSweep = model.recentRuns.find(run => run.kind === RunKinds['answer-visibility'])
+  const latestBaselineSweep = model.recentRuns.find(run =>
+    run.kind === RunKinds['answer-visibility']
+    && (run.status === RunStatuses.completed || run.status === RunStatuses.partial),
+  )
+  const hasVisibilityBaseline = Boolean(latestBaselineSweep) && model.queryCounts.total > 0
 
   const movementDirection = (movement: ProjectCommandCenterVm['mentionMovement']) => {
     if (movement.tone === 'positive') return 'improved'
@@ -1115,6 +1126,7 @@ function OverviewBrief({
 
   const headline = (() => {
     if (sweepRunning) return 'A fresh sweep is running now'
+    if (!hasVisibilityBaseline) return 'No AI Visibility baseline yet'
     if (!comparison.hasPreviousRun) return 'Baseline captured. The next sweep will show change.'
     if (comparison.querySetChanged) return 'Tracking scope changed since the previous sweep'
     if (mentionDirection === citationDirection) {
@@ -1152,7 +1164,7 @@ function OverviewBrief({
           <h2 id="overview-brief-title" className="overview-brief-title">{headline}</h2>
         </div>
         <p className="overview-brief-updated">
-          {latestSweep ? `Updated ${latestSweep.startedAt}` : 'No completed sweep'}
+          {latestBaselineSweep ? `Updated ${latestBaselineSweep.startedAt}` : 'No completed sweep'}
         </p>
       </div>
 
@@ -1548,6 +1560,48 @@ function ProjectPageContent({
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const { canWrite } = useAccount()
+  const initialDashboard = useInitialDashboard()
+  const initialConfiguredApiProviders = initialDashboard
+    ? initialDashboard.dashboard.settings.providerStatuses
+      .filter(provider => provider.state === 'ready')
+      .map(provider => normalizeProviderName(provider.name))
+    : undefined
+  const providerSettingsQuery = useQuery({
+    ...getApiV1SettingsOptions({ client: heyClient }),
+    enabled: !isEmbed() && canWrite && initialConfiguredApiProviders === undefined,
+    staleTime: 60_000,
+    retry: false,
+  })
+  const configuredApiProviders = initialConfiguredApiProviders
+    ?? (providerSettingsQuery.isSuccess
+      ? providerSettingsQuery.data.providers
+        .filter(provider => provider.configured)
+        .map(provider => normalizeProviderName(provider.name))
+      : providerSettingsQuery.isError ? [] : undefined)
+  const projectProviders = model.project.providers.map(normalizeProviderName)
+  const selectedApiProviderReady = configuredApiProviders?.some(provider => (
+    projectProviders.length === 0 || projectProviders.includes(provider)
+  )) === true
+  const selectionCanUseCdp = projectProviders.length === 0 || projectProviders.includes(CDP_PROVIDER_NAME)
+  const cdpStatusQuery = useQuery({
+    ...getApiV1CdpStatusOptions({ client: heyClient }),
+    enabled: !isEmbed() && canWrite && selectionCanUseCdp && !selectedApiProviderReady,
+    staleTime: 60_000,
+    retry: false,
+  })
+  // The server returns `browserVersion` from the registered adapter's health
+  // check even when Chrome is currently disconnected. The unregistered branch
+  // omits it. `connected` is therefore live browser health, not run preflight.
+  const cdpConfigured = !selectionCanUseCdp
+    ? false
+    : cdpStatusQuery.isSuccess
+      ? typeof cdpStatusQuery.data.browserVersion === 'string'
+      : cdpStatusQuery.isError ? false : undefined
+  const providerReady = resolveAiVisibilityProviderReadiness({
+    projectProviders,
+    configuredApiProviders,
+    cdpConfigured,
+  })
   // Read-only embed mode (#716): an optional project-tab allowlist hides operator
   // surfaces (Search Engines, Activity, Backlinks, ...) from the embedded client
   // dashboard. Unset (or non-embed) = all tabs. The subnav below is filtered to
@@ -1631,20 +1685,11 @@ function ProjectPageContent({
     staleTime: 0,
     refetchOnMount: 'always',
   })
-  // The header states when the next AI sweep fires. On a managed instance the
-  // sweep is scheduled, so "it runs itself" is the honest headline and the
-  // manual trigger beside it is the override. `nextRunAt` is computed from the
-  // cron server-side (`schedules.ts`) — the browser never parses a cron.
-  // 404 means no schedule for this project, which the query surfaces as an
-  // error and the header renders as nothing.
-  const sweepScheduleQuery = useQuery({
-    ...getApiV1ProjectsByNameScheduleOptions({ client: heyClient, path: { name: projectName } }),
-    enabled: !isEmbed() && Boolean(projectName),
-    retry: false,
-  })
   const activeMeasurementPlanQuery = useQuery({
     ...getApiV1ProjectsByNameMeasurementPlanOptions({ client: heyClient, path: { name: projectName } }),
-    enabled: !isEmbed() && (tab === 'portfolio' || tab === 'overview' || tab === 'settings') && Boolean(projectName),
+    enabled: !isEmbed()
+      && Boolean(projectName)
+      && (canWrite || tab === 'portfolio' || tab === 'overview' || tab === 'settings'),
     staleTime: 0,
     refetchOnMount: 'always',
   })
@@ -1654,14 +1699,6 @@ function ProjectPageContent({
     staleTime: 0,
     refetchOnMount: 'always',
   })
-  // Only claim a next sweep when one is genuinely coming: a schedule that
-  // exists, is enabled, and carries a next-run time. A disabled schedule still
-  // returns a row with a stale `nextRunAt`, and announcing that would promise a
-  // sweep that never fires.
-  const sweepSchedule = sweepScheduleQuery.data
-  const nextSweepLabel = sweepSchedule?.enabled && sweepSchedule.nextRunAt
-    ? `Next AI sweep ${new Date(sweepSchedule.nextRunAt).toLocaleString()}`
-    : null
   const activeMeasurementPlan = activeMeasurementPlanQuery.data?.active ?? null
 
   // A bookmark outlives the group it names. Once the plan has actually loaded
@@ -1884,6 +1921,37 @@ function ProjectPageContent({
     () => [...new Set(visibilityEvidence.map(e => e.query))].sort((a, b) => a.localeCompare(b)),
     [visibilityEvidence],
   )
+  const hasTrackedQueries = trackedQueries.length > 0 || model.queryCounts.total > 0
+  const hasMeasurementPlanQueries = activeMeasurementPlan !== null
+  const hasVisibilityInputs = hasTrackedQueries || hasMeasurementPlanQueries
+  const visibilityInputsPending = canWrite
+    && !hasTrackedQueries
+    && activeMeasurementPlanQuery.data === undefined
+    && activeMeasurementPlanQuery.isPending
+  const sweepReadinessPending = canWrite
+    && (visibilityInputsPending || providerReady === undefined)
+  const sweepPrerequisitesReady = !sweepReadinessPending
+    && hasVisibilityInputs
+    && providerReady === true
+  const sweepSetupRequired = canWrite && !sweepReadinessPending && !sweepPrerequisitesReady
+  // The collection read returns [] when no schedule exists. This keeps fresh
+  // projects quiet while still discovering a scheduled-but-never-run project
+  // after queries or providers are removed.
+  const sweepSchedulesQuery = useQuery({
+    ...getApiV1ProjectsByNameSchedulesOptions({ client: heyClient, path: { name: projectName } }),
+    enabled: !isEmbed() && Boolean(projectName),
+    retry: false,
+  })
+  // Only claim a next sweep when one is genuinely coming: a schedule that
+  // exists, is enabled, and carries a next-run time. A disabled schedule still
+  // returns a row with a stale `nextRunAt`, and announcing that would promise a
+  // sweep that never fires.
+  const sweepSchedule = sweepSchedulesQuery.data?.find(
+    schedule => schedule.kind === RunKinds['answer-visibility'],
+  )
+  const nextSweepLabel = sweepSchedule?.enabled && sweepSchedule.nextRunAt
+    ? `Next AI sweep ${new Date(sweepSchedule.nextRunAt).toLocaleString()}`
+    : null
   const distinctLocationsForCompare = useMemo(() => {
     // "Compare" needs ≥2 locations with selectable data. Prefer evidence-backed
     // locations, but fall back to configured locations so a fresh project that
@@ -1975,6 +2043,16 @@ function ProjectPageContent({
     } catch {
       // Mutation hook surfaces the toast and error state.
     }
+  }
+
+  function openAiVisibilitySetup() {
+    void navigate({
+      to: '/setup',
+      search: {
+        experience: 'legacy',
+        setupProject: projectName,
+      },
+    })
   }
 
   async function handleDeleteProject() {
@@ -2178,14 +2256,18 @@ function ProjectPageContent({
               <WriteButton
                 type="button"
                 variant="outline"
-                disabled={triggerRunMutation.isPending || hasActiveVisibilitySweep}
-                onClick={asyncHandler(handleTriggerRun)}
+                disabled={triggerRunMutation.isPending || hasActiveVisibilitySweep || sweepReadinessPending}
+                onClick={sweepSetupRequired ? openAiVisibilitySetup : asyncHandler(handleTriggerRun)}
               >
                 {triggerRunMutation.isPending
                   ? 'Starting…'
                   : hasActiveVisibilitySweep
                     ? 'AI sweep running…'
-                    : 'Run AI sweep'}
+                    : sweepReadinessPending
+                      ? 'Checking AI readiness…'
+                      : sweepSetupRequired
+                        ? 'Set up AI Visibility'
+                        : 'Run AI sweep'}
               </WriteButton>
             </div>
           )}

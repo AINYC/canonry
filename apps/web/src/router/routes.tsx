@@ -79,8 +79,10 @@ type SearchParams = {
   runQuery?: string
   /** First-open Site Health handoff state; a durable run remains the authority. */
   onboarding?: 'site-health'
-  /** Temporary rescue hatch while the platform launchpad rolls out. */
-  experience?: 'legacy'
+  /** Explicit setup surface, independent of the instance rollout default. */
+  experience?: 'legacy' | 'platform'
+  /** Create the project without consenting to or starting a Site Health scan. */
+  siteScan?: 'skip'
   /** Exact project handed from Site Health into the original visibility wizard. */
   setupProject?: string
   /**
@@ -115,7 +117,10 @@ export const rootRoute = createRootRouteWithContext<RouterContext>()({
     runWindow: typeof search.runWindow === 'string' ? search.runWindow : undefined,
     runQuery: typeof search.runQuery === 'string' ? search.runQuery : undefined,
     onboarding: search.onboarding === 'site-health' ? 'site-health' : undefined,
-    experience: search.experience === 'legacy' ? 'legacy' : undefined,
+    experience: search.experience === 'legacy' || search.experience === 'platform'
+      ? search.experience
+      : undefined,
+    siteScan: search.siteScan === 'skip' ? 'skip' : undefined,
     setupProject: typeof search.setupProject === 'string' ? search.setupProject : undefined,
     scope: typeof search.scope === 'string' ? search.scope : undefined,
     class: typeof search.class === 'string' ? search.class : undefined,

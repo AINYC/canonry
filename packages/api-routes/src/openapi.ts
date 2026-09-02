@@ -2686,6 +2686,16 @@ const routeCatalog: OpenApiOperation[] = [
   },
   {
     method: 'get',
+    path: '/api/v1/projects/{name}/schedules',
+    summary: 'List schedules',
+    tags: ['schedules'],
+    parameters: [nameParameter],
+    responses: {
+      200: jsonArrayResponse('Schedules returned.', 'ScheduleDto'),
+    },
+  },
+  {
+    method: 'get',
     path: '/api/v1/projects/{name}/schedule',
     summary: 'Get a schedule',
     tags: ['schedules'],

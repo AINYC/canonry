@@ -7,15 +7,17 @@ import { RouterProvider } from '@tanstack/react-router'
 import { createDashboardFixture } from '../src/mock-data.js'
 import { createAppRouter } from '../src/router/router.js'
 import { DashboardProvider } from '../src/contexts/dashboard-context.js'
+import { AccountProvider } from '../src/contexts/account-context.js'
 import { preloadAllLazyRoutes } from '../src/router/routes.js'
 import { heyClient } from '../src/api.js'
 import {
+  getApiV1CdpStatusQueryKey,
   getApiV1ProjectsByNameMeasurementOverviewInfiniteQueryKey,
   getApiV1ProjectsByNameMeasurementPlanQueryKey,
   getApiV1ProjectsByNameMeasurementSetupQueryKey,
   getApiV1ProjectsByNameMeasurementReportQueryKey,
   getApiV1ProjectsByNameQueriesQueryKey,
-  getApiV1ProjectsByNameScheduleQueryKey,
+  getApiV1ProjectsByNameSchedulesQueryKey,
 } from '@ainyc/canonry-api-client/react-query'
 
 type EmbedBlock = { enabled: boolean; views?: string[]; projectTabs?: string[] }
@@ -47,22 +49,34 @@ async function renderAt(
    * decidable. These render one synchronous pass, so an unseeded query stays
    * pending for the whole render.
    */
-  options: { schedule?: unknown; seedPlan?: boolean } = {},
+  options: {
+    cdpStatus?: { connected: boolean; endpoint: string; browserVersion?: string; targets: [] }
+    schedule?: unknown
+    seedPlan?: boolean
+    configureFixture?: (dashboard: ReturnType<typeof createDashboardFixture>['dashboard']) => void
+  } = {},
 ): Promise<string> {
   if (embed) window.__CANONRY_CONFIG__ = { embed }
   else delete window.__CANONRY_CONFIG__
 
   const fixture = createDashboardFixture({})
+  options.configureFixture?.(fixture.dashboard)
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const projectName = fixture.dashboard.projects.find(project => project.project.id === 'project_citypoint')!.project.name
+  if (options.cdpStatus !== undefined) {
+    queryClient.setQueryData(
+      getApiV1CdpStatusQueryKey({ client: heyClient }),
+      options.cdpStatus,
+    )
+  }
   queryClient.setQueryData(
     getApiV1ProjectsByNameQueriesQueryKey({ client: heyClient, path: { name: projectName } }),
     [],
   )
   if (options.schedule !== undefined) {
     queryClient.setQueryData(
-      getApiV1ProjectsByNameScheduleQueryKey({ client: heyClient, path: { name: projectName } }),
-      options.schedule,
+      getApiV1ProjectsByNameSchedulesQueryKey({ client: heyClient, path: { name: projectName } }),
+      [options.schedule],
     )
   }
   if (options.seedPlan !== false) {
@@ -817,6 +831,179 @@ test('a DISABLED schedule promises no next sweep, even though the row still carr
   // The override is still offered — a paused schedule is exactly when someone
   // needs to run one by hand.
   expect(html).toContain('AI sweep')
+})
+
+test('a fresh project offers one AI Visibility setup action instead of an unready sweep', async () => {
+  const html = await renderAt('/projects/project_citypoint', undefined, undefined, {
+    configureFixture(dashboard) {
+      const project = dashboard.projects.find(entry => entry.project.id === 'project_citypoint')!
+      project.visibilityEvidence = []
+      project.queryCounts = { cited: 0, total: 0 }
+      project.recentRuns = []
+      project.project.providers = ['gemini']
+      dashboard.runs = []
+      dashboard.settings.providerStatuses = []
+    },
+  })
+
+  expect(html).toContain('Set up AI Visibility')
+  expect(html).toContain('No AI Visibility baseline yet')
+  expect(html).toContain('No completed sweep')
+  expect(html).not.toContain('Baseline captured')
+  expect(html).not.toContain('Run AI sweep')
+})
+
+test('fresh project settings use the empty collection instead of a noisy schedule 404', async () => {
+  const observed: string[] = []
+  const realFetch = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const raw = input instanceof Request ? input.url : String(input)
+    const url = new URL(raw, window.location.origin)
+    const path = `${decodeURIComponent(url.pathname)}${url.search}`
+    observed.push(path)
+
+    if (path.endsWith('/schedules')) return jsonResponse([])
+    if (path.endsWith('/runs?kind=answer-visibility')) return jsonResponse([])
+    if (path.endsWith('/measurement-plan')) return jsonResponse({ active: null })
+    if (path.endsWith('/measurement-setup')) {
+      return jsonResponse({
+        state: 'not_started',
+        nextAction: 'start_setup',
+        mode: 'none',
+        activeRevision: null,
+        activeSchemaVersion: null,
+        draft: null,
+      })
+    }
+    return jsonResponse({ code: 'NOT_FOUND', message: 'not found' }, 404)
+  }) as typeof fetch
+  onTestFinished(() => { globalThis.fetch = realFetch })
+
+  const fixture = createDashboardFixture({})
+  const project = fixture.dashboard.projects.find(entry => entry.project.id === 'project_citypoint')!
+  project.visibilityEvidence = []
+  project.queryCounts = { cited: 0, total: 0 }
+  project.recentRuns = []
+  fixture.dashboard.runs = []
+  fixture.dashboard.settings.providerStatuses = []
+
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const router = createAppRouter(queryClient, { initialEntries: ['/projects/project_citypoint/settings'] })
+  await router.load()
+  const page = render(
+    <AccountProvider account={{ name: 'viewer', role: 'viewer' }}>
+      <QueryClientProvider client={queryClient}>
+        <DashboardProvider value={{ dashboard: fixture.dashboard, health: fixture.health }}>
+          <RouterProvider router={router} />
+        </DashboardProvider>
+      </QueryClientProvider>
+    </AccountProvider>,
+  )
+
+  expect(await page.findByRole('heading', { name: 'Scheduled runs' })).toBeTruthy()
+  expect(page.getByText('No schedule configured. Set one to automatically trigger visibility sweeps.')).toBeTruthy()
+  await new Promise(resolve => setTimeout(resolve, 50))
+  expect(observed.some(path => path.endsWith('/schedules'))).toBe(true)
+  expect(observed.some(path => path.endsWith('/schedule'))).toBe(false)
+})
+
+test('a query-ready project with a configured provider can run an AI sweep', async () => {
+  const html = await renderAt('/projects/project_citypoint', undefined, undefined, {
+    configureFixture(dashboard) {
+      const project = dashboard.projects.find(entry => entry.project.id === 'project_citypoint')!
+      project.recentRuns = []
+      dashboard.runs = []
+    },
+  })
+
+  expect(html).toContain('Run AI sweep')
+  expect(html).toContain('No AI Visibility baseline yet')
+  expect(html).not.toContain('Set up AI Visibility to capture a baseline')
+  expect(html).not.toContain('Checking AI readiness')
+})
+
+test('AI Visibility honors the project provider allowlist instead of any configured provider', async () => {
+  const html = await renderAt('/projects/project_citypoint', undefined, undefined, {
+    configureFixture(dashboard) {
+      const project = dashboard.projects.find(entry => entry.project.id === 'project_citypoint')!
+      project.project.providers = ['claude']
+      project.recentRuns = []
+      dashboard.runs = []
+    },
+  })
+
+  expect(html).toContain('Set up AI Visibility')
+  expect(html).not.toContain('Run AI sweep')
+})
+
+test('an active measurement plan supplies runnable queries when the live basket is empty', async () => {
+  const html = await renderAt('/projects/project_citypoint', undefined, {
+    plan: measurementPlanResponse(9, true),
+  }, {
+    configureFixture(dashboard) {
+      const project = dashboard.projects.find(entry => entry.project.id === 'project_citypoint')!
+      project.visibilityEvidence = []
+      project.queryCounts = { cited: 0, total: 0 }
+      project.recentRuns = []
+      dashboard.runs = []
+    },
+  })
+
+  expect(html).toContain('Run AI sweep')
+  expect(html).not.toContain('Set up AI Visibility to capture a baseline')
+})
+
+test('a configured CDP provider is runnable even when no API provider is configured or connected', async () => {
+  const html = await renderAt('/projects/project_citypoint', undefined, undefined, {
+    cdpStatus: {
+      connected: false,
+      endpoint: 'ws://127.0.0.1:9222',
+      browserVersion: 'Chrome not reachable at ws://127.0.0.1:9222',
+      targets: [],
+    },
+    configureFixture(dashboard) {
+      const project = dashboard.projects.find(entry => entry.project.id === 'project_citypoint')!
+      project.project.providers = ['cdp:chatgpt']
+      project.recentRuns = []
+      dashboard.runs = []
+      dashboard.settings.providerStatuses = []
+    },
+  })
+
+  expect(html).toContain('Run AI sweep')
+  expect(html).not.toContain('Set up AI Visibility to capture a baseline')
+})
+
+test('an unregistered CDP status does not make the project runnable', async () => {
+  const html = await renderAt('/projects/project_citypoint', undefined, undefined, {
+    cdpStatus: { connected: false, endpoint: '', targets: [] },
+    configureFixture(dashboard) {
+      const project = dashboard.projects.find(entry => entry.project.id === 'project_citypoint')!
+      project.project.providers = ['cdp:chatgpt']
+      project.recentRuns = []
+      dashboard.runs = []
+      dashboard.settings.providerStatuses = []
+    },
+  })
+
+  expect(html).toContain('Set up AI Visibility')
+  expect(html).not.toContain('Run AI sweep')
+})
+
+test('an established schedule stays visible when run prerequisites need repair', async () => {
+  const html = await renderAt('/projects/project_citypoint', undefined, undefined, {
+    schedule: schedule(),
+    configureFixture(dashboard) {
+      const project = dashboard.projects.find(entry => entry.project.id === 'project_citypoint')!
+      project.project.providers = ['claude']
+      project.recentRuns = project.recentRuns.filter(run => run.status !== 'queued' && run.status !== 'running')
+      dashboard.runs = dashboard.runs.filter(run => run.status !== 'queued' && run.status !== 'running')
+    },
+  })
+
+  expect(html).toContain('Next AI sweep')
+  expect(html).toContain('Set up AI Visibility')
+  expect(html).not.toContain('Run AI sweep')
 })
 
 // Deleting a project destroys every query, run and snapshot. It used to be an
