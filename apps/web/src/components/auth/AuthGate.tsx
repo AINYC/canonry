@@ -5,6 +5,7 @@ import type { ApiKeyDto } from '@ainyc/canonry-contracts'
 
 import {
   ApiError,
+  clearDashboardSession,
   fetchAccountSession,
   fetchCurrentApiKey,
   fetchSession,
@@ -109,18 +110,41 @@ export function AuthGate() {
     // account the provider falls through to NO_ACCOUNTS, which grants FULL
     // access, so clearing it would turn a fail-closed state into a fail-open
     // one. It stays pending and the new state makes that visible and retryable.
-    const hydrateApiKey = (onFailure: AuthState) => fetchCurrentApiKey()
-      .then((key) => {
+    const hydrateApiKey = async (onFailure: AuthState, clearInvalidSession = false) => {
+      try {
+        const key = await fetchCurrentApiKey()
         if (cancelled) return
         setApiKey(key)
         setApiKeyPending(false)
         setAuthState('ready')
-      })
-      .catch((err: unknown) => {
+      } catch (err) {
         if (cancelled) return
+
+        // `/session` knows that the cookie is still present, but `/keys/self`
+        // is authoritative about whether its bound key still exists and is
+        // usable. End a stale shared session before returning to sign-in so a
+        // reload cannot rediscover the same invalid cookie forever.
+        if (clearInvalidSession && err instanceof ApiError && err.statusCode === 401) {
+          return clearDashboardSession()
+            .then(() => {
+              if (cancelled) return
+              setError(null)
+              setApiKey(null)
+              setApiKeyPending(false)
+              setSessionExpired(true)
+              setAuthState('login')
+            })
+            .catch((clearError: unknown) => {
+              if (cancelled) return
+              setError(clearError instanceof Error ? clearError.message : 'Could not clear the invalid session')
+              setAuthState(onFailure)
+            })
+        }
+
         setError(err instanceof Error ? err.message : 'Could not verify API key access')
         setAuthState(onFailure)
-      })
+      }
+    }
 
     if (explicitBrowserApiKey) {
       void hydrateApiKey('api-key-error')
@@ -144,10 +168,12 @@ export function AuthGate() {
 
         const session = legacyResult.value
         if (session.authenticated) {
-          // The session cookie is valid on its own. Key hydration is best
-          // effort here, so a failed read must not present the password form
-          // to someone who is already signed in.
-          void hydrateApiKey('ready')
+          // A shared-password session may have been created with an API key,
+          // including a read-only or project-scoped one. Keep the dashboard
+          // locked until the exact key metadata resolves: falling through with
+          // no key and no account grants the install's full-access default.
+          setApiKeyPending(true)
+          void hydrateApiKey('api-key-error', true)
         } else {
           setApiKey(null)
           setApiKeyPending(false)
@@ -361,7 +387,7 @@ export function AuthGate() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <p className="supporting-copy">
-                  {error ?? 'The API key could not be checked, so the dashboard stayed read-only.'}
+                  {error ?? 'Canonry could not verify this session’s access, so the dashboard stayed locked.'}
                 </p>
                 <Button
                   type="button"

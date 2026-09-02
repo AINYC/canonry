@@ -981,6 +981,11 @@ export function loginWithApiKey(apiKey: string): Promise<ApiSessionState> {
   })
 }
 
+/** End the legacy shared-password/API-key browser session. */
+export function clearDashboardSession(): Promise<void> {
+  return apiFetch('/session', { method: 'DELETE' })
+}
+
 /** Safe metadata for the key bound to the current browser session. */
 export function fetchCurrentApiKey(): Promise<ApiKeyDto> {
   return invokeWeb<ApiKeyDto>(() => getApiV1KeysSelf({ client: heyClient }))
@@ -1093,6 +1098,7 @@ export function saveSchedule(project: string, body: {
   timezone?: string
   providers?: string[]
   enabled?: boolean
+  expectedUpdatedAt?: string | null
 }): Promise<ApiSchedule> {
   return invokeWeb<ApiSchedule>(() =>
     putApiV1ProjectsByNameSchedule({
@@ -1103,9 +1109,13 @@ export function saveSchedule(project: string, body: {
   )
 }
 
-export async function removeSchedule(project: string): Promise<void> {
+export async function removeSchedule(project: string, expectedUpdatedAt?: string): Promise<void> {
   await invokeWeb<unknown>(() =>
-    deleteApiV1ProjectsByNameSchedule({ client: heyClient, path: { name: project } }),
+    deleteApiV1ProjectsByNameSchedule({
+      client: heyClient,
+      path: { name: project },
+      query: expectedUpdatedAt === undefined ? undefined : { expectedUpdatedAt },
+    }),
   )
 }
 

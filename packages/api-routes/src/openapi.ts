@@ -328,6 +328,13 @@ const scheduleKindQueryParameter: OpenApiParameter = {
   schema: { $ref: '#/components/schemas/SchedulableRunKind' },
 }
 
+const scheduleExpectedUpdatedAtQueryParameter: OpenApiParameter = {
+  name: 'expectedUpdatedAt',
+  in: 'query',
+  description: 'Delete only the schedule version carrying this exact updatedAt timestamp. A mismatch returns 409.',
+  schema: { type: 'string', format: 'date-time' },
+}
+
 const runsListKindQueryParameter: OpenApiParameter = {
   name: 'kind',
   in: 'query',
@@ -2673,6 +2680,12 @@ const routeCatalog: OpenApiOperation[] = [
               providers: stringArraySchema,
               enabled: booleanSchema,
               sourceId: stringSchema,
+              expectedUpdatedAt: {
+                type: 'string',
+                format: 'date-time',
+                nullable: true,
+                description: 'Update only this exact version; null creates only while absent. Omit for legacy unconditional behavior.',
+              },
             },
           },
         },
@@ -2682,6 +2695,7 @@ const routeCatalog: OpenApiOperation[] = [
       200: jsonResponse('Schedule updated.', 'ScheduleDto'),
       201: jsonResponse('Schedule created.', 'ScheduleDto'),
       400: errorResponse('Invalid payload (e.g. sourceId missing for kind=traffic-sync, or providers set for kind=traffic-sync).'),
+      409: errorResponse('The schedule changed since the caller loaded it.'),
     },
   },
   {
@@ -2710,10 +2724,11 @@ const routeCatalog: OpenApiOperation[] = [
     path: '/api/v1/projects/{name}/schedule',
     summary: 'Delete a schedule',
     tags: ['schedules'],
-    parameters: [nameParameter, scheduleKindQueryParameter],
+    parameters: [nameParameter, scheduleKindQueryParameter, scheduleExpectedUpdatedAtQueryParameter],
     responses: {
       204: { description: 'Schedule deleted.' },
       404: errorResponse('Schedule not found.'),
+      409: errorResponse('The schedule changed since the caller loaded it.'),
     },
   },
   {

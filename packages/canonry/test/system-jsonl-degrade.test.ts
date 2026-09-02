@@ -156,6 +156,7 @@ vi.mock('@ainyc/canonry-db', () => ({
 }))
 vi.mock('../src/server.js', () => ({
   createServer: async () => ({ listen: mockListen, close: mockClose }),
+  isLoopbackBindHost: (host: string | undefined) => host == null || host === '' || host === 'localhost' || host === '127.0.0.1' || host === '::1',
   waitForServerRuntimeStartup: () => mockWaitForServerRuntimeStartup(),
 }))
 vi.mock('../src/telemetry.js', () => ({

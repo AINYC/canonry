@@ -1,6 +1,6 @@
 import { loadConfig } from '../config.js'
 import { createClient, migrate } from '@ainyc/canonry-db'
-import { createServer, waitForServerRuntimeStartup } from '../server.js'
+import { createServer, isLoopbackBindHost, waitForServerRuntimeStartup } from '../server.js'
 import { trackEvent, setTelemetrySource } from '../telemetry.js'
 import { CliError, type CliFormat, isMachineFormat } from '../cli-error.js'
 import { backfillAiReferralPaths, backfillNormalizedPaths } from './backfill.js'
@@ -8,15 +8,17 @@ import { getMissingUserSkillsNudge } from './skills.js'
 import { detectCanonryAgentPlugin } from '../agent-plugin.js'
 import { describeError } from '@ainyc/canonry-contracts'
 import { operatorHttpUrl } from '../operator-url.js'
+import { resolveServePort } from '../serve-endpoint.js'
 
 /**
  * Precedence: `CANONRY_PORT` env var (also set by `--port`) > config.yaml `port:` > 4100.
- * Exported for tests; `serveCommand` is the only caller.
+ * Re-exported here to preserve the command's public test seam.
  */
-export function resolveServePort(envPort: string | undefined, configPort: number | undefined): number {
-  const trimmed = envPort?.trim()
-  if (trimmed) return parseInt(trimmed, 10)
-  return configPort ?? 4100
+export { resolveServePort } from '../serve-endpoint.js'
+
+/** First-run password setup is loopback-only for every non-loopback bind. */
+export function shouldWarnAboutRemoteSetup(host: string | undefined): boolean {
+  return !isLoopbackBindHost(host)
 }
 
 export async function serveCommand(format: CliFormat = 'text'): Promise<void> {
@@ -120,7 +122,7 @@ export async function serveCommand(format: CliFormat = 'text'): Promise<void> {
     } else {
       console.log(`\nCanonry server running at ${url}`)
       console.log(`Open ${url}/setup to map your site and run your first Page Health scan.`)
-      if (host === '0.0.0.0') {
+      if (shouldWarnAboutRemoteSetup(host)) {
         console.log('First-run dashboard password setup is unauthenticated only on loopback; complete setup from this machine first or use a bearer cnry_... key.')
       }
       console.log('Press Ctrl+C to stop.\n')

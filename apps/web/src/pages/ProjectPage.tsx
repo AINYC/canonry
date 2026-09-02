@@ -92,10 +92,10 @@ import {
   getApiV1ProjectsByNameSchedulesOptions,
   getApiV1ProjectsByNameMeasurementReportOptions,
   getApiV1ProjectsByNameMeasurementSetupOptions,
+  getApiV1ProjectsByNameMeasurementSetupQueryKey,
   getApiV1ProjectsByNameQueriesOptions,
   getApiV1ProjectsQueryKey,
   getApiV1ProjectsByNameQueryKey,
-  getApiV1SettingsOptions,
 } from '@ainyc/canonry-api-client/react-query'
 import { useAppendQueries, useTriggerRun } from '../queries/mutations.js'
 import { GSC_STALE_MS } from '../queries/query-client.js'
@@ -1559,31 +1559,28 @@ function ProjectPageContent({
 }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const { canWrite, isAdmin } = useAccount()
+  const { canWrite } = useAccount()
   const initialDashboard = useInitialDashboard()
+  const projectName = model.project.name
+  const measurementSetupQuery = useQuery({
+    ...getApiV1ProjectsByNameMeasurementSetupOptions({ client: heyClient, path: { name: projectName } }),
+    // Readiness drives the page-header sweep control on every project tab.
+    // Viewers still need setup state on the three result/configuration tabs
+    // that render Advanced Measurement.
+    enabled: !isEmbed()
+      && Boolean(projectName)
+      && (canWrite || requestedTab === 'portfolio' || requestedTab === 'overview' || requestedTab === 'settings'),
+    staleTime: 0,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: 'always',
+  })
   const initialConfiguredApiProviders = initialDashboard
     ? initialDashboard.dashboard.settings.providerStatuses
       .filter(provider => provider.state === 'ready')
       .map(provider => normalizeProviderName(provider.name))
     : undefined
-  const providerSettingsQuery = useQuery({
-    ...getApiV1SettingsOptions({ client: heyClient }),
-    enabled: !isEmbed() && canWrite && initialConfiguredApiProviders === undefined,
-    staleTime: 60_000,
-    retry: false,
-  })
+  const serverProviderReady = measurementSetupQuery.data?.answerVisibilityProviderReady
   const configuredApiProviders = initialConfiguredApiProviders
-    ?? (providerSettingsQuery.isSuccess
-      ? providerSettingsQuery.data.providers
-        .filter(provider => provider.configured)
-        .map(provider => normalizeProviderName(provider.name))
-      // GET /settings is admin-only. For a non-admin writer a failure is a
-      // statement about THIS principal's permission, not about whether any
-      // provider is configured, so it must read as UNKNOWN rather than as
-      // "none". Coercing it to [] told such a writer AI Visibility was
-      // unconfigured and sent them to a settings page that refuses them, with
-      // no way left to run a sweep.
-      : providerSettingsQuery.isError ? (isAdmin ? [] : undefined) : undefined)
   const projectProviders = model.project.providers.map(normalizeProviderName)
   const selectedApiProviderReady = configuredApiProviders?.some(provider => (
     projectProviders.length === 0 || projectProviders.includes(provider)
@@ -1591,7 +1588,14 @@ function ProjectPageContent({
   const selectionCanUseCdp = projectProviders.length === 0 || projectProviders.includes(CDP_PROVIDER_NAME)
   const cdpStatusQuery = useQuery({
     ...getApiV1CdpStatusOptions({ client: heyClient }),
-    enabled: !isEmbed() && canWrite && selectionCanUseCdp && !selectedApiProviderReady,
+    // The setup response owns live readiness. The direct CDP read remains only
+    // as a first-paint fallback while a fixture or cold request has no setup
+    // response yet.
+    enabled: !isEmbed()
+      && canWrite
+      && serverProviderReady === undefined
+      && selectionCanUseCdp
+      && !selectedApiProviderReady,
     staleTime: 60_000,
     retry: false,
   })
@@ -1603,7 +1607,7 @@ function ProjectPageContent({
     : cdpStatusQuery.isSuccess
       ? typeof cdpStatusQuery.data.browserVersion === 'string'
       : cdpStatusQuery.isError ? false : undefined
-  const providerReady = resolveAiVisibilityProviderReadiness({
+  const providerReady = serverProviderReady ?? resolveAiVisibilityProviderReadiness({
     projectProviders,
     configuredApiProviders,
     cdpConfigured,
@@ -1682,7 +1686,6 @@ function ProjectPageContent({
   const [hasExpandedAdvancedProperty, setHasExpandedAdvancedProperty] = useState(false)
 
   const visibilityEvidence = model?.visibilityEvidence ?? []
-  const projectName = model?.project.name ?? ''
   const projectLabel = model?.project.displayName || model?.project.name || projectName
   const triggerRunMutation = useTriggerRun()
   const portfolioQueriesQuery = useQuery({
@@ -1696,12 +1699,6 @@ function ProjectPageContent({
     enabled: !isEmbed()
       && Boolean(projectName)
       && (canWrite || tab === 'portfolio' || tab === 'overview' || tab === 'settings'),
-    staleTime: 0,
-    refetchOnMount: 'always',
-  })
-  const measurementSetupQuery = useQuery({
-    ...getApiV1ProjectsByNameMeasurementSetupOptions({ client: heyClient, path: { name: projectName } }),
-    enabled: !isEmbed() && (tab === 'portfolio' || tab === 'overview' || tab === 'settings') && Boolean(projectName),
     staleTime: 0,
     refetchOnMount: 'always',
   })
@@ -1934,8 +1931,14 @@ function ProjectPageContent({
     && !hasTrackedQueries
     && activeMeasurementPlanQuery.data === undefined
     && activeMeasurementPlanQuery.isPending
+  const providerReadinessFailed = canWrite
+    && measurementSetupQuery.isError
+    && !measurementSetupQuery.isFetching
   const sweepReadinessPending = canWrite
-    && (visibilityInputsPending || providerReady === undefined)
+    && !providerReadinessFailed
+    && (visibilityInputsPending
+      || providerReady === undefined
+      || measurementSetupQuery.isFetching)
   const sweepPrerequisitesReady = !sweepReadinessPending
     && hasVisibilityInputs
     && providerReady === true
@@ -2179,6 +2182,18 @@ function ProjectPageContent({
     queryClient.setQueryData(getApiV1ProjectsByNameQueryKey({ client: heyClient, path: { name: pName } }), updated)
     // Scoped to the edited project's own cache entries — see the helper.
     patchProjectDashboardCache(queryClient, updated)
+    if (updates.providers !== undefined) {
+      // Provider readiness is computed by the server from the project's exact
+      // allowlist. Refresh that authority before the save completes so the
+      // page-header sweep action cannot keep the previous allowlist's state.
+      await queryClient.invalidateQueries({
+        queryKey: getApiV1ProjectsByNameMeasurementSetupQueryKey({
+          client: heyClient,
+          path: { name: pName },
+        }),
+        exact: true,
+      })
+    }
     return updated
   }
 
@@ -2263,7 +2278,11 @@ function ProjectPageContent({
                 type="button"
                 variant="outline"
                 disabled={triggerRunMutation.isPending || hasActiveVisibilitySweep || sweepReadinessPending}
-                onClick={sweepSetupRequired ? openAiVisibilitySetup : asyncHandler(handleTriggerRun)}
+                onClick={providerReadinessFailed
+                  ? () => { void measurementSetupQuery.refetch() }
+                  : sweepSetupRequired
+                    ? openAiVisibilitySetup
+                    : asyncHandler(handleTriggerRun)}
               >
                 {triggerRunMutation.isPending
                   ? 'Starting…'
@@ -2271,6 +2290,8 @@ function ProjectPageContent({
                     ? 'AI sweep running…'
                     : sweepReadinessPending
                       ? 'Checking AI readiness…'
+                      : providerReadinessFailed
+                        ? 'Retry AI readiness'
                       : sweepSetupRequired
                         ? 'Set up AI Visibility'
                         : 'Run AI sweep'}

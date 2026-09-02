@@ -251,6 +251,52 @@ describe('AuthGate', () => {
       expect(await screen.findByRole('heading', { name: 'Portfolio' })).toBeTruthy()
     })
 
+    test('keeps a restored session locked when its API-key access cannot be verified', async () => {
+      mockFetch((url) => {
+        const urlStr = String(url)
+        if (urlStr.includes(API_SESSION)) return jsonResponse({ authenticated: true })
+        if (urlStr.includes('/api/v1/keys/self')) {
+          return jsonResponse({
+            error: { code: 'INTERNAL_ERROR', message: 'API-key metadata is temporarily unavailable.' },
+          }, 503)
+        }
+        return dashboardFallback(urlStr)
+      })
+
+      render(<AuthGate />)
+
+      expect(await screen.findByRole('heading', { name: 'Could not verify API key access' })).toBeTruthy()
+      expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy()
+      expect(screen.queryByRole('heading', { name: 'Portfolio' })).toBeNull()
+    })
+
+    test('clears a restored session whose bound API key is no longer valid', async () => {
+      const sessionMethods: string[] = []
+      mockFetch((url, init) => {
+        const urlStr = String(url)
+        if (urlStr.includes('/api/v1/keys/self')) {
+          return jsonResponse({
+            error: { code: 'AUTH_REQUIRED', message: 'Authentication required' },
+          }, 401)
+        }
+        if (urlStr.includes(API_SESSION)) {
+          const method = init?.method ?? 'GET'
+          sessionMethods.push(method)
+          if (method === 'DELETE') return new Response(null, { status: 204 })
+          return jsonResponse({ authenticated: true })
+        }
+        return dashboardFallback(urlStr)
+      })
+
+      render(<AuthGate />)
+
+      expect(await screen.findByRole('heading', { name: 'Sign in to Canonry' })).toBeTruthy()
+      expect(screen.getByText(/Your session expired/i)).toBeTruthy()
+      expect(screen.queryByRole('heading', { name: 'Could not verify API key access' })).toBeNull()
+      expect(screen.queryByRole('heading', { name: 'Portfolio' })).toBeNull()
+      expect(sessionMethods).toContain('DELETE')
+    })
+
     test('shows connecting state while session check is pending', async () => {
       let resolveSession: (value: Response) => void
       mockFetch((url) => {
