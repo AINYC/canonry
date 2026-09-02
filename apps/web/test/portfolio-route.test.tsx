@@ -55,6 +55,7 @@ async function renderAt(
     schedule?: unknown
     seedPlan?: boolean
     apiKey?: { id: string; scopes: string[]; projectId: string | null; readOnly: boolean }
+    queries?: Array<{ id: string; query: string; createdAt: string }>
     settleReadiness?: boolean
     readiness?: boolean
     configureFixture?: (dashboard: ReturnType<typeof createDashboardFixture>['dashboard']) => void
@@ -75,7 +76,7 @@ async function renderAt(
   }
   queryClient.setQueryData(
     getApiV1ProjectsByNameQueriesQueryKey({ client: heyClient, path: { name: projectName } }),
-    [],
+    options.queries ?? [],
   )
   if (options.schedule !== undefined) {
     queryClient.setQueryData(
@@ -851,6 +852,35 @@ function schedule(overrides: Record<string, unknown> = {}) {
   }
 }
 
+function forceNoisyFreshVisibility(dashboard: ReturnType<typeof createDashboardFixture>['dashboard']) {
+  const project = dashboard.projects.find(entry => entry.project.id === 'project_citypoint')!
+  const emptyMentionBreakdown = {
+    projectMentionSnapshots: 0,
+    competitorMentionSnapshots: 0,
+    perCompetitor: [],
+    snapshotsWithAnswerText: 0,
+    snapshotsTotal: 0,
+    score: null,
+  }
+
+  project.visibilityEvidence = []
+  project.queryCounts = { cited: 0, total: 0 }
+  project.recentRuns = []
+  project.mentionSummary.value = 'No data'
+  project.mentionSummary.delta = 'Run a sweep first'
+  project.visibilitySummary.value = 'No data'
+  project.visibilitySummary.delta = 'Run a sweep first'
+  project.mentionShareSummary.value = 'No data'
+  project.mentionShareSummary.delta = 'Run a sweep first'
+  project.mentionShareSummary.breakdown = { ...emptyMentionBreakdown }
+  project.mentionShareSummary.branded = { ...emptyMentionBreakdown }
+  project.mentionGaps.value = 'No data'
+  project.mentionGaps.delta = 'Run a sweep first'
+  project.gapQueries.value = 'No data'
+  project.gapQueries.delta = 'Run a sweep first'
+  dashboard.runs = []
+}
+
 // On a managed instance the sweep is scheduled, so the header states when the
 // next one fires and the manual trigger beside it is the override. The button
 // is deliberately secondary: as the primary it told every reader that running
@@ -880,12 +910,9 @@ test('a DISABLED schedule promises no next sweep, even though the row still carr
 test('a fresh project offers one AI Visibility setup action instead of an unready sweep', async () => {
   const html = await renderAt('/projects/project_citypoint', undefined, undefined, {
     configureFixture(dashboard) {
+      forceNoisyFreshVisibility(dashboard)
       const project = dashboard.projects.find(entry => entry.project.id === 'project_citypoint')!
-      project.visibilityEvidence = []
-      project.queryCounts = { cited: 0, total: 0 }
-      project.recentRuns = []
       project.project.providers = ['gemini']
-      dashboard.runs = []
       dashboard.settings.providerStatuses = []
     },
     settleReadiness: true,
@@ -894,9 +921,69 @@ test('a fresh project offers one AI Visibility setup action instead of an unread
 
   expect(html).toContain('Set up AI Visibility')
   expect(html).toContain('No AI Visibility baseline yet')
-  expect(html).toContain('No completed sweep')
+  expect(html).toContain('Coverage signals')
+  expect(html).toContain('Your brand or domain appears in the answer text.')
+  expect(html).toContain('Your domain appears in the engine')
+  expect(html).toContain('Complete your first AI Visibility sweep to measure both signals.')
+  expect(html).toContain('Where competitors are winning')
+  expect(html).toContain('+ Add competitor')
+  expect(html).toContain('Competitive mention and citation gaps appear after the first AI Visibility sweep.')
+  expect(html).not.toContain('No completed sweep')
+  expect(html.match(/No data/g) ?? []).toHaveLength(0)
+  expect(html.match(/Run a sweep first/g) ?? []).toHaveLength(0)
+  expect(html).not.toContain('No comparison yet')
+  expect(html).not.toContain('Run another sweep')
   expect(html).not.toContain('Baseline captured')
   expect(html).not.toContain('Run AI sweep')
+})
+
+test('a first sweep in flight replaces empty-state instructions with one live status', async () => {
+  const html = await renderAt('/projects/project_citypoint', undefined, undefined, {
+    configureFixture(dashboard) {
+      const project = dashboard.projects.find(entry => entry.project.id === 'project_citypoint')!
+      const queuedProjectRun = project.recentRuns.find(run => run.status === 'queued')!
+      const queuedDashboardRun = dashboard.runs.find(run => run.status === 'queued')!
+      forceNoisyFreshVisibility(dashboard)
+      const freshProject = dashboard.projects.find(entry => entry.project.id === 'project_citypoint')!
+      freshProject.recentRuns = [queuedProjectRun]
+      dashboard.runs = [queuedDashboardRun]
+    },
+    settleReadiness: true,
+    readiness: true,
+  })
+
+  expect(html).toContain('A fresh sweep is running now')
+  expect(html).toContain('Queued')
+  expect(html).not.toContain('No AI Visibility baseline yet')
+  expect(html.match(/Your first sweep is running\. Results will appear when it completes\./g)).toHaveLength(1)
+  expect(html.match(/Competitive mention and citation gaps appear after the first AI Visibility sweep\./g)).toHaveLength(1)
+  expect(html.match(/No data/g) ?? []).toHaveLength(0)
+  expect(html.match(/Run a sweep first/g) ?? []).toHaveLength(0)
+  expect(html).not.toContain('Complete your first AI Visibility sweep')
+  expect(html).not.toContain('No comparison yet')
+})
+
+test('a baseline remains visible when five newer failed runs fill the recent-run slice', async () => {
+  const html = await renderAt('/projects/project_citypoint', undefined, undefined, {
+    configureFixture(dashboard) {
+      const project = dashboard.projects.find(entry => entry.project.id === 'project_citypoint')!
+      const failedRun = project.recentRuns.find(run => run.kind === 'answer-visibility')!
+      project.recentRuns = Array.from({ length: 5 }, (_, index) => ({
+        ...failedRun,
+        id: `failed-recent-${index}`,
+        status: 'failed' as const,
+        createdAt: `2026-09-0${index + 1}T12:00:00.000Z`,
+      }))
+    },
+  })
+
+  expect(html).toContain('Coverage now')
+  expect(html).toContain('Mention share')
+  expect(html).toContain('Mention gaps')
+  expect(html).toContain('Citation gaps')
+  expect(html).not.toContain('No AI Visibility baseline yet')
+  expect(html).not.toContain('Complete your first AI Visibility sweep')
+  expect(html).not.toContain('Competitive mention and citation gaps appear after the first AI Visibility sweep.')
 })
 
 test('fresh project settings use the empty collection instead of a noisy schedule 404', async () => {
@@ -957,9 +1044,34 @@ test('a query-ready project with a configured provider can run an AI sweep', asy
   const html = await renderAt('/projects/project_citypoint', undefined, undefined, {
     configureFixture(dashboard) {
       const project = dashboard.projects.find(entry => entry.project.id === 'project_citypoint')!
-      project.recentRuns = []
-      dashboard.runs = []
+      const pendingEvidence = {
+        ...project.visibilityEvidence[0]!,
+        id: 'evidence-query-ready',
+        query: 'emergency dentist brooklyn',
+        provider: '',
+        model: null,
+        location: null,
+        citationState: 'pending' as const,
+        visibilityState: 'pending' as const,
+        visibilityChangeLabel: 'Awaiting first run',
+        changeLabel: 'Awaiting first run',
+        answerSnippet: '',
+        citedDomains: [],
+        evidenceUrls: [],
+        competitorDomains: [],
+        groundingSources: [],
+        relatedTechnicalSignals: [],
+        summary: 'This query has not been measured yet.',
+        runHistory: [],
+      }
+      forceNoisyFreshVisibility(dashboard)
+      project.visibilityEvidence = [pendingEvidence]
     },
+    queries: [{
+      id: 'query-ready',
+      query: 'emergency dentist brooklyn',
+      createdAt: '2026-09-01T12:00:00.000Z',
+    }],
     settleReadiness: true,
     readiness: true,
   })

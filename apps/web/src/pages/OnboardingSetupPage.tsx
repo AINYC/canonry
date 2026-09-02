@@ -819,6 +819,7 @@ function PlatformSetupPageBody({
           to: '/setup',
           search: {
             experience: 'legacy',
+            onboarding: 'first-run',
             setupProject: project.name,
           },
           replace: true,
@@ -962,7 +963,7 @@ function PlatformSetupPageBody({
                 Only public pages are scanned.{' '}
                 <Link
                   to="/setup"
-                  search={{ experience: 'platform', siteScan: 'skip' }}
+                  search={{ experience: 'platform', onboarding: 'first-run', siteScan: 'skip' }}
                   className="font-medium text-link underline-offset-4 hover:underline"
                 >
                   Set up without a site scan

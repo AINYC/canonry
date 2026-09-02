@@ -432,6 +432,12 @@ export function RootLayout() {
   const isEmptySetup = isSetupRoute
     && safeDashboard !== null
     && safeDashboard.portfolioOverview.projects.length === 0
+  // First-run handoffs keep this marker in the URL. It is authoritative after
+  // project creation and on a cold reload, when the now-nonempty project list
+  // no longer identifies the visit as first-run setup. Ordinary project-scoped
+  // setup has no marker and retains the operator shell.
+  const isExplicitFirstRunSetup = isSetupRoute
+    && (location.search.onboarding === 'site-health' || location.search.onboarding === 'first-run')
   const [firstRunSetupLatched, setFirstRunSetupLatched] = useState(isEmptySetup)
   useEffect(() => {
     if (!isSetupRoute) {
@@ -445,7 +451,7 @@ export function RootLayout() {
   // so an unavailable install-state read cannot expose operator navigation.
   const isSetupReadinessUnknown = isSetupRoute && safeDashboard === null
   const isFocusedSetup = isSetupRoute
-    && (isEmptySetup || firstRunSetupLatched || isSetupReadinessUnknown)
+    && (isExplicitFirstRunSetup || isEmptySetup || firstRunSetupLatched || isSetupReadinessUnknown)
   const shellModifier = isFocusedSetup
     ? 'app-shell-focus'
     : sidebarHidden

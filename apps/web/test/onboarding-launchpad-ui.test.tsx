@@ -348,6 +348,7 @@ test('creates without a crawl and enters provider-free query setup for the exact
     expect(router.state.location.pathname).toBe('/setup')
     expect(router.state.location.search).toMatchObject({
       experience: 'platform',
+      onboarding: 'first-run',
       siteScan: 'skip',
     })
   })
@@ -364,6 +365,7 @@ test('creates without a crawl and enters provider-free query setup for the exact
   expect(screen.queryByRole('heading', { name: 'System check' })).toBeNull()
   expect(router.state.location.search).toMatchObject({
     experience: 'legacy',
+    onboarding: 'first-run',
     setupProject: 'example-com',
   })
   expect(router.state.location.search).not.toHaveProperty('siteScan')

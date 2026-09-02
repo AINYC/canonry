@@ -1102,9 +1102,11 @@ function OverviewMetricRow({
 function OverviewBrief({
   model,
   sweepRunning,
+  hasVisibilityBaseline,
 }: {
   model: ProjectCommandCenterVm
   sweepRunning: boolean
+  hasVisibilityBaseline: boolean
 }) {
   const citationMovement = model.citationMovement
   const mentionMovement = model.mentionMovement
@@ -1113,7 +1115,6 @@ function OverviewBrief({
     run.kind === RunKinds['answer-visibility']
     && (run.status === RunStatuses.completed || run.status === RunStatuses.partial),
   )
-  const hasVisibilityBaseline = Boolean(latestBaselineSweep) && model.queryCounts.total > 0
 
   const movementDirection = (movement: ProjectCommandCenterVm['mentionMovement']) => {
     if (movement.tone === 'positive') return 'improved'
@@ -1163,65 +1164,88 @@ function OverviewBrief({
           </p>
           <h2 id="overview-brief-title" className="overview-brief-title">{headline}</h2>
         </div>
-        <p className="overview-brief-updated">
-          {latestBaselineSweep ? `Updated ${latestBaselineSweep.startedAt}` : 'No completed sweep'}
-        </p>
+        {latestBaselineSweep ? (
+          <p className="overview-brief-updated">Updated {latestBaselineSweep.startedAt}</p>
+        ) : null}
       </div>
 
-      <div className="overview-brief-grid">
-        <div className="overview-brief-panel overview-brief-coverage">
-          <p className="overview-brief-label">Coverage now</p>
-          <div className="aeo-hero-rows">
-            <OverviewMetricRow label="Mentioned" summary={model.mentionSummary} />
-            <OverviewMetricRow label="Cited" summary={model.visibilitySummary} />
-          </div>
-          {model.mentionSummary.providerCoverage && (
-            <p className="overview-brief-note">Partial sweep: {model.mentionSummary.providerCoverage}</p>
-          )}
-        </div>
-
-        <div className="overview-brief-panel">
-          <p className="overview-brief-label">Since last sweep</p>
-          {!comparison.hasPreviousRun ? (
-            <>
-              <p className="overview-brief-panel-title">No comparison yet</p>
-              <p className="overview-brief-panel-copy">Run another sweep to measure mention and citation movement.</p>
-            </>
-          ) : (
-            <>
-              <div className="overview-signal-change-list">
-                <div className="overview-signal-change-row">
-                  <span className="overview-signal-change-label">Mentioned</span>
-                  {mentionMovement.gained === 0 && mentionMovement.lost === 0 ? (
-                    <span className="text-secondary">No change</span>
-                  ) : (
-                    <span className="flex gap-3 tabular-nums">
-                      {mentionMovement.gained > 0 && <span className="text-positive-400">+{mentionMovement.gained}</span>}
-                      {mentionMovement.lost > 0 && <span className="text-negative-400">-{mentionMovement.lost}</span>}
-                    </span>
-                  )}
-                </div>
-                <div className="overview-signal-change-row">
-                  <span className="overview-signal-change-label">Cited</span>
-                  {citationMovement.gained === 0 && citationMovement.lost === 0 ? (
-                    <span className="text-secondary">No change</span>
-                  ) : (
-                    <span className="flex gap-3 tabular-nums">
-                      {citationMovement.gained > 0 && <span className="text-positive-400">+{citationMovement.gained}</span>}
-                      {citationMovement.lost > 0 && <span className="text-negative-400">-{citationMovement.lost}</span>}
-                    </span>
-                  )}
-                </div>
+      {!hasVisibilityBaseline ? (
+        <div className="overview-brief-grid">
+          <div className="overview-brief-panel">
+            <p className="overview-brief-label">Coverage signals</p>
+            <dl className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <dt className="text-sm font-medium text-heading">Mentioned</dt>
+                <dd className="mt-1 text-sm text-secondary">Your brand or domain appears in the answer text.</dd>
               </div>
-              <p className={`overview-brief-panel-copy ${comparison.querySetChanged ? 'text-caution-400/80' : ''}`}>
-                {comparison.querySetChanged
-                  ? `${scopeChange || 'Query set changed'} · ${comparableScope}.`
-                  : `${comparableScope}.`}
-              </p>
-            </>
-          )}
+              <div>
+                <dt className="text-sm font-medium text-heading">Cited</dt>
+                <dd className="mt-1 text-sm text-secondary">Your domain appears in the engine's source list.</dd>
+              </div>
+            </dl>
+            <p className="mt-4 border-t border-subtle pt-4 text-sm font-medium text-strong">
+              {sweepRunning
+                ? 'Your first sweep is running. Results will appear when it completes.'
+                : 'Complete your first AI Visibility sweep to measure both signals.'}
+            </p>
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="overview-brief-grid">
+          <div className="overview-brief-panel overview-brief-coverage">
+            <p className="overview-brief-label">Coverage now</p>
+            <div className="aeo-hero-rows">
+              <OverviewMetricRow label="Mentioned" summary={model.mentionSummary} />
+              <OverviewMetricRow label="Cited" summary={model.visibilitySummary} />
+            </div>
+            {model.mentionSummary.providerCoverage && (
+              <p className="overview-brief-note">Partial sweep: {model.mentionSummary.providerCoverage}</p>
+            )}
+          </div>
+
+          <div className="overview-brief-panel">
+            <p className="overview-brief-label">Since last sweep</p>
+            {!comparison.hasPreviousRun ? (
+              <>
+                <p className="overview-brief-panel-title">No comparison yet</p>
+                <p className="overview-brief-panel-copy">Run another sweep to measure mention and citation movement.</p>
+              </>
+            ) : (
+              <>
+                <div className="overview-signal-change-list">
+                  <div className="overview-signal-change-row">
+                    <span className="overview-signal-change-label">Mentioned</span>
+                    {mentionMovement.gained === 0 && mentionMovement.lost === 0 ? (
+                      <span className="text-secondary">No change</span>
+                    ) : (
+                      <span className="flex gap-3 tabular-nums">
+                        {mentionMovement.gained > 0 && <span className="text-positive-400">+{mentionMovement.gained}</span>}
+                        {mentionMovement.lost > 0 && <span className="text-negative-400">-{mentionMovement.lost}</span>}
+                      </span>
+                    )}
+                  </div>
+                  <div className="overview-signal-change-row">
+                    <span className="overview-signal-change-label">Cited</span>
+                    {citationMovement.gained === 0 && citationMovement.lost === 0 ? (
+                      <span className="text-secondary">No change</span>
+                    ) : (
+                      <span className="flex gap-3 tabular-nums">
+                        {citationMovement.gained > 0 && <span className="text-positive-400">+{citationMovement.gained}</span>}
+                        {citationMovement.lost > 0 && <span className="text-negative-400">-{citationMovement.lost}</span>}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <p className={`overview-brief-panel-copy ${comparison.querySetChanged ? 'text-caution-400/80' : ''}`}>
+                  {comparison.querySetChanged
+                    ? `${scopeChange || 'Query set changed'} · ${comparableScope}.`
+                    : `${comparableScope}.`}
+                </p>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </section>
   )
 }
@@ -1903,6 +1927,11 @@ function ProjectPageContent({
   const hasActiveVisibilitySweep = (model?.recentRuns ?? []).some(
     r => r.kind === RunKinds['answer-visibility'] && (r.status === RunStatuses.running || r.status === RunStatuses.queued),
   )
+  // `queryCounts` is derived from the authoritative latest completed/partial
+  // visibility-run snapshot group. `recentRuns` is only a five-row
+  // presentation slice and can contain five newer failures while a valid
+  // baseline still exists.
+  const hasVisibilityBaseline = model.queryCounts.total > 0
 
   // Show every configured location as a filter chip, regardless of whether the
   // current evidence aggregate has rows for it. Multi-location sweeps can land
@@ -2405,6 +2434,7 @@ function ProjectPageContent({
           <OverviewBrief
             model={model}
             sweepRunning={hasActiveVisibilitySweep}
+            hasVisibilityBaseline={hasVisibilityBaseline}
           />
 
           <OverviewSignals
@@ -2429,31 +2459,37 @@ function ProjectPageContent({
               </div>
             </div>
 
-            <div className="aeo-hero competitive-summary">
-              <MentionShare
-                key={model.project.name}
-                summary={model.mentionShareSummary}
-                projectLabel={model.project.displayName || model.project.name}
-                competitorDomains={competitorDomains}
-              />
+            {hasVisibilityBaseline ? (
+              <div className="aeo-hero competitive-summary">
+                <MentionShare
+                  key={model.project.name}
+                  summary={model.mentionShareSummary}
+                  projectLabel={model.project.displayName || model.project.name}
+                  competitorDomains={competitorDomains}
+                />
 
-              <div className="competitive-gaps">
-                <div className="aeo-hero-rows">
-                  <OverviewMetricRow
-                    label="Mention gaps"
-                    summary={model.mentionGaps}
-                    displayValue={<><span className="text-primary">{model.mentionGaps.value}</span><span className="text-faint"> / {model.queryCounts.total}</span></>}
-                    tooltip="Queries where a competitor was mentioned in the answer but your brand was not."
-                  />
-                  <OverviewMetricRow
-                    label="Citation gaps"
-                    summary={model.gapQueries}
-                    displayValue={<><span className="text-primary">{model.gapQueries.value}</span><span className="text-faint"> / {model.queryCounts.total}</span></>}
-                    tooltip="Queries where a competitor was cited as a source but you were not."
-                  />
+                <div className="competitive-gaps">
+                  <div className="aeo-hero-rows">
+                    <OverviewMetricRow
+                      label="Mention gaps"
+                      summary={model.mentionGaps}
+                      displayValue={<><span className="text-primary">{model.mentionGaps.value}</span><span className="text-faint"> / {model.queryCounts.total}</span></>}
+                      tooltip="Queries where a competitor was mentioned in the answer but your brand was not."
+                    />
+                    <OverviewMetricRow
+                      label="Citation gaps"
+                      summary={model.gapQueries}
+                      displayValue={<><span className="text-primary">{model.gapQueries.value}</span><span className="text-faint"> / {model.queryCounts.total}</span></>}
+                      tooltip="Queries where a competitor was cited as a source but you were not."
+                    />
+                  </div>
                 </div>
               </div>
-            </div>
+            ) : (
+              <p className="text-sm text-secondary">
+                Competitive mention and citation gaps appear after the first AI Visibility sweep.
+              </p>
+            )}
 
             {addingCompetitor && (
               <div className="mt-4 mb-3 flex gap-2 rounded-lg border border-base bg-bg-elevated/40 p-3">

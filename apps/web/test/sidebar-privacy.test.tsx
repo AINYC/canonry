@@ -186,8 +186,53 @@ test('keeps the first-run shell focused after onboarding creates a project', asy
   expect(container.querySelector('.app-shell-focus')).not.toBeNull()
 })
 
+test('keeps a reloaded Site Health results handoff focused after project creation', async () => {
+  const { container, queryByRole } = await renderRoute(
+    '/setup?onboarding=site-health&setupProject=project_citypoint&siteHealthRunId=run_site_health',
+  )
+
+  expect(container.querySelector('.app-shell-focus')).not.toBeNull()
+  expect(container.querySelector('#desktop-sidebar')).toBeNull()
+  expect(container.querySelector('#mobile-nav')).toBeNull()
+  expect(queryByRole('button', { name: 'Open navigation' })).toBeNull()
+})
+
+test('keeps the focused AI Visibility handoff focused after project creation', async () => {
+  const { container, queryByRole } = await renderRoute(
+    '/setup?experience=legacy&onboarding=site-health&setupProject=project_citypoint',
+  )
+
+  expect(container.querySelector('.app-shell-focus')).not.toBeNull()
+  expect(container.querySelector('#desktop-sidebar')).toBeNull()
+  expect(container.querySelector('#mobile-nav')).toBeNull()
+  expect(queryByRole('button', { name: 'Open navigation' })).toBeNull()
+})
+
+test('keeps a reloaded no-scan first-run handoff focused after project creation', async () => {
+  const { container, queryByRole } = await renderRoute(
+    '/setup?experience=legacy&onboarding=first-run&setupProject=project_citypoint',
+  )
+
+  expect(container.querySelector('.app-shell-focus')).not.toBeNull()
+  expect(container.querySelector('#desktop-sidebar')).toBeNull()
+  expect(container.querySelector('#mobile-nav')).toBeNull()
+  expect(queryByRole('button', { name: 'Open navigation' })).toBeNull()
+})
+
 test('keeps navigation available when an existing operator opens setup', async () => {
   const { container, getByRole } = await renderRoute('/setup')
+
+  expect(container.querySelector('#desktop-sidebar')).not.toBeNull()
+  expect(getByRole('button', { name: 'Hide sidebar' })).toBeDefined()
+  expect(getByRole('button', { name: 'Open navigation' })).toBeDefined()
+  expect(container.querySelector('#mobile-nav')).not.toBeNull()
+  expect(container.querySelector('.app-shell-focus')).toBeNull()
+})
+
+test('keeps navigation available for ordinary project-scoped setup', async () => {
+  const { container, getByRole } = await renderRoute(
+    '/setup?experience=legacy&setupProject=project_citypoint',
+  )
 
   expect(container.querySelector('#desktop-sidebar')).not.toBeNull()
   expect(getByRole('button', { name: 'Hide sidebar' })).toBeDefined()
