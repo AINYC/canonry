@@ -15,9 +15,9 @@
 import { listSkillResources, readSkillResource } from './resources.ts'
 import {
   isAllowedOrigin,
+  jsonRpcError,
   JsonRpcErrorCodes,
   type JsonRpcResponse,
-  jsonRpcError,
   jsonRpcResult,
   type ParsedMcpRequest,
   parseMcpRequest,

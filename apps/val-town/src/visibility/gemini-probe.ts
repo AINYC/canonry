@@ -28,8 +28,20 @@ export const VAL_TOWN_GEMINI_VISIBILITY_LIMITS = {
   /** Reads the answers back to list the brands each one names. See mention-extract.ts. */
   maxExtractCalls: 1,
   plannerTimeoutMs: 10_000,
-  probeTimeoutMs: 10_000,
-  probeConcurrency: 2,
+  /**
+   * Per probe, not for the phase. Gemini answers with `googleSearch` grounding,
+   * which regularly runs past 10s: a real check timed out on ALL THREE probes
+   * and reported "The answer engine did not respond in time."
+   *
+   * The old 10s was not a judgement about Gemini, it was all the budget there
+   * was. Three probes at concurrency 2 run in TWO waves, so the phase cost
+   * `planner + 2 x probe + extraction` = 42s against a 45s ceiling. Running all
+   * three in one wave buys back a whole wave and pays for a realistic deadline.
+   * `probe-budget.test.ts` holds the arithmetic.
+   */
+  probeTimeoutMs: 20_000,
+  /** One wave: `maxProbeCalls` in flight at once, never a second round. */
+  probeConcurrency: 3,
 } as const
 
 /**

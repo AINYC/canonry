@@ -12,14 +12,23 @@ import {
   type VisibilityProbePort,
   type VisibilityReport,
 } from '../runtime/types.ts'
+import { safeProviderErrorMessage } from '../visibility/runtime.ts'
 
 /** Shared with admission so a new paid check holds capacity before quota spend. */
+/**
+ * Ceiling for one check's provider work. The visibility probe and the site
+ * crawl run under it in parallel, so this is the budget the probe phase's own
+ * planner + probes + extraction deadlines have to fit inside.
+ */
+export const PUBLIC_CHECK_WORK_BUDGET_MS = 45_000
+
 export const PUBLIC_CHECK_EXECUTION_LEASE_NAME = 'public-check-execution'
 export const PUBLIC_CHECK_EXECUTION_LEASE_MS = 55_000
 
 const SITE_HEALTH_TIMEOUT_ERROR = 'The Technical AEO sample timed out.'
 const SITE_HEALTH_NO_PUBLIC_PAGES_ERROR = 'No public pages could be audited in the Technical AEO sample.'
 const SITE_HEALTH_GENERIC_ERROR = 'The Technical AEO sample could not complete.'
+const VISIBILITY_GENERIC_ERROR = 'The AI Visibility sample could not complete.'
 
 // `SiteHealthSample.error` crosses from the crawler adapter into the public
 // durable record. These are the only strings emitted by the local runner that
@@ -116,7 +125,7 @@ export function createPublicCheckRunner(options: PublicCheckRunnerOptions): Publ
         }
         shouldReleaseExecutionLease = true
 
-        const signal = AbortSignal.timeout(45_000)
+        const signal = AbortSignal.timeout(PUBLIC_CHECK_WORK_BUDGET_MS)
         const [visibilityResult, siteHealthResult] = await Promise.allSettled([
           options.visibilityProbe
             ? options.visibilityProbe.probe({
@@ -280,13 +289,48 @@ function nullableClip(value: string | null, max: number): string | null {
   return value == null ? null : clip(value, max)
 }
 
+/**
+ * Why a whole PHASE could not run, as opposed to why one probe failed.
+ *
+ * The per-row reason was already preserved; this was not, so a visibility phase
+ * that threw before producing a single row reported "The AI Visibility sample
+ * could not complete." and nothing else. That is the same defect one level up:
+ * the reason exists at the throw site and is destroyed on the way out.
+ *
+ * A phase throw is a planning failure or a provider failure, and both arrive as
+ * an Error whose message the classifiers below already know how to reduce to a
+ * closed set. Anything they do not recognize still becomes the generic
+ * sentence, so an unbounded provider message can never reach the record.
+ */
+const PUBLIC_VISIBILITY_PHASE_ERRORS = new Map([
+  ['The provider rate-limited this request.', 'The answer engine rate-limited this check.'],
+  ['The provider was temporarily unavailable.', 'The answer engine was temporarily unavailable.'],
+  ['The provider credentials were rejected.', 'This check could not be authorized with the answer engine.'],
+  ['The provider request timed out.', 'The answer engine did not respond in time.'],
+])
+
+/** Exported for the test that pins every phase failure to a public sentence. */
+export function visibilityPhaseError(error: unknown): string {
+  if (isTimeout(error)) return 'The AI Visibility sample timed out.'
+  if (!(error instanceof Error)) return VISIBILITY_GENERIC_ERROR
+
+  const classified = PUBLIC_VISIBILITY_PHASE_ERRORS.get(safeProviderErrorMessage(error))
+  if (classified) return classified
+
+  // Planning failures are the val's own strings, not a provider body, and they
+  // are the difference between "the engine is down" and "we could not build a
+  // question set for this domain" — which is a fact about the DOMAIN.
+  if (/query planner/i.test(error.message)) {
+    return 'Questions could not be generated for this domain.'
+  }
+  return VISIBILITY_GENERIC_ERROR
+}
+
 function publicExecutionError(area: 'visibility' | 'site-health', error: unknown, notConfigured = false): string {
   if (area === 'visibility' && notConfigured) return 'The AI Visibility sample is not configured for this demo.'
   if (area === 'site-health' && typeof error === 'string' && SAFE_SITE_HEALTH_ERRORS.has(error)) return error
-  if (isTimeout(error)) {
-    return area === 'visibility' ? 'The AI Visibility sample timed out.' : SITE_HEALTH_TIMEOUT_ERROR
-  }
-  return area === 'visibility' ? 'The AI Visibility sample could not complete.' : SITE_HEALTH_GENERIC_ERROR
+  if (area === 'visibility') return visibilityPhaseError(error)
+  return isTimeout(error) ? SITE_HEALTH_TIMEOUT_ERROR : SITE_HEALTH_GENERIC_ERROR
 }
 
 function isTimeout(error: unknown): boolean {

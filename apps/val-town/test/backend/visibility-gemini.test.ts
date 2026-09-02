@@ -260,7 +260,7 @@ Deno.test('domain-only planning requests grounded unstructured JSON and returns 
   ])
 })
 
-Deno.test('the Val host fixes one planner, three probes, one extraction, two-way concurrency, ten-second deadlines, and zero retries', async () => {
+Deno.test('the Val host fixes one planner, three probes, one extraction, a single probe wave, and zero retries', async () => {
   const calls: unknown[] = []
   const client: GeminiContentClient = {
     models: {
@@ -313,8 +313,12 @@ Deno.test('the Val host fixes one planner, three probes, one extraction, two-way
     // the only way the mention basis can exist. See mention-extract.ts.
     maxExtractCalls: 1,
     plannerTimeoutMs: 10_000,
-    probeTimeoutMs: 10_000,
-    probeConcurrency: 2,
+    // 20s per probe, and concurrency 3 so all three run in ONE wave. At
+    // concurrency 2 the phase needed two waves and could spend 42s of the 45s
+    // job budget, which is why the deadline was pinned at 10s and a slow
+    // grounded answer failed every probe. See probe-budget.test.ts.
+    probeTimeoutMs: 20_000,
+    probeConcurrency: 3,
   })
   // One planner, three probes, one brand extraction. The first probe is a
   // retryable 429, so a SIXTH call would prove the public billing limits were

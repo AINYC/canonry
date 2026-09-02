@@ -215,7 +215,9 @@ export function parseMcpRequest(headers: Headers, body: unknown): McpRequestPars
 
   if (declared !== null && requiresHeaderValidation(protocolVersion)) {
     const mismatch = validateMirroredHeaders(headers, message.method, params)
-    if (mismatch) return { ok: false, status: 400, response: jsonRpcError(id, JsonRpcErrorCodes.headerMismatch, mismatch) }
+    if (mismatch) {
+      return { ok: false, status: 400, response: jsonRpcError(id, JsonRpcErrorCodes.headerMismatch, mismatch) }
+    }
   }
 
   return {

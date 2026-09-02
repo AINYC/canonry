@@ -12,7 +12,10 @@
   "fmt": {
     "lineWidth": 120,
     "singleQuote": true,
-    "semiColons": false
+    "semiColons": false,
+    "exclude": [
+      "src/mcp/skills/"
+    ]
   },
   "lint": {
     "rules": {

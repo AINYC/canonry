@@ -134,6 +134,31 @@ every engine release and the val would have sat on an old engine while Canonry m
 A new file importing the engine is picked up with no change to either, which is the point of scanning rather than
 listing.
 
+## The probe budget is arithmetic, not a guess
+
+Three deadlines in three files have to fit inside one ceiling: `plannerTimeoutMs` + probe waves x `probeTimeoutMs` +
+`MENTION_EXTRACT_LIMITS.timeoutMs` <= `PUBLIC_CHECK_WORK_BUDGET_MS`. Nothing but `probe-budget.test.ts` connects them.
+
+They last disagreed in a way that cost the product: three probes at concurrency 2 need TWO waves, so the phase's worst
+case was `10 + 2x10 + 12 = 42s` against a 45s ceiling. There was no room left to give a probe a realistic deadline, so
+`probeTimeoutMs` sat at 10s — and a grounded `googleSearch` answer regularly runs past that. A real check timed out on
+ALL THREE probes. The 10s was never a judgement about Gemini; it was all the budget there was.
+
+Running every probe in one wave (`probeConcurrency >= maxProbeCalls`) buys back a whole wave and pays for a 20s
+deadline. Measured after: 3 of 3 successful in 16s wall clock. Raising `maxProbeCalls` without raising concurrency
+silently reintroduces the second wave, so the test asserts one wave rather than asserting the numbers.
+
+## A phase that produced no rows still says why
+
+`publicProbeError` preserves why one PROBE failed. `visibilityPhaseError` preserves why the whole PHASE did — a
+planning failure or a provider failure thrown before any probe ran. Without it a check that threw early reported "The
+AI Visibility sample could not complete." and had no evidence rows to carry a reason either, so it was unexplainable
+from every surface.
+
+Provider failures route through the same `safeProviderErrorMessage` classifier the row path uses, so the two cannot
+describe one outage differently. Planning failures get their own sentence, because "questions could not be generated
+for this domain" is a fact about the DOMAIN and the difference between "try again" and "this will not work".
+
 ## A failed start must not look like a bounce
 
 `.form-busy` carries two different things: "Starting check…" and the reason a check failed. They used to be the same

@@ -1,5 +1,5 @@
 import { runVisibilityProbe } from '../../src/visibility/runner.ts'
-import { publicProbeError } from '../../src/jobs/public-check.ts'
+import { publicProbeError, visibilityPhaseError } from '../../src/jobs/public-check.ts'
 import type { VisibilityProviderAdapter, VisibilityProviderResponse } from '../../src/visibility/contracts.ts'
 
 function equal<T>(actual: T, expected: T, message = 'values differ'): void {
@@ -218,4 +218,49 @@ Deno.test('the banner states the reason when the failures agree on one', async (
   // sentence, which is the absence of one. Leading with it read as
   // "1 check unavailable. This answer-engine check was unavailable."
   equal(build([GENERIC]), 'Mention and citation rates use completed checks only.')
+})
+
+Deno.test('a phase that never produced a row still says why', () => {
+  // The per-ROW reason was preserved but the per-PHASE one was not, so a
+  // visibility phase that threw before a single probe ran reported only "The
+  // AI Visibility sample could not complete." — with no evidence rows to carry
+  // a reason either, that check was unexplainable from any surface.
+  const generic = 'The AI Visibility sample could not complete.'
+
+  // Provider failures arrive as thrown Errors and go through the same
+  // classifier the row path uses, so the two cannot describe one outage
+  // differently.
+  equal(
+    visibilityPhaseError(new Error('429 Too Many Requests for quota metric generate_requests')),
+    'The answer engine rate-limited this check.',
+  )
+  equal(
+    visibilityPhaseError(new Error('503 Service Unavailable')),
+    'The answer engine was temporarily unavailable.',
+  )
+  equal(
+    visibilityPhaseError(new Error('API key not valid. Please pass a valid API key.')),
+    'This check could not be authorized with the answer engine.',
+  )
+
+  // A planning failure is a fact about the DOMAIN, not about the engine, and
+  // the two are the difference between "try again" and "this will not work".
+  equal(
+    visibilityPhaseError(new Error('The query planner returned invalid JSON.')),
+    'Questions could not be generated for this domain.',
+  )
+  equal(
+    visibilityPhaseError(new Error('The query planner did not return 2 non-brand buyer queries.')),
+    'Questions could not be generated for this domain.',
+  )
+
+  // A deadline is its own state, distinct from a provider refusing.
+  equal(
+    visibilityPhaseError(Object.assign(new Error('signal timed out'), { name: 'TimeoutError' })),
+    'The AI Visibility sample timed out.',
+  )
+
+  // And the sanitizer still refuses to publish anything it does not recognize.
+  equal(visibilityPhaseError(new Error('x-request-id 8f21 POST https://internal/v1beta/models')), generic)
+  equal(visibilityPhaseError('a bare string, not an Error'), generic)
 })
