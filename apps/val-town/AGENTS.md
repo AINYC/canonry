@@ -590,9 +590,9 @@ different jobs.
 Both are served as fingerprinted assets rather than inlined. At 6 KB against a 5 KB page, inlining would more than
 double every response to draw a 20px glyph.
 
-The lockup is `product name | from [glyph] Canonry`. The glyph sits against the name it marks rather than against the
-connective, so the two read as one unit; `from` is a step down in size and weight so the attribution does not read as
-one flat four-word phrase; and the byline carries no underline, because it is an identity rather than a link in prose.
+The lockup is `product name | powered by [glyph] Canonry`. The glyph sits against the name it marks rather than against
+the connective, so the two read as one unit; `powered by` is a step down in size and weight so the attribution does not
+read as one flat phrase; and the byline carries no underline, because it is an identity rather than a link in prose.
 The separator is a 1px hairline between two lockups of equal standing, not an accent stripe on one of them.
 
 The cream `#FFFAED` is the brand's own, and against zinc it is the one warm thing on the page. That is deliberate: it

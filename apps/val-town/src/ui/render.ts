@@ -762,7 +762,7 @@ function renderMain(model: CanonryDemoViewModel): string {
     return `
     <main class="canonry-demo" data-ui-status="empty">
       <header class="app-header is-bare">
-        <div class="brand-lockup"><a href="/" class="wordmark" aria-label="AI Visibility Check home">ai visibility check</a><span class="lockup-rule" aria-hidden="true"></span><a class="byline" href="https://canonry.ai" rel="noreferrer" target="_blank"><span class="byline-lead">from</span><img class="canonry-glyph" src="${glyphHref}" alt="" width="19" height="21" /><span class="byline-name">Canonry</span></a></div>
+        <div class="brand-lockup"><a href="/" class="wordmark" aria-label="AI Visibility Check home">ai visibility check</a><span class="lockup-rule" aria-hidden="true"></span><a class="byline" href="https://canonry.ai" rel="noreferrer" target="_blank"><span class="byline-lead">powered by</span><img class="canonry-glyph" src="${glyphHref}" alt="" width="19" height="21" /><span class="byline-name">Canonry</span></a></div>
       </header>
       <section class="landing-hero">
         <div data-hero>
@@ -777,7 +777,7 @@ function renderMain(model: CanonryDemoViewModel): string {
   return `
     <main class="canonry-demo" data-ui-status="${escapeAttr(model.status)}">
       <header class="app-header">
-        <div class="brand-lockup"><a href="/" class="wordmark" aria-label="AI Visibility Check home">ai visibility check</a><span class="lockup-rule" aria-hidden="true"></span><a class="byline" href="https://canonry.ai" rel="noreferrer" target="_blank"><span class="byline-lead">from</span><img class="canonry-glyph" src="${glyphHref}" alt="" width="19" height="21" /><span class="byline-name">Canonry</span></a></div>
+        <div class="brand-lockup"><a href="/" class="wordmark" aria-label="AI Visibility Check home">ai visibility check</a><span class="lockup-rule" aria-hidden="true"></span><a class="byline" href="https://canonry.ai" rel="noreferrer" target="_blank"><span class="byline-lead">powered by</span><img class="canonry-glyph" src="${glyphHref}" alt="" width="19" height="21" /><span class="byline-name">Canonry</span></a></div>
         ${renderCheckForm(model)}
       </header>
       <section class="report-header" aria-labelledby="report-title">
