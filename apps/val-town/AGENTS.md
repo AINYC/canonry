@@ -134,6 +134,24 @@ every engine release and the val would have sat on an old engine while Canonry m
 A new file importing the engine is picked up with no change to either, which is the point of scanning rather than
 listing.
 
+## A bounded sample reaching its own ceiling is COMPLETE
+
+The crawler's `summary.complete` means "the crawler saw the whole site". This sample is designed never to do that:
+`maxPages` is 5. So `max-pages` fired on every real site, site health reported `partial`, that marked the whole record
+partial, and an amber "Partial result — Only completed checks are included below. Failed checks are shown separately."
+sat at the top of every single report, over runs where nothing had failed. A caution on 100% of results is not a
+caution; it is the first thing a reader sees and it says the product is broken.
+
+`isCompleteBoundedSample` keys off the termination reason instead. Every `max-*` reason names a limit configured in
+`VAL_TOWN_SITE_HEALTH_LIMITS`, so reaching one is the sample working. `root-host-redirect` — the only reason today
+that is not one of ours — stays partial, because it means the crawl never reached the host that was asked for. An
+empty sample is still an `error`: hitting a ceiling cannot upgrade one. The reason itself was always shown under
+"Sample scope" and still is; only the STATUS was wrong.
+
+**Drive the browser path, not just MCP.** This survived every test and every MCP check because `start_check` over MCP
+bypasses Turnstile, and the notice is rendered from the record status by the UI. It took one real submission through
+the form to see it.
+
 ## The probe budget is arithmetic, not a guess
 
 Three deadlines in three files have to fit inside one ceiling: `plannerTimeoutMs` + probe waves x `probeTimeoutMs` +
