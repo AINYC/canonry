@@ -6,6 +6,7 @@
  * group out of the module graph.
  */
 export * from './visibility.js'
+export * from './perception.js'
 export * from './security.js'
 export * from './storage.js'
 export * from './jobs.js'

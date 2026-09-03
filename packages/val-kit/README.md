@@ -28,6 +28,7 @@ import { runVisibilityProbe } from 'npm:@canonry/val-kit@0.1.0/visibility'
 | --- | --- |
 | `@canonry/val-kit` | Everything below, in one import |
 | `@canonry/val-kit/visibility` | Probe contracts, brand/citation matching, the evidence runner, share of voice, and the Gemini adapter |
+| `@canonry/val-kit/perception` | Branded query planning, verdict extraction with verbatim-evidence verification, source typing, and aggregation |
 | `@canonry/val-kit/security` | Public-domain normalization (the SSRF input boundary) and Turnstile human verification |
 | `@canonry/val-kit/storage` | `MemoryCheckStore` and `ValSqliteCheckStore` (over a `ValSqliteClient` the host supplies) |
 | `@canonry/val-kit/jobs` | Check record and store contracts, record identity and expiry, and the admission/lease machinery |

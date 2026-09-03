@@ -9,6 +9,7 @@ export default defineConfig({
   entry: {
     index: 'src/index.ts',
     visibility: 'src/visibility.ts',
+    perception: 'src/perception.ts',
     security: 'src/security.ts',
     storage: 'src/storage.ts',
     jobs: 'src/jobs.ts',

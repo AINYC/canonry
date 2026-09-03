@@ -20,7 +20,7 @@
  * metric still rests on exact matching; the call only supplies candidates.
  */
 import { namesWrittenIn } from './brand.js'
-import { extractAnswerText, type GeminiContentClient } from './gemini.js'
+import { extractAnswerText, type GeminiContentClient, stripCodeFence } from './gemini.js'
 import { cleanText, clipText, createDeadlineSignal, throwIfAborted, uniqueStable } from './runtime.js'
 
 /** Bounds on one extraction call. Every one of these is a cost or a blast radius. */
@@ -103,16 +103,6 @@ export function parseMentionExtractResponse(responseText: string, answerCount: n
     ).slice(0, MENTION_EXTRACT_LIMITS.maxNamesPerAnswer)
   }
   return out
-}
-
-function stripCodeFence(value: string): string {
-  const trimmed = value.trim()
-  if (!trimmed.startsWith('```') || !trimmed.endsWith('```')) return trimmed
-  const firstNewline = trimmed.indexOf('\n')
-  if (firstNewline === -1) return trimmed
-  const language = trimmed.slice(3, firstNewline).trim().toLowerCase()
-  if (language && language !== 'json') return trimmed
-  return trimmed.slice(firstNewline + 1, -3).trim()
 }
 
 export function createGeminiBrandExtractor(

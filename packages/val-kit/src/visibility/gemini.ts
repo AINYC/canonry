@@ -195,10 +195,25 @@ export function createGeminiClient(options: Pick<NormalizedGeminiOptions, 'apiKe
   return new GoogleGenAI({ apiKey: options.apiKey })
 }
 
-async function withBoundedRetry<T>(
+/** The two knobs `withBoundedRetry` reads. `NormalizedGeminiOptions` satisfies it. */
+export interface GeminiRetryConfig {
+  maxRetries: number
+  retryBaseDelayMs: number
+}
+
+/**
+ * Retry a provider call inside the deadline the caller already holds, so a
+ * transient 429/5xx costs an attempt rather than a measurement and the budget
+ * arithmetic is unchanged.
+ *
+ * Exported so a second instrument reuses this policy instead of copying it: a
+ * fork would drift on which statuses are retryable, and the divergence only
+ * shows up as one instrument losing answers the other keeps.
+ */
+export async function withBoundedRetry<T>(
   operation: () => Promise<T>,
   signal: AbortSignal,
-  config: Pick<NormalizedGeminiOptions, 'maxRetries' | 'retryBaseDelayMs'>,
+  config: GeminiRetryConfig,
 ): Promise<T> {
   let attempt = 0
   for (;;) {
@@ -466,7 +481,16 @@ function boundedModelId(value: unknown): string | null {
   return model && model.length <= MAX_MODEL_ID_CHARS ? model : null
 }
 
-function stripCodeFence(value: string): string {
+/**
+ * Unwrap a fenced JSON block.
+ *
+ * Exported because every call that uses a built-in tool has to hand-parse its
+ * output: Gemini 2.5 refuses `responseSchema` alongside `googleSearch`, so a
+ * grounded planner gets prose-fenced JSON and nothing else. One implementation,
+ * or two parsers disagree about what counts as valid and the symptom is
+ * "returned invalid JSON" on one surface only.
+ */
+export function stripCodeFence(value: string): string {
   const trimmed = value.trim()
   if (!trimmed.startsWith('```') || !trimmed.endsWith('```')) return trimmed
   const firstNewline = trimmed.indexOf('\n')

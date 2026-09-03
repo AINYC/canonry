@@ -14,6 +14,10 @@
       "types": "./dist/visibility.d.ts",
       "default": "./dist/visibility.js"
     },
+    "./perception": {
+      "types": "./dist/perception.d.ts",
+      "default": "./dist/perception.js"
+    },
     "./security": {
       "types": "./dist/security.d.ts",
       "default": "./dist/security.js"

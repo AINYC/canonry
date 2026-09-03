@@ -51,9 +51,9 @@ goes up.
 
 ## Subpaths
 
-`.`, `./visibility`, `./security`, `./storage`, `./jobs`, `./mcp`, `./ui`, `./config`. Each is a `src/<name>.ts`
-barrel and a tsup entry; `.` re-exports the rest. Adding a subpath means adding all three (barrel, tsup entry,
-`exports` map) or a consumer gets a resolution error rather than a type error.
+`.`, `./visibility`, `./perception`, `./security`, `./storage`, `./jobs`, `./mcp`, `./ui`, `./config`. Each is a
+`src/<name>.ts` barrel and a tsup entry; `.` re-exports the rest. Adding a subpath means adding all three (barrel,
+tsup entry, `exports` map) or a consumer gets a resolution error rather than a type error.
 
 `VisibilitySource` is declared twice in the seam with two different shapes — the adapter-facing source in
 `visibility/contracts.ts` and the display-safe source stored on a record in `runtime/types.ts`. Two star re-exports
@@ -64,6 +64,49 @@ explicitly. Keep that line if either declaration moves.
 declared in `runtime/types.ts` and re-exported BY NAME from `visibility.ts`, so `./visibility` and `./jobs` both
 resolve them to one declaration and no consumer has to move. Named rather than starred, for the `VisibilitySource`
 reason directly above.
+
+## Brand perception is a second instrument, not a visibility mode
+
+`./perception` measures how an answer engine CHARACTERISES a brand when it is asked about it directly. `./visibility`
+asks non-brand questions and measures whether the brand shows up at all. They share the probe runner, the Gemini
+adapter, and the brand matcher; they share nothing else, and they must never share a denominator, a rate, or a table.
+A branded question hands the model the answer, so the brand is present on nearly all of them and the finding is what
+the engine then says — pooling that with a non-brand basket lets recall outvote the characterisation and inverts the
+number a reader thinks they are looking at.
+
+The planner is the visibility planner's mirror image. That one drops any generated query which names the brand
+(`!detectMention(query, target).mentioned`); `createGeminiPerceptionPlanner` drops any which does NOT. It is a filter
+rather than a prompt instruction on purpose: the prompt asks for branded questions, `detectMention` decides whether it
+got them. Fewer than requested is a smaller sample; zero is a failure, because there is nothing to ask. A question the
+VISITOR supplied is exempt — they chose it.
+
+**A verdict, carried by verbatim evidence — never a score.** A number between 0 and 1 would read as a measurement of
+feeling, and nothing here measures feeling. So the model proposes and exact matching disposes, exactly as
+`mention-extract.ts` does for names: one bounded structured-output call returns a verdict with the sentences that
+carry it, and `verifyVerdict` keeps a sentence only when the answer literally contains it (whitespace-collapsed,
+case-insensitive) and a concern only when it is written by `namesWrittenIn`'s adjacent-complete-words rule. A verdict
+with no surviving evidence collapses to `'none'`, because a verdict nothing in the text carries is the model's opinion
+rather than the engine's.
+
+`'none'` and `null` are different findings and the difference is the whole honesty story. `'none'` says the answer took
+no position — a fact about the answer. `null` says nobody read one out of it, whether the probe failed or the
+extraction did — a fact about the check. A row with `null` leaves EVERY denominator in `summarizePerception`, verdict
+counts, concerns, and source types alike: one definition of "successful", used by all three, or the same card says
+"2 answers" above one number and "3 answers" above the next.
+
+**Five provider calls per check** — 1 planner + 3 probes in one wave + 1 verdict extraction — pinned by
+`perception-budget.test.ts`, which also asserts every call sets an explicit `thinkingConfig.thinkingBudget`. That
+number is meant to be noticed when a feature adds a call: it is the check on what an anonymous visitor can make this
+instrument spend. The deadlines are arithmetic, not a guess: `10 + 20 + 12 = 42s` inside a 45s job budget, and it fits
+only because `probeConcurrency >= maxProbeCalls` keeps the probes in ONE wave. The test asserts that relationship
+rather than the numbers, because raising `maxProbeCalls` alone silently buys a second wave.
+
+**Source types are explicit host lists. Extend the list; never add fuzzy matching.** A similarity score on a hostname
+would type `trustpilot-reviews-scam.example` as a review site and the reader has no way to see the label was guessed.
+The lists ARE the classifier, so extending one is a visible, reviewable edit. Order matters and is load-bearing: the
+brand's own domain wins first, then the exact lists, then the two label-prefix rules — which is why
+`news.ycombinator.com` types as community rather than being re-typed by a `news.` prefix. Anything unrecognised is
+`'other'`, which is a real answer: the engine attributed something the instrument does not recognise.
 
 ## Build
 

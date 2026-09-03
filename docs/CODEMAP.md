@@ -71,6 +71,7 @@ pins exists on npm.
 |---------|------|
 | `.` | Everything in one import — prefer a subpath in a Val, so a file says which part of the seam it depends on |
 | `visibility` | Answer-engine visibility: question planner, Gemini probe adapter, mention extraction, brand matching, share of voice |
+| `perception` | Brand perception: branded query planner, verdict extraction with verbatim-evidence verification, source typing, aggregation |
 | `security` | Public-surface guards: Turnstile verification and URL / SSRF checking |
 | `storage` | Storage ports plus the in-memory and Val Town SQLite adapters behind them |
 | `jobs` | The bounded public-check pipeline: phases, deadlines, cache reuse, and job records |
