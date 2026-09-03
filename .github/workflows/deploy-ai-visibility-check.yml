@@ -28,6 +28,9 @@ jobs:
       # where this Val deploys means editing this reviewed workflow.
       VAL_TOWN_EXPECTED_VAL_ID: b1194860-7c77-41d7-b0b7-f3529a80e15b
       VAL_TOWN_EXPECTED_BRANCH_ID: a4524491-dcb3-470a-a361-437a88df6a63
+      # The name this Val lives under. Pinned so the preflight can refuse a
+      # correctly-formed id that points at some other Val.
+      VAL_TOWN_EXPECTED_VAL_NAME: AI-Visibility-Check
       VAL_TOWN_API_KEY: ${{ secrets.VAL_TOWN_API_KEY }}
       VAL_TOWN_HEALTH_URL: ${{ vars.VAL_TOWN_HEALTH_URL }}
     steps:
@@ -145,9 +148,14 @@ jobs:
           deno lint --config deno.json main.http.tsx src test
           deno test --allow-env --allow-net --allow-import --frozen --config deno.json test
 
+      # `--no-lock` is load-bearing, not tidiness. These run with the Val as the
+      # working directory, so without it Deno resolves vt's OWN dependency graph
+      # (cliffy, @std, ...) into the Val's `deno.lock` — the same file the frozen
+      # check above just validated. The push then ships a lockfile nobody
+      # checked: observed once, 373 lines became 718.
       - name: Preview Val Town file changes
         working-directory: apps/vals/ai-visibility-check
-        run: deno run -A jsr:@valtown/vt@0.1.59 push --dry-run
+        run: deno run --no-lock -A jsr:@valtown/vt@0.1.59 push --dry-run
 
       # vt applies a multi-file mirror rather than an atomic bundle. Retry the
       # same desired state so a transient partial push converges before health
@@ -160,7 +168,7 @@ jobs:
           set -euo pipefail
 
           for attempt in 1 2 3; do
-            if deno run -A jsr:@valtown/vt@0.1.59 push; then
+            if deno run --no-lock -A jsr:@valtown/vt@0.1.59 push; then
               exit 0
             fi
 
