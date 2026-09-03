@@ -64,7 +64,10 @@ jobs:
 
       - uses: denoland/setup-deno@v2
         with:
-          deno-version: v2.7.5
+          # One Deno version across every workflow that touches a Val. CI needs
+          # 2.9.6 for `links` to resolve the unpublished @canonry/val-kit; this
+          # job re-locks the Val's graph, so it must not lock on an older one.
+          deno-version: v2.9.6
 
       - name: Resolve target + rewrite exact engine pins
         id: bump

@@ -1,8 +1,12 @@
-name: Deploy Val Town
+name: Deploy AI Visibility Check
 
 # The Val is an independent Deno host. Deployment is intentionally manual so
 # that the self-contained source, frozen production dependency graph, file plan,
 # and post-push health response are all checked in one operator-reviewed run.
+#
+# This workflow deploys ONE Val. A second Val gets its own copy with its own
+# fixed target IDs and its own concurrency group, because the deployment
+# identity is what must never be shared or parameterised by accident.
 on:
   workflow_dispatch:
 
@@ -10,7 +14,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: deploy-val-town
+  group: deploy-ai-visibility-check
   cancel-in-progress: false
 
 jobs:
@@ -28,11 +32,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # `.gitignore` excludes `apps/vals/*/.vt/`, so a fresh CI checkout does
+      # NOT carry the deployment state file — yet the fixed-target guard below
+      # reads it, and `vt push` needs it to know which Val it is updating.
+      # Say so here, in one line, instead of failing later inside `node -p` or
+      # inside vt with an error about something else. Surfacing the gap is
+      # deliberate: this workflow must never invent a deployment target.
+      - name: Require the Val Town deployment state file
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          STATE_FILE=apps/vals/ai-visibility-check/.vt/state.json
+
+          if [ ! -f "$STATE_FILE" ]; then
+            echo "::error::$STATE_FILE is missing on this runner."
+            echo "::error::It is gitignored (apps/vals/*/.vt/), so a fresh checkout never has it, and both the fixed-target guard and 'vt push' read it."
+            echo "::error::Provision the file on the runner before deploying. This workflow will not create one, because that would let it choose its own deployment target."
+            exit 1
+          fi
+
       - uses: ./.github/actions/setup
 
       - uses: denoland/setup-deno@v2
         with:
-          deno-version: v2.7.5
+          # Matches CI and local dev. The committed production `deno.lock`
+          # already passes `deno check --frozen` on 2.9.6, so the production
+          # graph checked below is unaffected by the bump.
+          deno-version: v2.9.6
 
       - name: Require Val Town deployment credentials and health URL
         shell: bash
@@ -79,6 +106,56 @@ jobs:
       # Deno checks cannot see it: the generated modules compile either way.
       - name: Verify the generated skill mirror is current
         run: node scripts/sync-val-town-skills.mjs --check
+
+      # CI validates this Val against the workspace copy of @canonry/val-kit.
+      # Production has no workspace: Val Town resolves every import from the
+      # public registry, so an unpublished pin deploys clean and then throws at
+      # the first request. Check npm here, before anything is pushed.
+      #
+      # The pin lives inline at every import site (Val Town applies no import
+      # map), so the check reads the source rather than a manifest key, and
+      # requires the whole Val to agree on ONE version — the same rule the
+      # engine pin follows.
+      - name: Require the pinned @canonry/val-kit to be published
+        working-directory: apps/vals/ai-visibility-check
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # `|| true`: grep exits 1 when a Val has no kit import at all, and
+          # that case deserves the explicit message below, not an unexplained
+          # `set -e` abort.
+          VERSIONS=$(
+            grep -rhoE 'npm:@canonry/val-kit@[0-9]+\.[0-9]+\.[0-9]+' src main.http.tsx \
+              | sed 's|^npm:@canonry/val-kit@||' \
+              | sort -u \
+              || true
+          )
+
+          if [ -z "$VERSIONS" ]; then
+            echo "::error::No npm:@canonry/val-kit@<version> specifier found under src/ or main.http.tsx."
+            echo "::error::The production graph must pin the kit explicitly at each import site; Val Town applies no import map."
+            exit 1
+          fi
+
+          COUNT=$(printf '%s\n' "$VERSIONS" | wc -l | tr -d '[:space:]')
+
+          if [ "$COUNT" -ne 1 ]; then
+            LIST=$(printf '%s' "$VERSIONS" | tr '\n' ' ')
+            echo "::error::Import sites disagree on the @canonry/val-kit version: $LIST"
+            echo "::error::Sweep src/ and main.http.tsx onto a single version before deploying."
+            exit 1
+          fi
+
+          VERSION="$VERSIONS"
+
+          if ! npm view "@canonry/val-kit@$VERSION" version >/dev/null 2>&1; then
+            echo "::error::@canonry/val-kit@$VERSION is not on public npm, so the production graph cannot resolve it."
+            echo "::error::Publish it first with the 'Publish @canonry/val-kit' workflow (.github/workflows/publish-val-kit.yml), then re-run this deploy."
+            exit 1
+          fi
+
+          echo "OK: @canonry/val-kit@$VERSION is published and pinned consistently."
 
       - name: Validate the frozen production Deno graph
         working-directory: apps/vals/ai-visibility-check

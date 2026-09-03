@@ -286,25 +286,48 @@ jobs:
         name: Build all packages (catches missing deps, bundler errors)
 
   vals:
-    name: Vals (Deno)
+    # Each Val is validated on its DEV graph here, and on its PRODUCTION graph
+    # in its own deploy workflow. The difference is where `@canonry/val-kit`
+    # comes from: the dev graph resolves it from `packages/val-kit` (the Val's
+    # committed `deno.dev.json` links to the workspace copy), so one PR can
+    # change the kit and the Vals together before anything reaches npm. The
+    # production graph (plain `deno.json`, `--frozen`) resolves it from public
+    # npm, which is why deploying is gated on the pinned version already being
+    # published. That is also why the kit is BUILT first: the dev graph reads
+    # `packages/val-kit/dist`, not its TypeScript sources.
+    #
+    # The exact Deno flags live in each Val's `deno.json` tasks, never here — a
+    # Val owns its own graph, and CI must not be a second place to edit it.
+    # Adding a Val is one matrix entry plus its own deploy workflow.
+    name: "Val: ${{ matrix.val }}"
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        val: [ai-visibility-check]
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
       - uses: denoland/setup-deno@v2
         with:
-          deno-version: v2.7.5
-      - name: Check Val Town frozen production graph
-        working-directory: apps/vals/ai-visibility-check
-        run: deno check --allow-import --frozen --config deno.json main.http.tsx
-      - name: Lint Val Town
-        working-directory: apps/vals/ai-visibility-check
-        run: deno lint --config deno.json main.http.tsx src test
-      - name: Test Val Town frozen production graph
-        working-directory: apps/vals/ai-visibility-check
-        run: deno test --allow-env --allow-net --allow-import --frozen --config deno.json test
+          # 2.9.6, not 2.7.5: on 2.7.5 a `links` entry pointing at a local npm
+          # package still queries the registry and fails with "npm package
+          # '@canonry/val-kit' does not exist", which is exactly the
+          # unpublished-kit case the dev graph exists to serve.
+          deno-version: v2.9.6
+      - name: Build @canonry/val-kit
+        run: pnpm --filter @canonry/val-kit build
+      - name: Check the Val's dev Deno graph
+        working-directory: apps/vals/${{ matrix.val }}
+        run: deno task check
+      - name: Lint the Val
+        working-directory: apps/vals/${{ matrix.val }}
+        run: deno task lint
+      - name: Test the Val's dev Deno graph
+        working-directory: apps/vals/${{ matrix.val }}
+        run: deno task test
 
   publish-smoke-test:
     # Catches the failure mode where a workspace dep leaks into runtime

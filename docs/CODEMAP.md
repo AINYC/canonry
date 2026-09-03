@@ -54,14 +54,33 @@ Bundled via `packages/canonry/build-web.ts` → `packages/canonry/assets/`. Lowe
 | Path | Role | Notes |
 |------|------|-------|
 | `main.http.tsx` | Val HTTP entry | Thin composition root for the bounded public sample |
-| `deno.json` / `deno.lock` | Self-contained production Deno imports and locked graph | Exact external pins must match the Canonry engine contract |
+| `deno.json` / `deno.lock` | Self-contained production Deno imports and locked graph | Exact external pins must match the Canonry engine contract; this is the graph deploy validates |
+| `deno.dev.json` | Dev graph: same tasks, `@canonry/val-kit` linked to the workspace copy | What CI runs; never pushed to Val Town |
 | `src/` | HTTP policy, bounded check runner, provider adapter, storage ports, evidence UI | Host owns quotas, provider access, secrets, and persistence |
 | `README.md` / `AGENTS.md` | Local limits, release order, and durable guardrails | Read before changing the Val host |
 
 ## Packages
 
+### `packages/val-kit/` — Published host kit for the Vals (`@canonry/val-kit`)
+The pure modules the Val Town Vals share, built with tsup to `dist/` and imported in production as
+`npm:@canonry/val-kit@<version>/<subpath>` (Val Town applies no import map, so the version is pinned inline at every
+import site). Published manually via `.github/workflows/publish-val-kit.yml`; a Val cannot deploy until the version it
+pins exists on npm.
+
+| Subpath | Role |
+|---------|------|
+| `.` | Everything in one import — prefer a subpath in a Val, so a file says which part of the seam it depends on |
+| `visibility` | Answer-engine visibility: question planner, Gemini probe adapter, mention extraction, brand matching, share of voice |
+| `security` | Public-surface guards: Turnstile verification and URL / SSRF checking |
+| `storage` | Storage ports plus the in-memory and Val Town SQLite adapters behind them |
+| `jobs` | The bounded public-check pipeline: phases, deadlines, cache reuse, and job records |
+| `mcp` | MCP protocol, server, tools, resources, and the generated skill catalog |
+| `ui` | Server-rendered evidence UI: markup, styles, and the client script (no inline styles — the page CSP blocks them) |
+| `config` | Environment-driven limits and feature configuration |
+
 ### `packages/canonry/` — Publishable npm (`@canonry/canonry`, compat `@ainyc/canonry`)
-CLI + Fastify server + job runner + scheduler + bundled SPA. Only published package.
+CLI + Fastify server + job runner + scheduler + bundled SPA. The published product package (`packages/val-kit` is the
+only other published artifact; every remaining internal package is bundled into this one).
 
 | Path | Role |
 |------|------|

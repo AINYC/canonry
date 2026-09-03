@@ -30,8 +30,9 @@
 apps/api/                        Cloud API entry point (imports packages/api-routes)
 apps/worker/                     Cloud worker entry point
 apps/web/                        Vite SPA source (bundled into packages/canonry/assets/)
-apps/vals/ai-visibility-check/   Public, self-contained Deno/Val Town sample (AI Visibility Check)
+apps/vals/ai-visibility-check/   Public Deno/Val Town sample (AI Visibility Check); consumes @canonry/val-kit
 packages/canonry/                Publishable npm package (CLI + server + bundled SPA)
+packages/val-kit/                Shared, published host kit for the Val Town Vals — @canonry/val-kit
 packages/api-routes/             Shared Fastify route plugins
 packages/contracts/              DTOs, enums, config-schema, error codes
 packages/config/                 Typed environment parsing
@@ -456,7 +457,10 @@ high-severity insights after a run — dispatched by `RunCoordinator` after
 ## Dependency Boundary
 
 - `packages/api-routes/` must not import from `apps/*`.
-- `packages/canonry/` is the only publishable artifact. Internal packages are bundled via tsup.
+- `packages/canonry/` and `packages/val-kit/` are the only publishable artifacts — the product package and the Vals'
+  shared host kit. Every other package is internal and bundled via tsup.
+- `packages/val-kit/` must stay runtime-neutral (web standards + Deno-compatible): it is consumed by the Val Town Vals,
+  not by the Node server, so it must not import `packages/canonry/`, `packages/db/`, or anything Node-only.
 - All internal packages use `@ainyc/canonry-*` naming convention.
 
 ## Vocabulary (Critical)
@@ -1180,6 +1184,22 @@ Several rules in this file are true only because a lint guard enforces them — 
   `gen:check`, `plugin:check`, `typecheck`, `lint`, `test`, cheapest first. The
   two drift checks fail in seconds and are the ones most often forgotten, since
   nothing local reminds you that editing a route means regenerating the SDK.
+
+### Vals and the kit
+
+The Val Town Vals under `apps/vals/` import `@canonry/val-kit`, and the two
+graphs they run on are validated in two different places. CI's `vals` matrix job
+builds `packages/val-kit` and runs each Val's own `deno task check|lint|test`
+against the DEV graph, where the Val's committed `deno.dev.json` links the kit
+back to the workspace — so one PR can change the kit and its consumers together,
+before anything reaches npm. Each Val's deploy workflow validates the PRODUCTION
+graph instead (plain `deno.json`, `--frozen`) and refuses to push until the exact
+`npm:@canonry/val-kit@<version>` the Val pins is already on public npm.
+Publishing the kit is therefore its own manual, operator-triggered workflow
+(`.github/workflows/publish-val-kit.yml`), with a guard that refuses a version
+npm already has. Adding a Val is a matrix entry in `ci.yml` plus its own deploy
+workflow with its own fixed target IDs — never a second Val parameterised into
+an existing one.
 
 ### Landing a PR here (read before opening one)
 

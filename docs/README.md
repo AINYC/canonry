@@ -25,6 +25,7 @@ Canonry is API-first. The API is the source of truth, the CLI is the standard op
 | [`deployment.md`](deployment.md) | current | operators | Current deployment and runtime guidance |
 | [`testing.md`](testing.md) | current | contributors | Validation and test workflow guidance |
 | [`../apps/vals/ai-visibility-check/README.md`](../apps/vals/ai-visibility-check/README.md) | current | contributors, operators | Public Val Town sample, local Deno validation, and manual release order |
+| [`../packages/val-kit/AGENTS.md`](../packages/val-kit/AGENTS.md) | current | contributors | `@canonry/val-kit`: the Vals' shared host kit — module boundaries, dev vs production graph, and the manual publish gate |
 | [`plugins.md`](plugins.md) | current | agent users | Portable Agent Plugin structure, client adapters, installation, coexistence, and security boundaries |
 | [`mcp.md`](mcp.md) | current | operators, agent users, contributors | MCP stdio adapter rationale, setup, auth model, safety rules, and limitations |
 | [`google-marketing.md`](google-marketing.md) | current | operators, agents | Google Ads and GTM setup, conversion evidence, integrity states, live-read authority, and v1 safety boundary |
