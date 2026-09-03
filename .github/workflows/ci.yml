@@ -306,7 +306,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        val: [ai-visibility-check]
+        val: [ai-visibility-check, brand-perception-check]
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup

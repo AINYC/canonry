@@ -59,6 +59,22 @@ Bundled via `packages/canonry/build-web.ts` → `packages/canonry/assets/`. Lowe
 | `src/` | HTTP policy, bounded check runner, provider adapter, storage ports, evidence UI | Host owns quotas, provider access, secrets, and persistence |
 | `README.md` / `AGENTS.md` | Local limits, release order, and durable guardrails | Read before changing the Val host |
 
+### `apps/vals/brand-perception-check/` — Public Deno / Val Town sample
+
+What an answer engine SAYS about a brand when asked about it directly. A separate instrument from AI Visibility, never
+a variant: every question names the brand, so the two share no denominator, no table, and no cache.
+
+| Path | Role | Notes |
+|------|------|-------|
+| `main.http.tsx` | Val HTTP entry | Names `CheckStore<PerceptionCheckResult>` once; everything downstream is typed from there |
+| `deno.json` | Self-contained production Deno graph | No production `deno.lock` yet — it cannot be generated until `@canonry/val-kit` is on public npm |
+| `deno.dev.json` / `deno.dev.lock` | Dev graph: `@canonry/val-kit` linked to the workspace copy | What CI runs; never pushed to Val Town |
+| `src/runtime/check-result.ts` | `PerceptionCheckResult` + `CHECK_FINGERPRINT_NAMESPACE` (`perception-v1`) | The kit stores it opaquely; the namespace is what keeps the two Vals' caches disjoint |
+| `src/jobs/perception-check.ts` | The ONE phase, its 45s budget, output sanitizers, and the visitor-facing failure copy | `failed` when nothing was measured; a planning failure reads as a fact about the brand |
+| `src/app/`, `src/mcp/` | HTTP routes and response policy; the 5-tool MCP surface | Near-identical to the sibling Val — the next hoist into the kit |
+| `src/ui/` | View model, server-rendered HTML, browser script, and the product's own CSS on top of the kit's | Verdict snapshot, answers table with per-row disclosure, concerns, source types |
+| `README.md` / `AGENTS.md` | Public marketing copy; contributor rules, budget arithmetic, and release order | Read `AGENTS.md` before changing the Val host |
+
 ## Packages
 
 ### `packages/val-kit/` — Published host kit for the Vals (`@canonry/val-kit`)

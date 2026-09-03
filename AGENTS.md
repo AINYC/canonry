@@ -31,6 +31,7 @@ apps/api/                        Cloud API entry point (imports packages/api-rou
 apps/worker/                     Cloud worker entry point
 apps/web/                        Vite SPA source (bundled into packages/canonry/assets/)
 apps/vals/ai-visibility-check/   Public Deno/Val Town sample (AI Visibility Check); consumes @canonry/val-kit
+apps/vals/brand-perception-check/ Public Deno/Val Town sample (Brand Perception Check); consumes @canonry/val-kit
 packages/canonry/                Publishable npm package (CLI + server + bundled SPA)
 packages/val-kit/                Shared, published host kit for the Val Town Vals — @canonry/val-kit
 packages/api-routes/             Shared Fastify route plugins
@@ -1200,6 +1201,16 @@ Publishing the kit is therefore its own manual, operator-triggered workflow
 npm already has. Adding a Val is a matrix entry in `ci.yml` plus its own deploy
 workflow with its own fixed target IDs — never a second Val parameterised into
 an existing one.
+
+Two Vals ship today: **AI Visibility Check** (non-brand questions; is the brand
+mentioned and the domain cited) and **Brand Perception Check** (branded
+questions; what the engine SAYS about the brand, with verbatim evidence). They
+are separate instruments and share no denominator, no table, and no cache — each
+owns its own result schema and its own `CHECK_FINGERPRINT_NAMESPACE`, which the
+kit's `checkFingerprint` requires as an argument precisely so two products keyed
+alike cannot serve each other's results as cache hits. A new Val is deployable
+only once the kit version it pins is on public npm, so its committed production
+`deno.lock` (and its Val Town target IDs) come after that publish, not before.
 
 ### Landing a PR here (read before opening one)
 
