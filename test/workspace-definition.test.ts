@@ -18,10 +18,13 @@ import { parse as parseYaml } from 'yaml'
  * `deno.dev.lock`. `deno check --frozen` then fails with a lockfile diff
  * hundreds of lines long, in a job that never touched the Val.
  *
- * The key is easy to commit by accident (it appears in an unrelated `git add`)
- * and expensive to diagnose from the symptom, which is exactly the shape that
- * earns a guard rather than a convention. Run `deno` from inside a Val
- * directory, where its own `deno.json` stops the walk.
+ * There is no reliable way to avoid it. Deno walks UP for npm resolution, so it
+ * finds `pnpm-workspace.yaml` even when invoked from a Val directory that has
+ * its own `deno.json`, and `--no-lock` does not stop it either — both verified.
+ * The remedy is therefore to NOTICE, which is what this guard is for: the key is
+ * easy to sweep into an unrelated `git add` and expensive to diagnose from its
+ * symptom. If `git status` shows `package.json` after any `deno` command, revert
+ * it.
  */
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
