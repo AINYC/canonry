@@ -289,6 +289,15 @@ request.
    the deploy workflow fail closed.
 3. **Create the production `deno.lock`** with `deno check --allow-import main.http.tsx` (plain config, no `--frozen`)
    and commit it. This is only possible after step 2. `deno.dev.lock` is separate and is not touched by this.
+
+> **Deno blocks a freshly published version for 24 hours.** `deno check` applies a
+> minimum dependency age policy (default 24h) to reduce supply-chain risk, so the
+> step above fails with "blocked by the minimum dependency age policy" if the kit
+> was published minutes ago. Pass `--min-dep-age 0` to generate the lock anyway —
+> defensible for a first-party package this repo just built and published from a
+> reviewed commit. The override is only needed to CREATE the lock: once the lock
+> pins the version with its integrity hash, `--frozen` resolves from the lock and
+> the policy does not apply, so the deploy workflow needs no flag and no config.
 4. Regenerate the skill mirror with `node scripts/sync-val-town-skills.mjs`.
 5. Run the verification commands above, including `deno task check:prod`.
 6. Run `vt push --dry-run` and review the file plan.
