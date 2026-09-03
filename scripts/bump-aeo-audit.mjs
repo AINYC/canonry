@@ -51,7 +51,7 @@ const DEP_TARGETS = [
 // the engine. That is N places to drift instead of one, so the bump SWEEPS the
 // tree rather than editing a manifest key. A new file that imports the engine
 // is picked up with no change here, which is the point.
-const VAL_SOURCE_ROOTS = ['apps/val-town/src', 'apps/val-town/main.http.tsx']
+const VAL_SOURCE_ROOTS = ['apps/vals/ai-visibility-check/src', 'apps/vals/ai-visibility-check/main.http.tsx']
 const VAL_SPECIFIER = new RegExp(`npm:${DEP.replace('/', '\\/')}@\\d+\\.\\d+\\.\\d+`, 'g')
 
 /** Every `.ts`/`.tsx` file under the Val roots. */
@@ -228,8 +228,8 @@ function main() {
   })
 
   console.log(
-    `\nBumped ${DEP} ${currentVersion} -> ${target}. Next: run \`pnpm install\`, then refresh apps/val-town/deno.lock ` +
-      `with \`deno check --allow-import main.http.tsx\` from apps/val-town.`,
+    `\nBumped ${DEP} ${currentVersion} -> ${target}. Next: run \`pnpm install\`, then refresh apps/vals/ai-visibility-check/deno.lock ` +
+      `with \`deno check --allow-import main.http.tsx\` from apps/vals/ai-visibility-check.`,
   )
 }
 

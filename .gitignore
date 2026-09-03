@@ -29,4 +29,4 @@ package-lock.json
 
 # Val Town CLI local state — a machine's pid, last-run time, and branch cursor.
 # It churns on every push and means nothing on another machine.
-apps/val-town/.vt/
+apps/vals/*/.vt/

@@ -34,7 +34,7 @@ function readText(relativePath: string): string {
  * left behind on an old engine is the failure this contract exists to catch.
  */
 function valTownEngineSpecifiers(): string[] {
-  const roots = ['apps/val-town/src', 'apps/val-town/main.http.tsx']
+  const roots = ['apps/vals/ai-visibility-check/src', 'apps/vals/ai-visibility-check/main.http.tsx']
   const found: string[] = []
   for (const root of roots) {
     const absRoot = repoPath(root)
@@ -71,8 +71,8 @@ describe('AEO audit dependency boundary', () => {
   it('keeps the public full-crawl engine exact across Canonry and Val Town', () => {
     const canonryPackage = readJson('packages/canonry/package.json')
     const workerPackage = readJson('apps/worker/package.json')
-    const valTownDeno = readJson('apps/val-town/deno.json')
-    const valTownLock = readJson('apps/val-town/deno.lock')
+    const valTownDeno = readJson('apps/vals/ai-visibility-check/deno.json')
+    const valTownLock = readJson('apps/vals/ai-visibility-check/deno.lock')
 
     const localEngineVersion = canonryPackage.dependencies?.['@canonry/aeo-audit']
 
@@ -96,9 +96,9 @@ describe('AEO audit dependency boundary', () => {
     // The bump has to reach the Val, and it can only do that by sweeping source.
     const bumpScript = readText('scripts/bump-aeo-audit.mjs')
     expect(bumpScript).toContain("const DEP = '@canonry/aeo-audit'")
-    expect(bumpScript).toContain("const VAL_SOURCE_ROOTS = ['apps/val-town/src', 'apps/val-town/main.http.tsx']")
+    expect(bumpScript).toContain("const VAL_SOURCE_ROOTS = ['apps/vals/ai-visibility-check/src', 'apps/vals/ai-visibility-check/main.http.tsx']")
     expect(bumpScript).toContain('function rewriteValSpecifiers(')
     // A manifest key it can no longer find would throw on every bump.
-    expect(bumpScript).not.toContain("'apps/val-town/deno.json'")
+    expect(bumpScript).not.toContain("'apps/vals/ai-visibility-check/deno.json'")
   })
 })

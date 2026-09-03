@@ -102,7 +102,7 @@ jobs:
       # composes with it before a bump PR can be opened.
       - name: Val Town Deno (refresh lock and gate the bump)
         if: steps.bump.outputs.changed == 'true'
-        working-directory: apps/val-town
+        working-directory: apps/vals/ai-visibility-check
         run: |
           deno check --allow-import --config deno.json main.http.tsx
           deno lint --config deno.json main.http.tsx src test

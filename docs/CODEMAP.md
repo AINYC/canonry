@@ -49,7 +49,7 @@ Bundled via `packages/canonry/build-web.ts` → `packages/canonry/assets/`. Lowe
 ### `apps/api/` — Cloud Run entry (imports `packages/api-routes`)
 ### `apps/worker/` — Cloud worker entry
 
-### `apps/val-town/` — Public Deno / Val Town sample
+### `apps/vals/ai-visibility-check/` — Public Deno / Val Town sample
 
 | Path | Role | Notes |
 |------|------|-------|

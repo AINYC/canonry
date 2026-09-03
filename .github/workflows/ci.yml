@@ -285,8 +285,8 @@ jobs:
       - run: pnpm -r run build
         name: Build all packages (catches missing deps, bundler errors)
 
-  val-town:
-    name: Val Town Deno
+  vals:
+    name: Vals (Deno)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -297,13 +297,13 @@ jobs:
         with:
           deno-version: v2.7.5
       - name: Check Val Town frozen production graph
-        working-directory: apps/val-town
+        working-directory: apps/vals/ai-visibility-check
         run: deno check --allow-import --frozen --config deno.json main.http.tsx
       - name: Lint Val Town
-        working-directory: apps/val-town
+        working-directory: apps/vals/ai-visibility-check
         run: deno lint --config deno.json main.http.tsx src test
       - name: Test Val Town frozen production graph
-        working-directory: apps/val-town
+        working-directory: apps/vals/ai-visibility-check
         run: deno test --allow-env --allow-net --allow-import --frozen --config deno.json test
 
   publish-smoke-test:
@@ -345,7 +345,7 @@ jobs:
 
   validate:
     runs-on: ubuntu-latest
-    needs: [typecheck, test, lint, ts-prune, codegen-drift, plugin-drift, build, val-town, publish-smoke-test, wp-plugin-tests]
+    needs: [typecheck, test, lint, ts-prune, codegen-drift, plugin-drift, build, vals, publish-smoke-test, wp-plugin-tests]
     if: always()
     steps:
       - name: Verify all validate jobs succeeded
@@ -358,7 +358,7 @@ jobs:
              [ "${{ needs.plugin-drift.result }}" != "success" ] || \
              [ "${{ needs.wp-plugin-tests.result }}" != "success" ] || \
              [ "${{ needs.build.result }}" != "success" ] || \
-             [ "${{ needs.val-town.result }}" != "success" ] || \
+             [ "${{ needs.vals.result }}" != "success" ] || \
              [ "${{ needs.publish-smoke-test.result }}" != "success" ]; then
             echo "One or more validate jobs failed"
             exit 1

@@ -1,6 +1,6 @@
 .context
 .git
-apps/val-town
+apps/vals
 node_modules
 dist
 coverage

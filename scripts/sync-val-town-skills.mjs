@@ -4,9 +4,10 @@
  * The val serves both bundled skills as MCP resources, so an agent that
  * connects to it gets the analyst playbook alongside the data. It cannot read
  * them from `skills/` at runtime: a val is a flat file set rooted at
- * `apps/val-town/`, nothing outside that directory is pushed, and Val Town
- * caps a single file at 80,000 characters. `skills/canonry/references/
- * canonry-cli.md` is 101,329, so a straight copy is not an option either.
+ * `apps/vals/ai-visibility-check/`, nothing outside that directory is pushed,
+ * and Val Town caps a single file at 80,000 characters.
+ * `skills/canonry/references/canonry-cli.md` is 101,329, so a straight copy is
+ * not an option either.
  *
  * Hence generated modules, chunked so that no emitted file approaches the cap.
  * Content is written with `JSON.stringify` rather than a template literal
@@ -23,7 +24,7 @@ import { fileURLToPath } from 'node:url'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const skillsRoot = path.join(repoRoot, 'skills')
-const outputRoot = path.join(repoRoot, 'apps', 'val-town', 'src', 'mcp', 'skills')
+const outputRoot = path.join(repoRoot, 'apps', 'vals', 'ai-visibility-check', 'src', 'mcp', 'skills')
 const managedSkills = ['aero', 'canonry']
 
 /**
