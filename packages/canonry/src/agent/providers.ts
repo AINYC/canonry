@@ -676,9 +676,14 @@ export function buildAgentProvidersResponse(config: {
     id: route.id as AeroProviderId,
     label: route.label,
     defaultModel: route.modelId,
-    // A connection may deliberately have no credential (e.g. loopback
-    // LiteLLM); availability is the resolved connection, not a secret check.
-    configured: true,
+    // `configured` must mean the same thing it means for a native provider one
+    // block up: a credential is present. Reporting every resolved connection as
+    // configured let a keyless gateway render with no 'Needs setup' badge (the
+    // operator only learned at a 401 mid-stream) and, because the doctor check
+    // titled 'Agent provider keys' counts this flag, reported OK on an install
+    // holding zero LLM credentials. `keySource` already carried the truth and
+    // no surface rendered it.
+    configured: Boolean(connection.apiKey),
     keySource: connection.apiKey ? 'config' : null,
   }))
   const providers = [...nativeProviders, ...routeProviders]

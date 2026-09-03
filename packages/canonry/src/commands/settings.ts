@@ -9,6 +9,7 @@ import {
   engineRouteConfigSchema,
   engineRouteSummaryResponseSchema,
   type EngineRouteUpsertInput,
+  engineRouteReadiness,
 } from '@ainyc/canonry-contracts'
 
 function getClient() {
@@ -157,8 +158,14 @@ export async function listEngineConnectionModels(connectionId: string, format?: 
 
   console.log(`Model catalog for "${response.connectionId}" (${response.state}):\n`)
   if (response.models.length === 0) {
+    // `unavailable` is a catch-all: a non-2xx (401/403), an 8s timeout, a DNS or
+    // connection error, a refused redirect, an oversized body and malformed JSON
+    // all land here and are indistinguishable in the typed response. Naming only
+    // the benign cause sent an operator with a wrong key or a dead gateway off to
+    // enter a manual model id, and they learned the truth at the first billed call.
     console.log(response.state === 'unavailable'
-      ? '  The gateway did not provide a model catalog.'
+      ? '  No model catalog could be read. The gateway may not expose /models, or the\n'
+        + '  request failed: check the API key, the endpoint, and that the host is reachable.'
       : '  The gateway returned no models.')
   } else {
     for (const model of response.models) {
@@ -187,7 +194,11 @@ export async function upsertEngineRoute(
   console.log(`  Connection: ${response.connectionId}`)
   console.log(`  Model:      ${response.modelId}`)
   console.log(`  Revision:   ${response.revision}`)
-  if (response.capabilities.kind === 'verified-measurement') {
+  // Readiness needs BOTH a verified owner and verified-measurement capabilities.
+  // Checking only the capability let the CLI print 'measurement-ready' for a
+  // configured route whose capabilities were hand-edited, while the API reported
+  // 'text-ready' for the same row. One rule, one helper.
+  if (engineRouteReadiness(response).measurementReady) {
     console.log('  Readiness:  measurement-ready')
   } else {
     console.log('  Readiness:  text-only')

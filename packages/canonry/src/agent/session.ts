@@ -168,19 +168,41 @@ function buildAeroProviderSessionId(opts: AeroSessionOptions): string {
   return `canonry:aero:${opts.agentSessionId ?? opts.projectId ?? opts.projectName}`
 }
 
+/**
+ * The stream function a provider must run under. A route streams INSIDE its
+ * connection's execution gate and holds the slot until the terminal event; a
+ * native provider must not be wrapped at all.
+ *
+ * Exported because the provider can change AFTER construction (alignModel) and
+ * the gate has to move with it. `Agent.streamFn` is fixed when the Agent is
+ * built, so swapping only the model left a session switched TO a route
+ * streaming completely outside its quota, and one switched to a native provider
+ * still serialized behind the gateway's concurrency limit.
+ */
+export function aeroStreamFnFor(
+  config: CanonryConfig,
+  provider: AeroProviderId,
+  base?: AgentOptions['streamFn'],
+): NonNullable<AgentOptions['streamFn']> {
+  const streamFn = base ?? streamSimple
+  if (!provider.startsWith('route:')) return streamFn
+  const route = configuredTextRoute(config, provider)
+  if (!route) return streamFn
+  return (model, context, options) => streamEngineRouteText(
+    route.connection,
+    () => streamFn(model, context, options),
+  )
+}
+
 /** Route streams hold the shared connection slot until their terminal event. */
 function resolveAeroStreamFn(
   opts: AeroSessionOptions,
   provider: AeroProviderId,
 ): AgentOptions['streamFn'] | undefined {
+  // Native keeps the caller's override verbatim (undefined lets pi-ai pick its
+  // own default), so construction behaviour is byte-for-byte unchanged.
   if (!provider.startsWith('route:')) return opts.streamFn
-  const route = configuredTextRoute(opts.config, provider)
-  if (!route) return opts.streamFn
-  const streamFn = opts.streamFn ?? streamSimple
-  return (model, context, options) => streamEngineRouteText(
-    route.connection,
-    () => streamFn(model, context, options),
-  )
+  return aeroStreamFnFor(opts.config, provider, opts.streamFn)
 }
 
 export function createAeroSession(opts: AeroSessionOptions): Agent {
