@@ -288,7 +288,7 @@ export class ValSqliteCheckStore implements CheckStore {
           candidate.errorMessage,
           candidate.leaseOwner,
           candidate.leaseUntil,
-          JSON.stringify(candidate.userQueries ?? []),
+          JSON.stringify(candidate.userQueries),
           candidate.fingerprint,
           input.now,
           input.now,
@@ -422,7 +422,7 @@ export class ValSqliteCheckStore implements CheckStore {
         record.errorMessage,
         record.leaseOwner,
         record.leaseUntil,
-        JSON.stringify(record.userQueries ?? []),
+        JSON.stringify(record.userQueries),
       ],
     })
   }
