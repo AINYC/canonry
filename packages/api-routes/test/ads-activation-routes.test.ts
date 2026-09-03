@@ -218,6 +218,7 @@ function buildHarness(options: ActivationHarnessOptions = {}) {
     createCampaign: unsupported,
     updateCampaign: unsupported,
     pauseCampaign: async (_key, id) => mutate('campaign', id, 'paused'),
+    archiveCampaign: unsupported,
     activateCampaign: async (_key, id) => mutate('campaign', id, 'active'),
     getAdGroup: async (_key, id) => read('ad_group', id),
     listAdGroups: async (_key, campaignId) => {
@@ -233,6 +234,7 @@ function buildHarness(options: ActivationHarnessOptions = {}) {
     createAdGroup: unsupported,
     updateAdGroup: unsupported,
     pauseAdGroup: async (_key, id) => mutate('ad_group', id, 'paused'),
+    archiveAdGroup: unsupported,
     activateAdGroup: async (_key, id) => mutate('ad_group', id, 'active'),
     getAd: async (_key, id) => read('ad', id),
     listAds: async (_key, adGroupId) => {
@@ -244,6 +246,7 @@ function buildHarness(options: ActivationHarnessOptions = {}) {
     createAd: unsupported,
     updateAd: unsupported,
     pauseAd: async (_key, id) => mutate('ad', id, 'paused'),
+    archiveAd: unsupported,
     activateAd: async (_key, id) => {
       if (options.blockAdActivationBeforeMutation) {
         signalActivationStarted?.()

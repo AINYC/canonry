@@ -225,7 +225,7 @@ export type AdsActivateTreeResponse = {
         id: string;
         adAccountId: string | null;
         operationKey: string;
-        kind: 'image_upload' | 'campaign_create' | 'campaign_update' | 'campaign_pause' | 'campaign_tree_activate' | 'ad_group_create' | 'ad_group_update' | 'ad_group_pause' | 'ad_create' | 'ad_update' | 'ad_pause';
+        kind: 'image_upload' | 'campaign_create' | 'campaign_update' | 'campaign_pause' | 'campaign_archive' | 'campaign_tree_activate' | 'ad_group_create' | 'ad_group_update' | 'ad_group_pause' | 'ad_group_archive' | 'ad_create' | 'ad_update' | 'ad_pause' | 'ad_archive';
         state: 'pending' | 'reconciling' | 'succeeded' | 'failed' | 'unknown';
         entityType: 'file' | 'campaign' | 'ad_group' | 'ad' | null;
         entityId: string | null;
@@ -861,7 +861,7 @@ export type AdsOperationReconcileResponse = {
         id: string;
         adAccountId: string | null;
         operationKey: string;
-        kind: 'image_upload' | 'campaign_create' | 'campaign_update' | 'campaign_pause' | 'campaign_tree_activate' | 'ad_group_create' | 'ad_group_update' | 'ad_group_pause' | 'ad_create' | 'ad_update' | 'ad_pause';
+        kind: 'image_upload' | 'campaign_create' | 'campaign_update' | 'campaign_pause' | 'campaign_archive' | 'campaign_tree_activate' | 'ad_group_create' | 'ad_group_update' | 'ad_group_pause' | 'ad_group_archive' | 'ad_create' | 'ad_update' | 'ad_pause' | 'ad_archive';
         state: 'pending' | 'reconciling' | 'succeeded' | 'failed' | 'unknown';
         entityType: 'file' | 'campaign' | 'ad_group' | 'ad' | null;
         entityId: string | null;
@@ -901,7 +901,7 @@ export type AdsOperationResponse = {
         id: string;
         adAccountId: string | null;
         operationKey: string;
-        kind: 'image_upload' | 'campaign_create' | 'campaign_update' | 'campaign_pause' | 'campaign_tree_activate' | 'ad_group_create' | 'ad_group_update' | 'ad_group_pause' | 'ad_create' | 'ad_update' | 'ad_pause';
+        kind: 'image_upload' | 'campaign_create' | 'campaign_update' | 'campaign_pause' | 'campaign_archive' | 'campaign_tree_activate' | 'ad_group_create' | 'ad_group_update' | 'ad_group_pause' | 'ad_group_archive' | 'ad_create' | 'ad_update' | 'ad_pause' | 'ad_archive';
         state: 'pending' | 'reconciling' | 'succeeded' | 'failed' | 'unknown';
         entityType: 'file' | 'campaign' | 'ad_group' | 'ad' | null;
         entityId: string | null;
@@ -969,7 +969,7 @@ export type AdsUnresolvedOperationListResponse = {
         id: string;
         adAccountId: string | null;
         operationKey: string;
-        kind: 'image_upload' | 'campaign_create' | 'campaign_update' | 'campaign_pause' | 'campaign_tree_activate' | 'ad_group_create' | 'ad_group_update' | 'ad_group_pause' | 'ad_create' | 'ad_update' | 'ad_pause';
+        kind: 'image_upload' | 'campaign_create' | 'campaign_update' | 'campaign_pause' | 'campaign_archive' | 'campaign_tree_activate' | 'ad_group_create' | 'ad_group_update' | 'ad_group_pause' | 'ad_group_archive' | 'ad_create' | 'ad_update' | 'ad_pause' | 'ad_archive';
         state: 'pending' | 'reconciling' | 'succeeded' | 'failed' | 'unknown';
         entityType: 'file' | 'campaign' | 'ad_group' | 'ad' | null;
         entityId: string | null;
@@ -19654,6 +19654,165 @@ export type PostApiV1ProjectsByNameAdsAdsByIdPauseResponses = {
 };
 
 export type PostApiV1ProjectsByNameAdsAdsByIdPauseResponse = PostApiV1ProjectsByNameAdsAdsByIdPauseResponses[keyof PostApiV1ProjectsByNameAdsAdsByIdPauseResponses];
+
+export type PostApiV1ProjectsByNameAdsCampaignsByIdArchiveData = {
+    body: {
+        operationKey: string;
+        expectedUpdatedAt: number;
+    };
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+        /**
+         * Campaign ID.
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/ads/campaigns/{id}/archive';
+};
+
+export type PostApiV1ProjectsByNameAdsCampaignsByIdArchiveErrors = {
+    /**
+     * Invalid request, active entity, stale expectedUpdatedAt, or ads connection unavailable.
+     */
+    400: ErrorEnvelope;
+    /**
+     * The key lacks ads.write.
+     */
+    403: ErrorEnvelope;
+    /**
+     * Project not found.
+     */
+    404: ErrorEnvelope;
+    /**
+     * Operation key was already used for a different request.
+     */
+    409: ErrorEnvelope;
+    /**
+     * Upstream outcome failed or is unknown.
+     */
+    502: ErrorEnvelope;
+};
+
+export type PostApiV1ProjectsByNameAdsCampaignsByIdArchiveError = PostApiV1ProjectsByNameAdsCampaignsByIdArchiveErrors[keyof PostApiV1ProjectsByNameAdsCampaignsByIdArchiveErrors];
+
+export type PostApiV1ProjectsByNameAdsCampaignsByIdArchiveResponses = {
+    /**
+     * Campaign archive receipt.
+     */
+    200: AdsOperationResponse;
+};
+
+export type PostApiV1ProjectsByNameAdsCampaignsByIdArchiveResponse = PostApiV1ProjectsByNameAdsCampaignsByIdArchiveResponses[keyof PostApiV1ProjectsByNameAdsCampaignsByIdArchiveResponses];
+
+export type PostApiV1ProjectsByNameAdsAdGroupsByIdArchiveData = {
+    body: {
+        operationKey: string;
+        expectedUpdatedAt: number;
+    };
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+        /**
+         * Ad group ID.
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/ads/ad-groups/{id}/archive';
+};
+
+export type PostApiV1ProjectsByNameAdsAdGroupsByIdArchiveErrors = {
+    /**
+     * Invalid request, active entity, stale expectedUpdatedAt, or ads connection unavailable.
+     */
+    400: ErrorEnvelope;
+    /**
+     * The key lacks ads.write.
+     */
+    403: ErrorEnvelope;
+    /**
+     * Project not found.
+     */
+    404: ErrorEnvelope;
+    /**
+     * Operation key was already used for a different request.
+     */
+    409: ErrorEnvelope;
+    /**
+     * Upstream outcome failed or is unknown.
+     */
+    502: ErrorEnvelope;
+};
+
+export type PostApiV1ProjectsByNameAdsAdGroupsByIdArchiveError = PostApiV1ProjectsByNameAdsAdGroupsByIdArchiveErrors[keyof PostApiV1ProjectsByNameAdsAdGroupsByIdArchiveErrors];
+
+export type PostApiV1ProjectsByNameAdsAdGroupsByIdArchiveResponses = {
+    /**
+     * Ad-group archive receipt.
+     */
+    200: AdsOperationResponse;
+};
+
+export type PostApiV1ProjectsByNameAdsAdGroupsByIdArchiveResponse = PostApiV1ProjectsByNameAdsAdGroupsByIdArchiveResponses[keyof PostApiV1ProjectsByNameAdsAdGroupsByIdArchiveResponses];
+
+export type PostApiV1ProjectsByNameAdsAdsByIdArchiveData = {
+    body: {
+        operationKey: string;
+        expectedUpdatedAt: number;
+    };
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+        /**
+         * Ad ID.
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/ads/ads/{id}/archive';
+};
+
+export type PostApiV1ProjectsByNameAdsAdsByIdArchiveErrors = {
+    /**
+     * Invalid request, active entity, stale expectedUpdatedAt, or ads connection unavailable.
+     */
+    400: ErrorEnvelope;
+    /**
+     * The key lacks ads.write.
+     */
+    403: ErrorEnvelope;
+    /**
+     * Project not found.
+     */
+    404: ErrorEnvelope;
+    /**
+     * Operation key was already used for a different request.
+     */
+    409: ErrorEnvelope;
+    /**
+     * Upstream outcome failed or is unknown.
+     */
+    502: ErrorEnvelope;
+};
+
+export type PostApiV1ProjectsByNameAdsAdsByIdArchiveError = PostApiV1ProjectsByNameAdsAdsByIdArchiveErrors[keyof PostApiV1ProjectsByNameAdsAdsByIdArchiveErrors];
+
+export type PostApiV1ProjectsByNameAdsAdsByIdArchiveResponses = {
+    /**
+     * Ad archive receipt.
+     */
+    200: AdsOperationResponse;
+};
+
+export type PostApiV1ProjectsByNameAdsAdsByIdArchiveResponse = PostApiV1ProjectsByNameAdsAdsByIdArchiveResponses[keyof PostApiV1ProjectsByNameAdsAdsByIdArchiveResponses];
 
 export type PostApiV1ProjectsByNameAdsSyncData = {
     body?: never;

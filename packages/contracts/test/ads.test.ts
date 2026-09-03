@@ -19,6 +19,8 @@ import {
   adsCampaignCreateRequestSchema,
   adsAdGroupCreateRequestSchema,
   adsCampaignUpdateRequestSchema,
+  adsArchiveRequestSchema,
+  adsPauseRequestSchema,
   adsAdCreateRequestSchema,
   adsOperationDtoSchema,
   adsOperationReconcileRequestSchema,
@@ -536,7 +538,24 @@ describe('ads lifecycle contracts', () => {
     expect(adsOperationDtoSchema.safeParse(base).success).toBe(true)
     expect(adsOperationDtoSchema.safeParse({ ...base, state: AdsOperationStates.reconciling }).success).toBe(true)
     expect(adsOperationDtoSchema.safeParse({ ...base, state: 'maybe' }).success).toBe(false)
-    expect(adsOperationDtoSchema.safeParse({ ...base, kind: 'campaign_archive' }).success).toBe(false)
+    // Archive is a supported kind now; a made-up lifecycle kind still is not.
+    expect(adsOperationDtoSchema.safeParse({ ...base, kind: 'campaign_archive' }).success).toBe(true)
+    expect(adsOperationDtoSchema.safeParse({ ...base, kind: 'ad_group_archive' }).success).toBe(true)
+    expect(adsOperationDtoSchema.safeParse({ ...base, kind: 'ad_archive' }).success).toBe(true)
+    expect(adsOperationDtoSchema.safeParse({ ...base, kind: 'campaign_delete' }).success).toBe(false)
+  })
+
+  test('archive pins the reviewed revision; pause does not', () => {
+    const operationKey = 'weekend:campaign:archive'
+    expect(adsPauseRequestSchema.safeParse({ operationKey }).success).toBe(true)
+
+    // Archive is irreversible, so the caller must state which revision it saw.
+    expect(adsArchiveRequestSchema.safeParse({ operationKey }).success).toBe(false)
+    expect(adsArchiveRequestSchema.safeParse({ operationKey, expectedUpdatedAt: 1_780_770_127 }).success).toBe(true)
+    expect(adsArchiveRequestSchema.safeParse({ operationKey, expectedUpdatedAt: -1 }).success).toBe(false)
+    expect(adsArchiveRequestSchema.safeParse({ operationKey, expectedUpdatedAt: 12.5 }).success).toBe(false)
+    expect(adsArchiveRequestSchema.safeParse({ operationKey, expectedUpdatedAt: '123' }).success).toBe(false)
+    expect(adsArchiveRequestSchema.safeParse({ operationKey: 'no', expectedUpdatedAt: 123 }).success).toBe(false)
   })
 
   test('reconciliation strategies and fields are closed and exclude raw requests or secrets', () => {

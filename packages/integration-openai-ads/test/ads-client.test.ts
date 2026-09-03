@@ -3,6 +3,9 @@ import {
   activateAd,
   activateAdGroup,
   activateCampaign,
+  archiveAd,
+  archiveAdGroup,
+  archiveCampaign,
   createAd,
   createAdGroup,
   createCampaign,
@@ -410,6 +413,21 @@ describe('campaign write primitives', () => {
     expectJsonPost(calls[0]!, `campaigns/${FIXTURE_CAMPAIGN.id}/pause`)
   })
 
+  // The archive path is inferred by symmetry with pause/activate and is NOT
+  // fixture-verified against the provider; this test pins the request we send,
+  // not the provider's contract.
+  it('posts the inferred campaign archive action without a request body', async () => {
+    const calls = mockFetchOnce({ ...FIXTURE_CAMPAIGN, status: 'archived' })
+    await archiveCampaign('test-key', FIXTURE_CAMPAIGN.id)
+    expectJsonPost(calls[0]!, `campaigns/${FIXTURE_CAMPAIGN.id}/archive`)
+  })
+
+  it('rejects an archive with a blank campaign id before calling fetch', async () => {
+    const calls = mockFetchOnce(FIXTURE_CAMPAIGN)
+    await expect(() => archiveCampaign('test-key', '  ')).rejects.toMatchObject({ status: 400 })
+    expect(calls).toHaveLength(0)
+  })
+
   it('rejects an invalid create budget before calling fetch', async () => {
     const calls = mockFetchOnce(FIXTURE_CAMPAIGN)
     const request = {
@@ -549,6 +567,12 @@ describe('ad group write primitives', () => {
     expectJsonPost(calls[0]!, `ad_groups/${FIXTURE_AD_GROUP.id}/pause`)
   })
 
+  it('posts the inferred ad-group archive action without a request body', async () => {
+    const calls = mockFetchOnce({ ...FIXTURE_AD_GROUP, status: 'archived' })
+    await archiveAdGroup('test-key', FIXTURE_AD_GROUP.id)
+    expectJsonPost(calls[0]!, `ad_groups/${FIXTURE_AD_GROUP.id}/archive`)
+  })
+
   it('rejects unknown billing events before calling fetch', async () => {
     const calls = mockFetchOnce(FIXTURE_AD_GROUP)
     const request = {
@@ -601,6 +625,12 @@ describe('ad write primitives', () => {
     calls = mockFetchOnce({ ...FIXTURE_AD, status: OpenAiAdsWriteStatuses.paused })
     await pauseAd('test-key', FIXTURE_AD.id)
     expectJsonPost(calls[0]!, `ads/${FIXTURE_AD.id}/pause`)
+  })
+
+  it('posts the inferred ad archive action, encoding the id', async () => {
+    const calls = mockFetchOnce({ ...FIXTURE_AD, status: 'archived' })
+    await archiveAd('test-key', 'ad/abc')
+    expectJsonPost(calls[0]!, 'ads/ad%2Fabc/archive')
   })
 
   it('rejects an invalid chat-card target URL before calling fetch', async () => {
