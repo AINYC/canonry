@@ -2,13 +2,13 @@ import {
   type CheckRecord,
   PUBLIC_CHECK_UNAVAILABLE,
   PUBLIC_RATE_LIMITED_ERROR_CODE,
-} from 'npm:@canonry/val-kit@0.1.0/jobs'
+} from 'npm:@canonry/val-kit@0.2.0/jobs'
 import type {
   PerceptionEvidence,
   PerceptionReport,
   PerceptionVerdict,
   SourceType,
-} from 'npm:@canonry/val-kit@0.1.0/perception'
+} from 'npm:@canonry/val-kit@0.2.0/perception'
 import type { PerceptionCheckResult } from '../runtime/check-result.ts'
 import type {
   BrandPerceptionViewModel,

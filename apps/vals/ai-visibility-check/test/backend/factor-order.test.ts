@@ -1,5 +1,5 @@
-import { type CheckRecord, checkFingerprint } from 'npm:@canonry/val-kit@0.1.0/jobs'
-import { MemoryCheckStore } from 'npm:@canonry/val-kit@0.1.0/storage'
+import { type CheckRecord, checkFingerprint } from 'npm:@canonry/val-kit@0.2.0/jobs'
+import { MemoryCheckStore } from 'npm:@canonry/val-kit@0.2.0/storage'
 import { callMcpTool } from '../../src/mcp/tools.ts'
 import { CHECK_FINGERPRINT_NAMESPACE, type CheckResult } from '../../src/runtime/check-result.ts'
 import { compareFactorRank, orderFactors } from '../../src/site-health/factor-order.ts'

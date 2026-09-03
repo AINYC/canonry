@@ -3,7 +3,7 @@
  * model. The runtime maps normalized check records into it; this layer never
  * reads secrets, provider payloads, or storage directly.
  */
-import type { PerceptionVerdict, SourceType } from 'npm:@canonry/val-kit@0.1.0/perception'
+import type { PerceptionVerdict, SourceType } from 'npm:@canonry/val-kit@0.2.0/perception'
 
 export type DemoUiStatus =
   | 'ready'

@@ -1,5 +1,5 @@
-import { type CheckRecord, PUBLIC_RATE_LIMITED_ERROR_CODE } from 'npm:@canonry/val-kit@0.1.0/jobs'
-import type { PerceptionEvidence } from 'npm:@canonry/val-kit@0.1.0/perception'
+import { type CheckRecord, PUBLIC_RATE_LIMITED_ERROR_CODE } from 'npm:@canonry/val-kit@0.2.0/jobs'
+import type { PerceptionEvidence } from 'npm:@canonry/val-kit@0.2.0/perception'
 import type { PerceptionCheckResult } from '../../src/runtime/check-result.ts'
 import {
   assetUrl,

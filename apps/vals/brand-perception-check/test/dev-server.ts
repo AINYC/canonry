@@ -15,16 +15,16 @@
  *   deno task dev            # stub, no network
  *   GEMINI_API_KEY=… deno task dev
  */
-import { loadValTownConfig } from 'npm:@canonry/val-kit@0.1.0/config'
-import { createRequestBoundDispatcher } from 'npm:@canonry/val-kit@0.1.0/jobs'
+import { loadValTownConfig } from 'npm:@canonry/val-kit@0.2.0/config'
+import { createRequestBoundDispatcher } from 'npm:@canonry/val-kit@0.2.0/jobs'
 import {
   createGeminiValPerceptionProbe,
   type PerceptionEvidence,
   type PerceptionProbePort,
   type PerceptionReport,
   summarizePerception,
-} from 'npm:@canonry/val-kit@0.1.0/perception'
-import { MemoryCheckStore } from 'npm:@canonry/val-kit@0.1.0/storage'
+} from 'npm:@canonry/val-kit@0.2.0/perception'
+import { MemoryCheckStore } from 'npm:@canonry/val-kit@0.2.0/storage'
 import { createValTownApp } from '../src/app/app.ts'
 import { createPerceptionCheckRunner } from '../src/jobs/perception-check.ts'
 import type { PerceptionCheckResult } from '../src/runtime/check-result.ts'

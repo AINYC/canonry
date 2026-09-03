@@ -8,7 +8,7 @@
  * lets this val and the AI Visibility Check val store entirely different results
  * in the same table without either serving the other's cached work.
  */
-import type { PerceptionReport } from 'npm:@canonry/val-kit@0.1.0/perception'
+import type { PerceptionReport } from 'npm:@canonry/val-kit@0.2.0/perception'
 
 /**
  * The reuse namespace for this product. It is the FIRST field of every

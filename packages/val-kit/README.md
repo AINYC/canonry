@@ -19,7 +19,7 @@ npm install @canonry/val-kit
 A Val Town val ignores import maps, so import it by fully-qualified specifier:
 
 ```ts
-import { runVisibilityProbe } from 'npm:@canonry/val-kit@0.1.0/visibility'
+import { runVisibilityProbe } from 'npm:@canonry/val-kit@0.2.0/visibility'
 ```
 
 ## Subpaths

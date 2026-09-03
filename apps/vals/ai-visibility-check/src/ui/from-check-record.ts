@@ -2,14 +2,14 @@ import {
   type CheckRecord,
   PUBLIC_CHECK_UNAVAILABLE,
   PUBLIC_RATE_LIMITED_ERROR_CODE,
-} from 'npm:@canonry/val-kit@0.1.0/jobs'
+} from 'npm:@canonry/val-kit@0.2.0/jobs'
 import {
   computeMentionShare,
   computeShareOfVoice,
   type ShareOfVoice,
   type VisibilityEvidence,
   type VisibilityReport,
-} from 'npm:@canonry/val-kit@0.1.0/visibility'
+} from 'npm:@canonry/val-kit@0.2.0/visibility'
 import type { CheckResult } from '../runtime/check-result.ts'
 import { orderFactors } from '../site-health/factor-order.ts'
 import type { SiteHealthPageSample, SiteHealthSample } from '../site-health/types.ts'

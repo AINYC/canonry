@@ -1,4 +1,4 @@
-import type { ValTownConfig } from 'npm:@canonry/val-kit@0.1.0/config'
+import type { ValTownConfig } from 'npm:@canonry/val-kit@0.2.0/config'
 import {
   checkFingerprint,
   createRequestBoundDispatcher,
@@ -6,10 +6,10 @@ import {
   newCheckRecord,
   PUBLIC_CHECK_EXECUTION_LEASE_NAME,
   PUBLIC_RATE_LIMITED_ERROR_CODE,
-} from 'npm:@canonry/val-kit@0.1.0/jobs'
-import type { PerceptionProbePort, PerceptionReport } from 'npm:@canonry/val-kit@0.1.0/perception'
-import { LocalBypassHumanVerifier, UnavailableHumanVerifier } from 'npm:@canonry/val-kit@0.1.0/security'
-import { MemoryCheckStore } from 'npm:@canonry/val-kit@0.1.0/storage'
+} from 'npm:@canonry/val-kit@0.2.0/jobs'
+import type { PerceptionProbePort, PerceptionReport } from 'npm:@canonry/val-kit@0.2.0/perception'
+import { LocalBypassHumanVerifier, UnavailableHumanVerifier } from 'npm:@canonry/val-kit@0.2.0/security'
+import { MemoryCheckStore } from 'npm:@canonry/val-kit@0.2.0/storage'
 import { createValTownApp } from '../../src/app/app.ts'
 import { createPerceptionCheckRunner } from '../../src/jobs/perception-check.ts'
 import { CHECK_FINGERPRINT_NAMESPACE, type PerceptionCheckResult } from '../../src/runtime/check-result.ts'

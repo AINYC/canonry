@@ -1,4 +1,4 @@
-import { type CheckRecord, PUBLIC_RATE_LIMITED_ERROR_CODE } from 'npm:@canonry/val-kit@0.1.0/jobs'
+import { type CheckRecord, PUBLIC_RATE_LIMITED_ERROR_CODE } from 'npm:@canonry/val-kit@0.2.0/jobs'
 import type { CheckResult } from '../../src/runtime/check-result.ts'
 import {
   assetUrl,

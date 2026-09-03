@@ -1,4 +1,4 @@
-import { MENTION_EXTRACT_LIMITS, VAL_TOWN_GEMINI_VISIBILITY_LIMITS } from 'npm:@canonry/val-kit@0.1.0/visibility'
+import { MENTION_EXTRACT_LIMITS, VAL_TOWN_GEMINI_VISIBILITY_LIMITS } from 'npm:@canonry/val-kit@0.2.0/visibility'
 import { PUBLIC_CHECK_WORK_BUDGET_MS } from '../../src/jobs/public-check.ts'
 
 function assert(condition: unknown, message: string): asserts condition {

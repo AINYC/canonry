@@ -24,7 +24,7 @@ import {
   uniqueStable,
 } from './runtime.js'
 
-export const DEFAULT_GEMINI_VISIBILITY_MODEL = 'gemini-2.5-flash'
+export const DEFAULT_GEMINI_VISIBILITY_MODEL = 'gemini-3.5-flash'
 
 /**
  * Thinking tokens a probe may spend, out of its `maxOutputTokens`. Bounded so

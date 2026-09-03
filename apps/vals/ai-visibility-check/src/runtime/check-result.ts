@@ -8,7 +8,7 @@
  * a second val store an entirely different result in the same table without
  * either product being able to serve the other's cached work.
  */
-import type { VisibilityReport } from 'npm:@canonry/val-kit@0.1.0/visibility'
+import type { VisibilityReport } from 'npm:@canonry/val-kit@0.2.0/visibility'
 import type { SiteHealthSample } from '../site-health/types.ts'
 
 /**

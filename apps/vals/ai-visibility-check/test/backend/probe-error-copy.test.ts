@@ -3,7 +3,7 @@ import {
   runVisibilityProbe,
   type VisibilityProviderAdapter,
   type VisibilityProviderResponse,
-} from 'npm:@canonry/val-kit@0.1.0/visibility'
+} from 'npm:@canonry/val-kit@0.2.0/visibility'
 import { publicProbeError, visibilityPhaseError } from '../../src/jobs/public-check.ts'
 
 function equal<T>(actual: T, expected: T, message = 'values differ'): void {

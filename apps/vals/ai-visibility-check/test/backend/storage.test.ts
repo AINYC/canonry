@@ -8,7 +8,7 @@
  * orchestration, against the same two stores.
  */
 import { DatabaseSync } from 'node:sqlite'
-import type { ValTownConfig } from 'npm:@canonry/val-kit@0.1.0/config'
+import type { ValTownConfig } from 'npm:@canonry/val-kit@0.2.0/config'
 import {
   type CheckRecord,
   checkFingerprint,
@@ -16,15 +16,15 @@ import {
   createRequestBoundDispatcher,
   newCheckRecord,
   PUBLIC_CHECK_EXECUTION_LEASE_NAME,
-} from 'npm:@canonry/val-kit@0.1.0/jobs'
-import { LocalBypassHumanVerifier } from 'npm:@canonry/val-kit@0.1.0/security'
+} from 'npm:@canonry/val-kit@0.2.0/jobs'
+import { LocalBypassHumanVerifier } from 'npm:@canonry/val-kit@0.2.0/security'
 import {
   MemoryCheckStore,
   ValSqliteCheckStore,
   type ValSqliteClient,
   type ValSqliteResult,
   type ValSqliteStatement,
-} from 'npm:@canonry/val-kit@0.1.0/storage'
+} from 'npm:@canonry/val-kit@0.2.0/storage'
 import { createValTownApp } from '../../src/app/app.ts'
 import { createPublicCheckRunner } from '../../src/jobs/public-check.ts'
 import { CHECK_FINGERPRINT_NAMESPACE, type CheckResult } from '../../src/runtime/check-result.ts'

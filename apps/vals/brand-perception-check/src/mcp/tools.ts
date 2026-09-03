@@ -13,10 +13,10 @@
  * every client across both protocol eras renders text content, while typed
  * output is newer and unevenly implemented.
  */
-import { type CheckRecord, checkFingerprint, type CheckStore, isCheckExpired } from 'npm:@canonry/val-kit@0.1.0/jobs'
-import type { PerceptionEvidence } from 'npm:@canonry/val-kit@0.1.0/perception'
-import { readSkillResource } from 'npm:@canonry/val-kit@0.1.0/mcp'
-import { normalizePublicDomain, PublicUrlError } from 'npm:@canonry/val-kit@0.1.0/security'
+import { type CheckRecord, checkFingerprint, type CheckStore, isCheckExpired } from 'npm:@canonry/val-kit@0.2.0/jobs'
+import type { PerceptionEvidence } from 'npm:@canonry/val-kit@0.2.0/perception'
+import { readSkillResource } from 'npm:@canonry/val-kit@0.2.0/mcp'
+import { normalizePublicDomain, PublicUrlError } from 'npm:@canonry/val-kit@0.2.0/security'
 import { CHECK_FINGERPRINT_NAMESPACE, type PerceptionCheckResult } from '../runtime/check-result.ts'
 
 const CHECK_ID = /^[0-9a-f-]{36}$/i
