@@ -2,8 +2,7 @@
   "version": "5",
   "specifiers": {
     "npm:@canonry/aeo-audit@7.1.0": "7.1.0",
-    "npm:@canonry/val-kit@0.1.0": "0.1.0",
-    "npm:@google/genai@1.46.0": "1.46.0",
+    "npm:@canonry/val-kit@0.2.0": "0.2.0",
     "npm:@libsql/client@0.17.2": "0.17.2",
     "npm:hono@4.12.25": "4.12.25"
   },
@@ -17,8 +16,8 @@
       ],
       "bin": true
     },
-    "@canonry/val-kit@0.1.0": {
-      "integrity": "sha512-BEFLIrdOLkwO4I9t1j3OHsl2LYcBP6QLNfSmaJMNo7w7IIrGoCKGmXHg6L1OBmFYFA0RwnXmI9PssRKpDLjtPw==",
+    "@canonry/val-kit@0.2.0": {
+      "integrity": "sha512-ZhONFlG4XwBBo4Iyrcc3neR24Y1dP40E5eM8IiEOg4sqttvi1xvqC6HvgxpdB9oPfcP+Jq+MWdpkxYoQ78Yjzw==",
       "dependencies": [
         "@google/genai"
       ]
@@ -142,8 +141,8 @@
     "@protobufjs/utf8@1.1.2": {
       "integrity": "sha512-b1UQwcEZ4yCnMCD8DAL1VlbvBJE9/IX4FTIp7BG1xYpf29SLazLSrqUkj4w7Y5y7cCVP6E5tcqqcI0xemPkHug=="
     },
-    "@types/node@26.4.0": {
-      "integrity": "sha512-faiGnoIrLH/V8cibOMEAZ8pMw6oXqSukl29ra4mN8GdaB2ZewzeaLj+INpV5N+Z1eKWzY+IzaIZH2EIR6YZRNQ==",
+    "@types/node@26.4.1": {
+      "integrity": "sha512-k97ENvZWtvA6yqz5/FS6a7duDgOPEeOQOc2iKS/nY6mX6qJUKtLnWzQS+Xj6tXweyj6ZcTAK2Qecetnvi9nCLA==",
       "dependencies": [
         "undici-types"
       ]
