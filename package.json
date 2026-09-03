@@ -67,6 +67,5 @@
   },
   "engines": {
     "node": ">=22.14.0 <27"
-  },
-  "workspaces": ["apps/*", "packages/*"]
+  }
 }
