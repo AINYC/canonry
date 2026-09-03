@@ -563,6 +563,15 @@ deployment serves reads and skills but refuses to spend.
    first request instead of at the push.
 2. Refresh the production `deno.lock` with `deno check --allow-import main.http.tsx` (plain config, no `--frozen`) and
    commit it. `deno.dev.lock` is separate and is not touched by this.
+
+> **Deno blocks a freshly published version for 24 hours.** `deno check` applies a
+> minimum dependency age policy (default 24h) to reduce supply-chain risk, so the
+> step above fails with "blocked by the minimum dependency age policy" if the kit
+> was published minutes ago. Pass `--min-dep-age 0` to generate the lock anyway —
+> defensible for a first-party package this repo just built and published from a
+> reviewed commit. The override is only needed to CREATE the lock: once the lock
+> pins the version with its integrity hash, `--frozen` resolves from the lock and
+> the policy does not apply, so the deploy workflow needs no flag and no config.
 3. Regenerate the skill mirror with `node scripts/sync-val-town-skills.mjs`.
 4. Run the verification commands above, including `deno task check:prod`.
 5. Run `vt push --dry-run` and review the file plan. A local push reads `.vt/state.json`; CI has none, so the deploy
