@@ -1,3 +1,4 @@
+import { type CheckRecord, PUBLIC_RATE_LIMITED_ERROR_CODE } from 'npm:@canonry/val-kit@0.1.0/jobs'
 import {
   assetUrl,
   canonryDemoClientScript,
@@ -8,7 +9,6 @@ import {
   renderCanonryDemo,
   toCanonryDemoViewModel,
 } from '../../src/ui/index.ts'
-import { type CheckRecord, PUBLIC_RATE_LIMITED_ERROR_CODE } from '../../src/runtime/types.ts'
 
 declare const Deno: {
   test(name: string, fn: () => void | Promise<void>): void

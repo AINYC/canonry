@@ -1,7 +1,10 @@
-import { runVisibilityProbe } from '../../src/visibility/runner.ts'
+import {
+  emptyAnswerReason,
+  runVisibilityProbe,
+  type VisibilityProviderAdapter,
+  type VisibilityProviderResponse,
+} from 'npm:@canonry/val-kit@0.1.0/visibility'
 import { publicProbeError, visibilityPhaseError } from '../../src/jobs/public-check.ts'
-import { emptyAnswerReason } from '../../src/visibility/gemini.ts'
-import type { VisibilityProviderAdapter, VisibilityProviderResponse } from '../../src/visibility/contracts.ts'
 
 function equal<T>(actual: T, expected: T, message = 'values differ'): void {
   if (!Object.is(actual, expected)) {

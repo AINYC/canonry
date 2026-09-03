@@ -1,7 +1,6 @@
+import { MAX_USER_QUERIES } from 'npm:@canonry/val-kit@0.1.0/jobs'
+import { canonryDemoStyles, canonryGlyph, canonryMark } from 'npm:@canonry/val-kit@0.1.0/ui'
 import { canonryDemoClientScript, QUERY_HINT_SUFFIX } from './client.ts'
-import { canonryGlyph, canonryMark } from './mark.ts'
-import { canonryDemoStyles } from './styles.ts'
-import { MAX_USER_QUERIES } from '../runtime/records.ts'
 import type {
   CanonryDemoViewModel,
   DemoUiStatus,

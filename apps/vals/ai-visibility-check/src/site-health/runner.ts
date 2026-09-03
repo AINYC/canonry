@@ -1,8 +1,13 @@
 import { runSiteCrawl } from 'npm:@canonry/aeo-audit@7.1.0'
 import type { CrawlPageObservation, SiteCrawlOptions, SiteCrawlReport } from 'npm:@canonry/aeo-audit@7.1.0'
-import { wwwAlternate } from '../security/url.ts'
+import type {
+  FactorSample,
+  SiteHealthPageSample,
+  SiteHealthRunner,
+  SiteHealthSample,
+} from 'npm:@canonry/val-kit@0.1.0/jobs'
+import { wwwAlternate } from 'npm:@canonry/val-kit@0.1.0/security'
 import { buildSiteMap } from './site-map.ts'
-import type { FactorSample, SiteHealthPageSample, SiteHealthRunner, SiteHealthSample } from '../runtime/types.ts'
 
 export const VAL_TOWN_SITE_HEALTH_LIMITS = Object.freeze({
   mode: 'full' as const,

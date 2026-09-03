@@ -1,9 +1,9 @@
 import {
   CHECK_RESULT_SCHEMA_VERSION,
-  type CheckRecord,
   type CheckResult,
   type CheckStore,
-  type JobDispatcher,
+  PUBLIC_CHECK_EXECUTION_LEASE_MS,
+  PUBLIC_CHECK_EXECUTION_LEASE_NAME,
   PUBLIC_CHECK_UNAVAILABLE,
   type PublicCheckDispatchOptions,
   type PublicCheckRunner,
@@ -11,19 +11,15 @@ import {
   type SiteHealthSample,
   type VisibilityProbePort,
   type VisibilityReport,
-} from '../runtime/types.ts'
-import { safeProviderErrorMessage } from '../visibility/runtime.ts'
+} from 'npm:@canonry/val-kit@0.1.0/jobs'
+import { safeProviderErrorMessage } from 'npm:@canonry/val-kit@0.1.0/visibility'
 
-/** Shared with admission so a new paid check holds capacity before quota spend. */
 /**
  * Ceiling for one check's provider work. The visibility probe and the site
  * crawl run under it in parallel, so this is the budget the probe phase's own
  * planner + probes + extraction deadlines have to fit inside.
  */
 export const PUBLIC_CHECK_WORK_BUDGET_MS = 45_000
-
-export const PUBLIC_CHECK_EXECUTION_LEASE_NAME = 'public-check-execution'
-export const PUBLIC_CHECK_EXECUTION_LEASE_MS = 55_000
 
 const SITE_HEALTH_TIMEOUT_ERROR = 'The Technical AEO sample timed out.'
 const SITE_HEALTH_NO_PUBLIC_PAGES_ERROR = 'No public pages could be audited in the Technical AEO sample.'
@@ -98,11 +94,6 @@ export interface PublicCheckRunnerOptions {
   siteHealthRunner: SiteHealthRunner
   ttlMs: number
   now?: () => Date
-}
-
-/** Executes in the request lifetime. Val Town does not guarantee fire-and-forget work after a response. */
-export function createRequestBoundDispatcher(runner: PublicCheckRunner): JobDispatcher {
-  return { dispatch: (checkId, dispatchOptions) => runner.run(checkId, dispatchOptions) }
 }
 
 export function createPublicCheckRunner(options: PublicCheckRunnerOptions): PublicCheckRunner {
@@ -210,27 +201,6 @@ export function createPublicCheckRunner(options: PublicCheckRunnerOptions): Publ
         }
       }
     },
-  }
-}
-
-export function newCheckRecord(
-  input: { id: string; fingerprint: string; domain: string; now: Date; userQueries?: readonly string[] },
-): CheckRecord {
-  const timestamp = input.now.toISOString()
-  return {
-    id: input.id,
-    fingerprint: input.fingerprint,
-    domain: input.domain,
-    userQueries: [...(input.userQueries ?? [])],
-    status: 'queued',
-    createdAt: timestamp,
-    updatedAt: timestamp,
-    expiresAt: null,
-    result: null,
-    errorCode: null,
-    errorMessage: null,
-    leaseOwner: null,
-    leaseUntil: null,
   }
 }
 

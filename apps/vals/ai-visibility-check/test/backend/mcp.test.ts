@@ -1,9 +1,8 @@
+import type { ValTownConfig } from 'npm:@canonry/val-kit@0.1.0/config'
+import { type CheckRecord, checkFingerprint, type JobDispatcher } from 'npm:@canonry/val-kit@0.1.0/jobs'
+import { LocalBypassHumanVerifier } from 'npm:@canonry/val-kit@0.1.0/security'
+import { MemoryCheckStore } from 'npm:@canonry/val-kit@0.1.0/storage'
 import { createValTownApp } from '../../src/app/app.ts'
-import type { ValTownConfig } from '../../src/config/index.ts'
-import { checkFingerprint } from '../../src/runtime/records.ts'
-import type { CheckRecord, JobDispatcher } from '../../src/runtime/types.ts'
-import { LocalBypassHumanVerifier } from '../../src/security/turnstile.ts'
-import { MemoryCheckStore } from '../../src/storage/memory.ts'
 
 function equal<T>(actual: T, expected: T, message = 'values differ'): void {
   if (!Object.is(actual, expected)) {

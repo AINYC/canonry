@@ -1,9 +1,13 @@
+import {
+  type CheckRecord,
+  checkFingerprint,
+  type FactorSample,
+  type SiteHealthSample,
+} from 'npm:@canonry/val-kit@0.1.0/jobs'
+import { MemoryCheckStore } from 'npm:@canonry/val-kit@0.1.0/storage'
+import { callMcpTool } from '../../src/mcp/tools.ts'
 import { compareFactorRank, orderFactors } from '../../src/site-health/factor-order.ts'
 import { toCanonryDemoViewModel } from '../../src/ui/from-check-record.ts'
-import { callMcpTool } from '../../src/mcp/tools.ts'
-import { checkFingerprint } from '../../src/runtime/records.ts'
-import { MemoryCheckStore } from '../../src/storage/memory.ts'
-import type { CheckRecord, FactorSample, SiteHealthSample } from '../../src/runtime/types.ts'
 
 function equal<T>(actual: T, expected: T, message = 'values differ'): void {
   if (!Object.is(actual, expected)) {

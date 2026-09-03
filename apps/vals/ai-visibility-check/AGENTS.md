@@ -18,8 +18,16 @@ bundled skills all name Canonry and link to it. Keep that; a sample that does no
 
 - Keep the host Deno-native and web-standard. Do not import the Node Canonry server, Fastify, `better-sqlite3`, or the
   Vite dashboard.
-- Import reusable engines through exact pins. Technical AEO uses `@canonry/aeo-audit`; AI Visibility is implemented
-  locally under `src/visibility/` so this Val owns its Gemini planner, adapter, and evidence runner.
+- Import reusable code through exact pins. Technical AEO uses `@canonry/aeo-audit`; everything a public check runs ON
+  comes from `@canonry/val-kit`.
+- **The kit is the shared core; this Val is the product surface.** `@canonry/val-kit` owns the visibility contracts,
+  brand matcher, evidence runner, share of voice, and Gemini adapter; the URL and Turnstile guards; both `CheckStore`
+  implementations; check-record identity and the generic admission/lease machinery; MCP framing and the generated skill
+  resources; and the design tokens and mark. What stays here is what this Val IS: its HTTP routes and response policy,
+  the check runner's phases and every sentence a visitor reads, the Technical AEO adapter, its MCP tool surface, and its
+  HTML. The admission test is mechanical — a module that references a visibility or site-health phase, string, or the
+  product's own offering is not generic, whatever else is true of it. Moving one here is not a fork: delete the local
+  copy and import the kit, or the two drift and only production finds out which one shipped.
 - The browser never receives provider, Turnstile-secret, deployment, or signing credentials.
 - Anonymous work is bounded by human verification, atomic quotas, cache reuse, output clipping, and hard provider/crawl
   deadlines.
@@ -34,14 +42,17 @@ bundled skills all name Canonry and link to it. Keep that; a sample that does no
 - Mention and citation are independent signals. Summary denominators contain successful checks only; failures stay
   visible.
 - The visibility core (`contracts`, `runtime`, `brand`, `runner`) must not read environment, storage, or HTTP state.
-  Only the Gemini adapter makes provider calls; the host owns credentials, quotas, and scheduling.
+  Only the Gemini adapter makes provider calls; the host owns credentials, quotas, and scheduling. That is now the
+  kit's own seam rule — see `packages/val-kit/AGENTS.md` — and it is why `loadValTownConfig` takes the environment as
+  an argument rather than reading `Deno.env` itself.
 - **Never render data the Val did not measure.** The landing page ships an empty state, not a fixture. It previously
   drew a four-engine trend with invented model identifiers, labelled only by a badge in the page header, well above
   the numbers it qualified — anyone who scrolled read fabrication as measurement, and it advertised three engines this
   Val does not run. A fresh check is a single Gemini snapshot; there is no history to draw and none may be invented.
 - Never present the Val as the full platform. Bounds stay stated on the surface that shows the number.
-- `src/mcp/skills/` is generated. Edit `skills/<name>/` at the repository root, then run
-  `node scripts/sync-val-town-skills.mjs` and commit the result. Never hand-edit a generated module.
+- The bundled skills are generated into the KIT (`packages/val-kit/src/mcp/skills/`), not into this directory. Edit
+  `skills/<name>/` at the repository root, then run `node scripts/sync-val-town-skills.mjs` and commit the result. CI
+  runs it with `--check`. Never hand-edit a generated module.
 
 ## MCP endpoint
 
@@ -70,11 +81,11 @@ checks the UI shows.
 
 ## Share of voice
 
-`src/visibility/share.ts` ranks every domain the engine attributed as a source across the answers.
+The kit's `visibility/share.ts` ranks every domain the engine attributed as a source across the answers.
 
 - **It is CITATION share, and the label must say so.** Mention share needs the rivals' brand names so they can be
   matched in the answer text. A public check has no competitor list, and the probe contract in
-  `src/visibility/contracts.ts` forbids the shortcut: brand names are exact approved aliases and a prose alias is
+  the kit's `visibility/contracts.ts` forbids the shortcut: brand names are exact approved aliases and a prose alias is
   never derived from a domain. Inferring "stripe.com is in the sources, so the word Stripe here is a rival mention"
   is precisely the guess that contract rules out. Do not add it.
 - **A domain counts once per answer, never once per link.** Ten links to one documentation site is one site holding
@@ -106,7 +117,7 @@ checks the UI shows.
   of the denominator entirely. Counting it as naming nobody would deflate every share by an outage instead of
   reporting one.
 - **The Val budget is now five provider calls** (1 planner, 3 probes, 1 extraction), pinned by
-  `visibility-gemini.test.ts`. That number is meant to be noticed when a feature adds a call.
+  the kit's `visibility-gemini.test.ts`. That number is meant to be noticed when a feature adds a call.
 - **It is a donut, and the hole is the point.** The target's own share is written into the ring's centre and stated
   nowhere else. A share chart where the reader hunts for their own row has buried its own headline, and the section
   header used to print the same number a second time. Arc lengths come from the COUNTS, never from the rounded display
@@ -133,6 +144,13 @@ every engine release and the val would have sat on an old engine while Canonry m
 
 A new file importing the engine is picked up with no change to either, which is the point of scanning rather than
 listing.
+
+`npm:@canonry/val-kit@0.1.0/<subpath>` is the same pattern for the same reason, and it is guarded the same way:
+`packages/canonry/test/val-kit-dependency-contract.test.ts` asserts each val's inline kit specifiers collapse to one
+version, that it equals `packages/val-kit/package.json`, and that the two Deno configs stay on their respective sides
+of the seam. It iterates `apps/vals/*`, so a second val is covered on the day it lands. The deploy workflow repeats the
+version half against public npm, because a pin CI resolved from the workspace still has to exist on the registry before
+Val Town can resolve it.
 
 ## "Partial" was written in THREE places, and fixing one hid the other two
 
@@ -199,8 +217,8 @@ The same bug landed three separate times before the pattern was obvious:
 | probe adapter | "returned no answer text", one lost answer per check | `512` of 2,400 — it simulates an engine, so some reasoning is wanted |
 | planner | "returned invalid JSON" from `JSON.parse('')`, losing every generated question | `0` of 1,200 — emitting a small JSON object needs no thought |
 
-`visibility-gemini.test.ts` drives all three through a capturing client and fails if any omits an explicit budget, or
-sets one that could consume its whole allowance. A new call site cannot inherit the default quietly.
+The kit's `visibility-gemini.test.ts` drives all three through a capturing client and fails if any omits an explicit
+budget, or sets one that could consume its whole allowance. A new call site cannot inherit the default quietly.
 
 ## An empty answer says which of eleven things happened
 
@@ -230,8 +248,8 @@ were found by reading real failed checks rather than by testing.
   returns an empty report for work the visitor already specified. A planning failure is now fatal only when it leaves
   nothing to probe.
 
-The call-count pin in `visibility-gemini.test.ts` moved 5 -> 6 to cover the retry. That number is meant to be noticed:
-it is the check on what a public visitor can make this val spend.
+The call-count pin in the kit's `visibility-gemini.test.ts` moved 5 -> 6 to cover the retry. That number is meant to
+be noticed: it is the check on what a public visitor can make this val spend.
 
 ## The probe budget is arithmetic, not a guess
 
@@ -412,7 +430,7 @@ tool at this size, not a shortcut.
 ```mermaid
 flowchart LR
     B[Browser] --> H[Val Town Deno host]
-    H --> V[Val-local visibility core]
+    H --> V["@canonry/val-kit visibility core"]
     H --> A[@canonry/aeo-audit]
     V --> G[Gemini: 1 plan + 3 queries]
     A --> C[5-page site sample]
@@ -425,35 +443,56 @@ flowchart LR
     M --> N[Any MCP client]
 ```
 
-The Deno host owns HTTP routes, Turnstile, quotas, cache records, job leases, and HTML. Technical AEO comes from the
-pinned audit engine. This Val owns the visibility contracts, bounded evidence runner, Gemini planner, and Gemini
-adapter. The visibility core does not read environment, storage, or HTTP state.
+The Deno host owns HTTP routes, the check runner's phases, quota policy, and HTML. Technical AEO comes from the pinned
+audit engine. The visibility contracts, bounded evidence runner, Gemini planner and adapter, the URL and Turnstile
+guards, and both stores come from the pinned kit; none of them read environment, storage, or HTTP state.
 
 ```text
 apps/vals/ai-visibility-check/
 ├── main.http.tsx                 Val HTTP entry
-├── deno.json                     Deno tasks and lint policy
-├── deno.lock                     Deno dependency lock
+├── deno.json                     PUSHED production graph: Deno tasks and lint policy
+├── deno.lock                     Production dependency lock (public npm)
+├── deno.dev.json                 Local dev graph: links @canonry/val-kit from the workspace
+├── deno.dev.lock                 Dev dependency lock (linked kit)
 ├── .vt/state.json                Val and branch identity
 ├── src/
 │   ├── app/                      HTTP routes and response policy
-│   ├── config/                   Environment configuration
-│   ├── jobs/                     Request-bound check runner
-│   ├── mcp/                      MCP transport, tools, and generated skill resources
-│   ├── security/                 URL and Turnstile checks
-│   ├── site-health/              Technical AEO adapter
-│   ├── storage/                  SQLite and memory ports
-│   ├── ui/                       HTML, CSS, and browser script
-│   └── visibility/               Local contracts, evidence runner, Gemini planner and adapter
+│   ├── jobs/                     Request-bound check runner: phases, budget, sanitizers, visitor copy
+│   ├── mcp/                      This Val's MCP server and tool surface
+│   ├── site-health/              Technical AEO adapter, link-graph sample, factor ordering
+│   └── ui/                       View models, HTML, and browser script
 └── test/                         Deno backend and UI tests, plus the local dev server
 ```
 
+Everything the tree no longer lists — `visibility/`, `security/`, `storage/`, check-record identity and the lease
+machinery, MCP framing, the generated skills, and the design tokens — is `@canonry/val-kit`, imported by subpath.
+
 ## Dependencies
 
-Every dependency is fully qualified at the import site (`npm:hono@4.12.25`, `https://esm.town/v/std/sqlite/main.ts`).
-Val Town resolves the module graph from esm.town and does NOT apply a pushed `deno.json` import map, so a bare
-specifier deploys and then throws `not a dependency and not in import map` at the first request. `deno.json` therefore
-excludes the `no-import-prefix` lint rule, which exists to enforce the opposite convention.
+Every dependency is fully qualified at the import site (`npm:hono@4.12.25`, `npm:@canonry/val-kit@0.1.0/jobs`,
+`https://esm.town/v/std/sqlite/main.ts`). Val Town resolves the module graph from esm.town and does NOT apply a pushed
+`deno.json` import map, so a bare specifier deploys and then throws `not a dependency and not in import map` at the
+first request. `deno.json` therefore excludes the `no-import-prefix` lint rule, which exists to enforce the opposite
+convention.
+
+### Two configs, because the kit is resolved from two different places
+
+`deno.json` is PUSHED. It is the production graph, and it must describe only what Val Town can see: the public
+registry. A `links` entry there would point at a workspace no deployed val has, and a shared `lock` would be rewritten
+with a resolution production cannot reproduce. So it carries no `links`, no `nodeModulesDir`, and no `lock` key, and
+the contract test fails if one appears.
+
+`deno.dev.json` is LOCAL, and `.vtignore` keeps it (and `deno.dev.lock` and `node_modules/`) out of the push. It
+duplicates `compilerOptions`, `lint`, and `fmt` — Deno has no `extends`, so there is no way to share them — and adds
+`links: ["../../../packages/val-kit"]`, `nodeModulesDir: "auto"` (linking an npm package REQUIRES a node_modules
+directory; without it Deno refuses outright), and its own `lock: "deno.dev.lock"`. That is what lets one PR change the
+kit and this val together, before the kit is published. `deno.dev.lock` is committed, because `--frozen` needs it and
+CI checks out fresh.
+
+**Build the kit first.** Deno consumes an npm package as built JavaScript, and the kit's `exports` point at `dist/`,
+so `pnpm --filter @canonry/val-kit build` has to run before any Deno task here. The `check`, `test`, and `dev` tasks
+guard on `dist/index.js` and say so rather than failing inside a resolution error. Deno re-syncs its copy of a linked
+package whenever that `dist/` changes, so rebuilding is the whole refresh step.
 
 ## Fixed public limits
 
@@ -482,9 +521,14 @@ In-memory storage and no Turnstile, so the UI and `/mcp` both work without crede
 
 ## Verification
 
-Run `deno task check`, `deno task lint`, and `deno task test` from this directory, and
-`node scripts/sync-val-town-skills.mjs --check` from the repository root. A deployment additionally requires a
-`vt push --dry-run` and a live health smoke test.
+Run `pnpm --filter @canonry/val-kit build` from the repository root, then `deno task check`, `deno task lint`, and
+`deno task test` from this directory, plus `node scripts/sync-val-town-skills.mjs --check` from the root. Those three
+tasks validate the DEV graph, which is what CI's `vals` matrix job runs.
+
+`deno task check:prod` validates the PRODUCTION graph instead (plain `deno.json`, `--frozen`). It cannot pass until
+the pinned kit version is on public npm — before that it fails with `npm package '@canonry/val-kit' does not exist` —
+which is the same gate the deploy workflow applies, on purpose. A deployment additionally requires a `vt push
+--dry-run` and a live health smoke test.
 
 ## Production configuration
 
@@ -497,11 +541,17 @@ deployment serves reads and skills but refuses to spend.
 
 ## Release order
 
-1. Regenerate `deno.lock`, and the skill mirror with `node scripts/sync-val-town-skills.mjs`.
-2. Run the verification commands above.
-3. Run `vt push --dry-run` and review the file plan.
-4. Run `vt push` only after approval.
-5. Request `/healthz` and confirm `{"ok":true}`.
+1. Publish the pinned `@canonry/val-kit` version with the `Publish @canonry/val-kit` workflow
+   (`.github/workflows/publish-val-kit.yml`). Until then the production graph cannot resolve, and both `check:prod`
+   and the deploy workflow fail closed — by design, since a val that deploys against an unpublished pin throws at the
+   first request instead of at the push.
+2. Refresh the production `deno.lock` with `deno check --allow-import main.http.tsx` (plain config, no `--frozen`) and
+   commit it. `deno.dev.lock` is separate and is not touched by this.
+3. Regenerate the skill mirror with `node scripts/sync-val-town-skills.mjs`.
+4. Run the verification commands above, including `deno task check:prod`.
+5. Run `vt push --dry-run` and review the file plan.
+6. Run `vt push` only after approval.
+7. Request `/healthz` and confirm `{"ok":true}`.
 
 `vt push` makes the Val match this directory. It deletes remote-only files, so do not edit production in the Val Town
 editor.
@@ -579,8 +629,9 @@ submit, which is a different case: a token is redeemed exactly once, and the pag
 
 ## Branding
 
-`src/ui/mark.ts` derives two forms from `plugins/canonry/assets/logo-dark.svg`, because a logo and a glyph do
-different jobs.
+The kit's `ui/mark.ts` derives two forms from `plugins/canonry/assets/logo-dark.svg`, because a logo and a glyph do
+different jobs. `src/ui/index.ts` re-exports both alongside `canonryDemoStyles`, so the page still imports its whole
+surface from one place.
 
 - `canonryMark` keeps the plate and serves the favicon, where a mark needs its own field.
 - `canonryGlyph` removes the plate and crops the viewBox to the artwork. Inside the plate the bird fills 58% of the

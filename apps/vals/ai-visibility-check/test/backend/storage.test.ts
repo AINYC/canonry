@@ -1,26 +1,36 @@
+/**
+ * Capacity behaviour where the store meets THIS val's runner and HTTP app.
+ *
+ * The store-level parity cases — admission, quota, reuse, and the global lease
+ * over both `CheckStore` implementations — belong to `@canonry/val-kit` and are
+ * tested there. What is left here cannot move with them: it drives
+ * `createPublicCheckRunner` and `createValTownApp`, which are this val's own
+ * orchestration, against the same two stores.
+ */
 import { DatabaseSync } from 'node:sqlite'
-import { createValTownApp } from '../../src/app/app.ts'
-import type { ValTownConfig } from '../../src/config/index.ts'
+import type { ValTownConfig } from 'npm:@canonry/val-kit@0.1.0/config'
 import {
-  createPublicCheckRunner,
+  type CheckRecord,
+  checkFingerprint,
+  type CheckStore,
   createRequestBoundDispatcher,
   newCheckRecord,
   PUBLIC_CHECK_EXECUTION_LEASE_NAME,
-} from '../../src/jobs/public-check.ts'
-import type { CheckAdmissionInput, CheckRecord, CheckStore, SiteHealthRunner } from '../../src/runtime/types.ts'
-import { LocalBypassHumanVerifier } from '../../src/security/turnstile.ts'
-import { checkFingerprint } from '../../src/runtime/records.ts'
-import { MemoryCheckStore } from '../../src/storage/memory.ts'
+  type SiteHealthRunner,
+} from 'npm:@canonry/val-kit@0.1.0/jobs'
+import { LocalBypassHumanVerifier } from 'npm:@canonry/val-kit@0.1.0/security'
 import {
+  MemoryCheckStore,
   ValSqliteCheckStore,
   type ValSqliteClient,
   type ValSqliteResult,
   type ValSqliteStatement,
-} from '../../src/storage/val-sqlite.ts'
+} from 'npm:@canonry/val-kit@0.1.0/storage'
+import { createValTownApp } from '../../src/app/app.ts'
+import { createPublicCheckRunner } from '../../src/jobs/public-check.ts'
 
 const NOW = new Date('2026-09-01T12:00:00.000Z')
 const NOW_ISO = NOW.toISOString()
-const DAY = '2026-09-01'
 
 function equal<T>(actual: T, expected: T, message = 'values differ'): void {
   if (!Object.is(actual, expected)) {
@@ -28,27 +38,12 @@ function equal<T>(actual: T, expected: T, message = 'values differ'): void {
   }
 }
 
-function requireRecord(result: Awaited<ReturnType<CheckStore['admit']>>): CheckRecord {
-  if (!('record' in result)) throw new Error(`expected an admitted check, got ${result.kind}`)
-  return result.record
-}
-
 function candidate(id: string, domain = 'example.com', now = NOW): CheckRecord {
   return newCheckRecord({ id, fingerprint: checkFingerprint(domain), domain, now })
 }
 
-function admission(record: CheckRecord, now = NOW_ISO): CheckAdmissionInput {
-  return {
-    candidate: record,
-    now,
-    clientQuota: { scope: 'client', subject: 'client-a', day: DAY, max: 3 },
-    globalQuota: { scope: 'global', subject: 'all', day: DAY, max: 100 },
-  }
-}
-
 interface StoreFixture {
   store: CheckStore
-  quotaCount(scope: string, subject: string, day: string): Promise<number>
   quotaRowCount(): Promise<number>
   checkRowCount(): Promise<number>
   close(): void
@@ -68,10 +63,7 @@ class NodeSqliteClient implements ValSqliteClient {
     return this.runBatch(statements)
   }
 
-  protected async runBatch(
-    statements: ValSqliteStatement[],
-    beforeStatement?: (statement: ValSqliteStatement, index: number) => Promise<void>,
-  ): Promise<ValSqliteResult[]> {
+  private async runBatch(statements: ValSqliteStatement[]): Promise<ValSqliteResult[]> {
     const previous = this.batchTail
     let release!: () => void
     this.batchTail = new Promise<void>((resolve) => {
@@ -84,8 +76,7 @@ class NodeSqliteClient implements ValSqliteClient {
       this.database.exec('BEGIN IMMEDIATE')
       began = true
       const results: ValSqliteResult[] = []
-      for (const [index, statement] of statements.entries()) {
-        await beforeStatement?.(statement, index)
+      for (const statement of statements) {
         results.push(executeStatement(this.database, statement))
       }
       this.database.exec('COMMIT')
@@ -104,26 +95,6 @@ class NodeSqliteClient implements ValSqliteClient {
   }
 }
 
-/** Holds one atomic write batch at the old admission-lease boundary. */
-class DelayedBatchNodeSqliteClient extends NodeSqliteClient {
-  readonly firstBatchAtCandidateInsert = gate()
-  readonly releaseFirstBatch = gate()
-  readonly secondBatchRequested = gate()
-  private batchCount = 0
-
-  override batch(statements: ValSqliteStatement[], mode: 'write'): Promise<ValSqliteResult[]> {
-    this.batchModes.push(mode)
-    const batchNumber = ++this.batchCount
-    if (batchNumber === 2) this.secondBatchRequested.release()
-    return this.runBatch(statements, async (_statement, index) => {
-      if (batchNumber === 1 && index === 1) {
-        this.firstBatchAtCandidateInsert.release()
-        await this.releaseFirstBatch.promise
-      }
-    })
-  }
-}
-
 function executeStatement(database: DatabaseSync, input: string | ValSqliteStatement): ValSqliteResult {
   if (typeof input === 'string') {
     database.exec(input)
@@ -138,14 +109,6 @@ function executeStatement(database: DatabaseSync, input: string | ValSqliteState
   return { rows: [] }
 }
 
-function gate(): { promise: Promise<void>; release(): void } {
-  let release!: () => void
-  const promise = new Promise<void>((resolve) => {
-    release = resolve
-  })
-  return { promise, release }
-}
-
 const fixtures: Array<{ name: string; create(): StoreFixture }> = [
   {
     name: 'memory',
@@ -153,9 +116,6 @@ const fixtures: Array<{ name: string; create(): StoreFixture }> = [
       const store = new MemoryCheckStore()
       return {
         store,
-        quotaCount(scope, subject, day) {
-          return Promise.resolve(store.quota.get(`${scope}:${subject}:${day}`) ?? 0)
-        },
         quotaRowCount() {
           return Promise.resolve(store.quota.size)
         },
@@ -172,12 +132,6 @@ const fixtures: Array<{ name: string; create(): StoreFixture }> = [
       const sqlite = new NodeSqliteClient()
       return {
         store: new ValSqliteCheckStore(sqlite),
-        quotaCount(scope, subject, day) {
-          const row = sqlite.database.prepare(
-            'SELECT count FROM canonry_quota WHERE scope = ? AND subject = ? AND day = ?',
-          ).get(scope, subject, day) as { count?: number } | undefined
-          return Promise.resolve(row?.count ?? 0)
-        },
         quotaRowCount() {
           const row = sqlite.database.prepare('SELECT COUNT(*) AS count FROM canonry_quota').get() as { count?: number }
           return Promise.resolve(row.count ?? 0)
@@ -197,113 +151,6 @@ const fixtures: Array<{ name: string; create(): StoreFixture }> = [
 ]
 
 for (const fixtureFactory of fixtures) {
-  Deno.test(`${fixtureFactory.name} admission reclaims an expired running lease on resubmit`, async () => {
-    const fixture = fixtureFactory.create()
-    try {
-      await fixture.store.initialize()
-      const stale = {
-        ...candidate(`stale-${fixtureFactory.name}`),
-        status: 'running' as const,
-        leaseOwner: 'crashed-isolate',
-        leaseUntil: '2026-09-01T11:59:59.000Z',
-      }
-      await fixture.store.create(stale)
-
-      const result = await fixture.store.admit(admission(candidate(`resubmit-${fixtureFactory.name}`)))
-      equal(result.kind, 'reclaimed')
-      equal(requireRecord(result).id, stale.id)
-      const stored = await fixture.store.get(stale.id)
-      equal(stored?.status, 'queued')
-      equal(stored?.leaseOwner, null)
-      equal(stored?.leaseUntil, null)
-      equal(await fixture.quotaCount('client', 'client-a', DAY), 0)
-      equal(await fixture.quotaCount('global', 'all', DAY), 0)
-    } finally {
-      fixture.close()
-    }
-  })
-
-  Deno.test(`${fixtureFactory.name} admission rejects a zero client quota without persisting a check`, async () => {
-    const fixture = fixtureFactory.create()
-    try {
-      await fixture.store.initialize()
-      // A cap of 0 must admit nothing on either store. The SQLite fresh-insert
-      // path once claimed a slot a zero cap forbids, persisting a check while
-      // memory rejected it — a store-parity gap.
-      const result = await fixture.store.admit({
-        ...admission(candidate(`zero-${fixtureFactory.name}`)),
-        clientQuota: { scope: 'client', subject: 'client-a', day: DAY, max: 0 },
-      })
-      equal(result.kind, 'quota-exhausted')
-      equal(await fixture.checkRowCount(), 0, 'no check row is left behind')
-      equal(await fixture.quotaRowCount(), 0, 'no quota row is created for a zero cap')
-    } finally {
-      fixture.close()
-    }
-  })
-
-  Deno.test(`${fixtureFactory.name} admission coalesces concurrent same-domain requests before quota spend`, async () => {
-    const fixture = fixtureFactory.create()
-    try {
-      await fixture.store.initialize()
-      const results = await Promise.all(
-        Array.from(
-          { length: 12 },
-          (_unused, index) => fixture.store.admit(admission(candidate(`same-domain-${fixtureFactory.name}-${index}`))),
-        ),
-      )
-      const created = results.filter((result) => result.kind === 'created')
-      const busy = results.filter((result) => result.kind === 'busy')
-      equal(created.length, 1)
-      equal(busy.length, 0)
-      const id = requireRecord(created[0]!).id
-      for (const result of results) equal(requireRecord(result).id, id)
-      equal(await fixture.quotaCount('client', 'client-a', DAY), 1)
-      equal(await fixture.quotaCount('global', 'all', DAY), 1)
-    } finally {
-      fixture.close()
-    }
-  })
-
-  Deno.test(`${fixtureFactory.name} global lease renews for its holder and rejects another holder`, async () => {
-    const fixture = fixtureFactory.create()
-    try {
-      await fixture.store.initialize()
-      const originalExpiry = new Date(NOW.getTime() + 20_000)
-      const renewalAt = new Date(NOW.getTime() + 10_000)
-      const renewedExpiry = new Date(NOW.getTime() + 60_000)
-      equal(
-        await fixture.store.claimGlobalLease(
-          PUBLIC_CHECK_EXECUTION_LEASE_NAME,
-          'first-isolate',
-          NOW_ISO,
-          originalExpiry.toISOString(),
-        ),
-        true,
-      )
-      equal(
-        await fixture.store.claimGlobalLease(
-          PUBLIC_CHECK_EXECUTION_LEASE_NAME,
-          'first-isolate',
-          renewalAt.toISOString(),
-          renewedExpiry.toISOString(),
-        ),
-        true,
-      )
-      equal(
-        await fixture.store.claimGlobalLease(
-          PUBLIC_CHECK_EXECUTION_LEASE_NAME,
-          'second-isolate',
-          new Date(NOW.getTime() + 21_000).toISOString(),
-          new Date(NOW.getTime() + 80_000).toISOString(),
-        ),
-        false,
-      )
-    } finally {
-      fixture.close()
-    }
-  })
-
   Deno.test(`${fixtureFactory.name} requeues a global-capacity loser without making it terminal`, async () => {
     const fixture = fixtureFactory.create()
     try {
@@ -406,97 +253,6 @@ for (const fixtureFactory of fixtures) {
       fixture.close()
     }
   })
-}
-
-Deno.test('SQLite admission stays atomic when a same-domain retry arrives after the former lease window', async () => {
-  const sqlite = new DelayedBatchNodeSqliteClient()
-  const store = new ValSqliteCheckStore(sqlite)
-  const domain = 'lease-race.example'
-  const afterFormerLease = new Date(NOW.getTime() + 10_001)
-
-  try {
-    await store.initialize()
-    const first = store.admit(admission(candidate('lease-race-first', domain, NOW), NOW_ISO))
-    await sqlite.firstBatchAtCandidateInsert.promise
-
-    let secondSettled = false
-    const second = store.admit(admission(
-      candidate('lease-race-second', domain, afterFormerLease),
-      afterFormerLease.toISOString(),
-    )).then((result) => {
-      secondSettled = true
-      return result
-    })
-    await sqlite.secondBatchRequested.promise
-    await Promise.resolve()
-    equal(secondSettled, false, 'the later admission must wait for the atomic write batch')
-
-    sqlite.releaseFirstBatch.release()
-    const [firstResult, secondResult] = await Promise.all([first, second])
-    equal(firstResult.kind, 'created')
-    equal(secondResult.kind, 'reused')
-    equal(requireRecord(firstResult).id, requireRecord(secondResult).id)
-    equal(sqlite.batchModes.join(','), 'write,write')
-    equal(await quotaCount(sqlite, 'client', 'client-a', DAY), 1)
-    equal(await quotaCount(sqlite, 'global', 'all', DAY), 1)
-    const rows = sqlite.database.prepare('SELECT id FROM canonry_checks WHERE fingerprint = ?').all(
-      checkFingerprint(domain),
-    )
-    equal(rows.length, 1)
-  } finally {
-    sqlite.close()
-  }
-})
-
-Deno.test('SQLite admission preserves quota caps without leaving a pending check', async () => {
-  const clientLimited = new NodeSqliteClient()
-  const globalLimited = new NodeSqliteClient()
-
-  try {
-    const clientStore = new ValSqliteCheckStore(clientLimited)
-    await clientStore.initialize()
-    equal(await clientStore.claimQuota('client', 'client-a', DAY, 1), true)
-    const clientResult = await clientStore.admit({
-      ...admission(candidate('client-capped', 'client-capped.example')),
-      clientQuota: { scope: 'client', subject: 'client-a', day: DAY, max: 1 },
-    })
-    equal(clientResult.kind, 'quota-exhausted')
-    if (clientResult.kind === 'quota-exhausted') equal(clientResult.scope, 'client')
-    equal(await quotaCount(clientLimited, 'client', 'client-a', DAY), 1)
-    equal(checkCount(clientLimited, checkFingerprint('client-capped.example')), 0)
-
-    const globalStore = new ValSqliteCheckStore(globalLimited)
-    await globalStore.initialize()
-    equal(await globalStore.claimQuota('global', 'all', DAY, 1), true)
-    const globalResult = await globalStore.admit({
-      ...admission(candidate('global-capped', 'global-capped.example')),
-      globalQuota: { scope: 'global', subject: 'all', day: DAY, max: 1 },
-    })
-    equal(globalResult.kind, 'quota-exhausted')
-    if (globalResult.kind === 'quota-exhausted') equal(globalResult.scope, 'global')
-    equal(await quotaCount(globalLimited, 'client', 'client-a', DAY), 0)
-    equal(await quotaCount(globalLimited, 'global', 'all', DAY), 1)
-    equal(checkCount(globalLimited, checkFingerprint('global-capped.example')), 0)
-  } finally {
-    clientLimited.close()
-    globalLimited.close()
-  }
-})
-
-function quotaCount(sqlite: NodeSqliteClient, scope: string, subject: string, day: string): Promise<number> {
-  const row = sqlite.database.prepare(
-    'SELECT count FROM canonry_quota WHERE scope = ? AND subject = ? AND day = ?',
-  ).get(scope, subject, day) as { count?: number } | undefined
-  return Promise.resolve(row?.count ?? 0)
-}
-
-function checkCount(sqlite: NodeSqliteClient, fingerprint: string): number {
-  const row = sqlite.database.prepare('SELECT COUNT(*) AS count FROM canonry_checks WHERE fingerprint = ?').get(
-    fingerprint,
-  ) as {
-    count?: number
-  }
-  return row.count ?? 0
 }
 
 function createPublicTestApp(store: CheckStore) {

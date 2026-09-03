@@ -15,12 +15,19 @@
  *   deno task dev            # stubs, no network
  *   GEMINI_API_KEY=… deno task dev
  */
+import { loadValTownConfig } from 'npm:@canonry/val-kit@0.1.0/config'
+import {
+  createRequestBoundDispatcher,
+  type SiteHealthRunner,
+  type SiteHealthSample,
+  type VisibilityProbePort,
+  type VisibilityReport,
+} from 'npm:@canonry/val-kit@0.1.0/jobs'
+import { MemoryCheckStore } from 'npm:@canonry/val-kit@0.1.0/storage'
+import { createGeminiValVisibilityProbe } from 'npm:@canonry/val-kit@0.1.0/visibility'
 import { createValTownApp } from '../src/app/app.ts'
-import { loadValTownConfig } from '../src/config/index.ts'
-import { createPublicCheckRunner, createRequestBoundDispatcher } from '../src/jobs/public-check.ts'
+import { createPublicCheckRunner } from '../src/jobs/public-check.ts'
 import { createSiteHealthRunner } from '../src/site-health/runner.ts'
-import type { SiteHealthRunner, SiteHealthSample, VisibilityProbePort, VisibilityReport } from '../src/runtime/types.ts'
-import { MemoryCheckStore } from '../src/storage/memory.ts'
 import {
   canonryDemoClientScript,
   canonryDemoStyles,
@@ -31,7 +38,6 @@ import {
   renderCanonryDemo,
   toCanonryDemoViewModel,
 } from '../src/ui/index.ts'
-import { createGeminiValVisibilityProbe } from '../src/visibility/gemini-probe.ts'
 
 const PORT = Number(Deno.env.get('PORT') ?? 8787)
 const geminiApiKey = Deno.env.get('GEMINI_API_KEY')?.trim() || null

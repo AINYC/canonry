@@ -1,22 +1,20 @@
-import { createValTownApp } from '../../src/app/app.ts'
-import type { ValTownConfig } from '../../src/config/index.ts'
+import type { ValTownConfig } from 'npm:@canonry/val-kit@0.1.0/config'
 import {
-  createPublicCheckRunner,
+  checkFingerprint,
   createRequestBoundDispatcher,
+  type JobDispatcher,
   newCheckRecord,
   PUBLIC_CHECK_EXECUTION_LEASE_NAME,
-} from '../../src/jobs/public-check.ts'
-import {
-  type JobDispatcher,
   PUBLIC_RATE_LIMITED_ERROR_CODE,
   type SiteHealthRunner,
   type SiteHealthSample,
   type VisibilityProbePort,
   type VisibilityReport,
-} from '../../src/runtime/types.ts'
-import { LocalBypassHumanVerifier, UnavailableHumanVerifier } from '../../src/security/turnstile.ts'
-import { checkFingerprint } from '../../src/runtime/records.ts'
-import { MemoryCheckStore } from '../../src/storage/memory.ts'
+} from 'npm:@canonry/val-kit@0.1.0/jobs'
+import { LocalBypassHumanVerifier, UnavailableHumanVerifier } from 'npm:@canonry/val-kit@0.1.0/security'
+import { MemoryCheckStore } from 'npm:@canonry/val-kit@0.1.0/storage'
+import { createValTownApp } from '../../src/app/app.ts'
+import { createPublicCheckRunner } from '../../src/jobs/public-check.ts'
 
 function equal<T>(actual: T, expected: T, message = 'values differ'): void {
   if (!Object.is(actual, expected)) {

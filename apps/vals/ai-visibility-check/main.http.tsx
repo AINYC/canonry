@@ -1,9 +1,11 @@
 import { sqlite } from 'https://esm.town/v/std/sqlite/main.ts'
+import { loadValTownConfig } from 'npm:@canonry/val-kit@0.1.0/config'
+import { createRequestBoundDispatcher } from 'npm:@canonry/val-kit@0.1.0/jobs'
+import { ValSqliteCheckStore } from 'npm:@canonry/val-kit@0.1.0/storage'
+import { createGeminiValVisibilityProbe } from 'npm:@canonry/val-kit@0.1.0/visibility'
 import { createValTownApp } from './src/app/app.ts'
-import { loadValTownConfig } from './src/config/index.ts'
-import { createPublicCheckRunner, createRequestBoundDispatcher } from './src/jobs/public-check.ts'
+import { createPublicCheckRunner } from './src/jobs/public-check.ts'
 import { createSiteHealthRunner } from './src/site-health/runner.ts'
-import { ValSqliteCheckStore } from './src/storage/val-sqlite.ts'
 import {
   canonryDemoClientScript,
   canonryDemoStyles,
@@ -14,9 +16,8 @@ import {
   renderCanonryDemo,
   toCanonryDemoViewModel,
 } from './src/ui/index.ts'
-import { createGeminiValVisibilityProbe } from './src/visibility/gemini-probe.ts'
 
-const config = loadValTownConfig()
+const config = loadValTownConfig(Deno.env.toObject())
 const store = new ValSqliteCheckStore(sqlite)
 await store.initialize()
 

@@ -1,14 +1,15 @@
+import { computeMentionShare, computeShareOfVoice, type ShareOfVoice } from 'npm:@canonry/val-kit@0.1.0/visibility'
 import { orderFactors } from '../site-health/factor-order.ts'
-import { computeMentionShare, computeShareOfVoice, type ShareOfVoice } from '../visibility/share.ts'
-import type {
-  CheckRecord,
-  CheckResult,
-  SiteHealthPageSample,
-  SiteHealthSample,
-  VisibilityEvidence,
-  VisibilityReport,
-} from '../runtime/types.ts'
-import { PUBLIC_CHECK_UNAVAILABLE, PUBLIC_RATE_LIMITED_ERROR_CODE } from '../runtime/types.ts'
+import {
+  type CheckRecord,
+  type CheckResult,
+  PUBLIC_CHECK_UNAVAILABLE,
+  PUBLIC_RATE_LIMITED_ERROR_CODE,
+  type SiteHealthPageSample,
+  type SiteHealthSample,
+  type VisibilityEvidence,
+  type VisibilityReport,
+} from 'npm:@canonry/val-kit@0.1.0/jobs'
 import type {
   CanonryDemoViewModel,
   CheckFormViewModel,

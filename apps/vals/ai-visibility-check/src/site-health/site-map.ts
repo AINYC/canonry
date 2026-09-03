@@ -16,7 +16,7 @@
  * the run that produced it.
  */
 import type { CrawlEdgeObservation, CrawlPageObservation } from 'npm:@canonry/aeo-audit@7.1.0'
-import type { SiteMapEdge, SiteMapNode, SiteMapSample } from '../runtime/types.ts'
+import type { SiteMapEdge, SiteMapNode, SiteMapSample } from 'npm:@canonry/val-kit@0.1.0/jobs'
 
 /**
  * Display caps, not crawl caps. Past roughly this many nodes a static graph

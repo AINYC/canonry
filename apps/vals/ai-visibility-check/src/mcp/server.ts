@@ -12,17 +12,18 @@
  * browser, so an anonymous caller can consume its share of the day's budget
  * but never enlarge it.
  */
-import { listSkillResources, readSkillResource } from './resources.ts'
 import {
   isAllowedOrigin,
   jsonRpcError,
   JsonRpcErrorCodes,
   type JsonRpcResponse,
   jsonRpcResult,
+  listSkillResources,
   type ParsedMcpRequest,
   parseMcpRequest,
+  readSkillResource,
   SUPPORTED_PROTOCOL_VERSIONS,
-} from './protocol.ts'
+} from 'npm:@canonry/val-kit@0.1.0/mcp'
 import { callMcpTool, type McpToolContext, mcpTools, type StartCheckFn } from './tools.ts'
 
 /** Version of this MCP surface, not of the Canonry package the val samples. */
