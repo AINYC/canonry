@@ -4,7 +4,10 @@ on:
   push:
     branches: [main]
     paths:
-      - '.github/workflows/ci.yml'
+      # Every workflow, not just this one: a change to a deploy workflow is a
+      # change to how something reaches production, and it went unvalidated
+      # while only `ci.yml` was listed.
+      - '.github/workflows/**'
       - '.github/actions/setup/action.yml'
       - '.dockerignore'
       - 'Dockerfile'
@@ -17,6 +20,11 @@ on:
       - 'tsconfig.base.json'
       - 'eslint.config.js'
       - 'scripts/**'
+      # Workspace-level guards live here and belong to no single package.
+      # Without this, a PR that changes only a guard never runs it.
+      - 'test/**'
+      - 'test-setup/**'
+      - 'vitest.config.ts'
       - 'skills/**'
       - 'plugins/**'
       - '.agents/**'
@@ -30,7 +38,10 @@ on:
     # targeting feature branches. This keeps each step of a stack green
     # without waiting until rebase-to-main.
     paths:
-      - '.github/workflows/ci.yml'
+      # Every workflow, not just this one: a change to a deploy workflow is a
+      # change to how something reaches production, and it went unvalidated
+      # while only `ci.yml` was listed.
+      - '.github/workflows/**'
       - '.github/actions/setup/action.yml'
       - '.dockerignore'
       - 'Dockerfile'
@@ -43,6 +54,11 @@ on:
       - 'tsconfig.base.json'
       - 'eslint.config.js'
       - 'scripts/**'
+      # Workspace-level guards live here and belong to no single package.
+      # Without this, a PR that changes only a guard never runs it.
+      - 'test/**'
+      - 'test-setup/**'
+      - 'vitest.config.ts'
       - 'skills/**'
       - 'plugins/**'
       - '.agents/**'
