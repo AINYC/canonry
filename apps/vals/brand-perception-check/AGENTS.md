@@ -280,9 +280,10 @@ request.
 1. **Create the Val in Val Town** and record its identity. `.github/workflows/deploy-brand-perception-check.yml` ships
    with `VAL_TOWN_EXPECTED_VAL_ID` and `VAL_TOWN_EXPECTED_BRANCH_ID` set to `00000000-0000-0000-0000-000000000000`, and
    its first step refuses to run while either is that placeholder. Paste the real IDs into the workflow, and set the
-   repository variable `VAL_TOWN_BRAND_PERCEPTION_HEALTH_URL` to the deployed `/healthz` URL. `.vt/state.json` is
-   gitignored (`apps/vals/*/.vt/`), so it must be provisioned on the runner; the workflow says so rather than inventing
-   a target.
+   repository variable `VAL_TOWN_BRAND_PERCEPTION_HEALTH_URL` to the deployed `/healthz` URL. Those two IDs are the
+   whole deployment target: `.vt/state.json` is gitignored (`apps/vals/*/.vt/`), so the workflow generates it from them
+   with `node scripts/write-val-town-state.mjs apps/vals/brand-perception-check` rather than expecting a file on the
+   runner. Nothing else needs provisioning.
 2. **Publish the pinned `@canonry/val-kit` version** with the `Publish @canonry/val-kit` workflow
    (`.github/workflows/publish-val-kit.yml`). Until then the production graph cannot resolve, and both `check:prod` and
    the deploy workflow fail closed.

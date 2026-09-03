@@ -470,7 +470,7 @@ apps/vals/ai-visibility-check/
 ├── deno.lock                     Production dependency lock (public npm)
 ├── deno.dev.json                 Local dev graph: links @canonry/val-kit from the workspace
 ├── deno.dev.lock                 Dev dependency lock (linked kit)
-├── .vt/state.json                Val and branch identity
+├── .vt/state.json                Val and branch identity (gitignored; CI generates it from the deploy workflow)
 ├── src/
 │   ├── app/                      HTTP routes and response policy
 │   ├── jobs/                     Request-bound check runner: phases, budget, sanitizers, visitor copy
@@ -565,7 +565,9 @@ deployment serves reads and skills but refuses to spend.
    commit it. `deno.dev.lock` is separate and is not touched by this.
 3. Regenerate the skill mirror with `node scripts/sync-val-town-skills.mjs`.
 4. Run the verification commands above, including `deno task check:prod`.
-5. Run `vt push --dry-run` and review the file plan.
+5. Run `vt push --dry-run` and review the file plan. A local push reads `.vt/state.json`; CI has none, so the deploy
+   workflow generates it from the val and branch IDs pinned in the workflow with
+   `node scripts/write-val-town-state.mjs apps/vals/ai-visibility-check`.
 6. Run `vt push` only after approval.
 7. Request `/healthz` and confirm `{"ok":true}`.
 

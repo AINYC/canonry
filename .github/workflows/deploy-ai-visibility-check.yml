@@ -23,34 +23,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      # Public, fixed deployment identity. Changing the target requires an
-      # explicit workflow review; editing only .vt/state.json must fail closed.
+      # Public, fixed deployment identity, and the ONLY source of it: the state
+      # file `vt push` reads is generated from these two ids below, so changing
+      # where this Val deploys means editing this reviewed workflow.
       VAL_TOWN_EXPECTED_VAL_ID: b1194860-7c77-41d7-b0b7-f3529a80e15b
       VAL_TOWN_EXPECTED_BRANCH_ID: a4524491-dcb3-470a-a361-437a88df6a63
       VAL_TOWN_API_KEY: ${{ secrets.VAL_TOWN_API_KEY }}
       VAL_TOWN_HEALTH_URL: ${{ vars.VAL_TOWN_HEALTH_URL }}
     steps:
       - uses: actions/checkout@v4
-
-      # `.gitignore` excludes `apps/vals/*/.vt/`, so a fresh CI checkout does
-      # NOT carry the deployment state file — yet the fixed-target guard below
-      # reads it, and `vt push` needs it to know which Val it is updating.
-      # Say so here, in one line, instead of failing later inside `node -p` or
-      # inside vt with an error about something else. Surfacing the gap is
-      # deliberate: this workflow must never invent a deployment target.
-      - name: Require the Val Town deployment state file
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          STATE_FILE=apps/vals/ai-visibility-check/.vt/state.json
-
-          if [ ! -f "$STATE_FILE" ]; then
-            echo "::error::$STATE_FILE is missing on this runner."
-            echo "::error::It is gitignored (apps/vals/*/.vt/), so a fresh checkout never has it, and both the fixed-target guard and 'vt push' read it."
-            echo "::error::Provision the file on the runner before deploying. This workflow will not create one, because that would let it choose its own deployment target."
-            exit 1
-          fi
 
       - uses: ./.github/actions/setup
 
@@ -84,23 +65,23 @@ jobs:
               ;;
           esac
 
-      - name: Require the fixed Val Town deployment target
-        shell: bash
-        run: |
-          set -euo pipefail
+      # `vt push` learns its target from `.vt/state.json`, and `.gitignore`
+      # excludes that directory, so a fresh checkout never has one. Generate it
+      # from the two ids pinned above rather than expecting a runner to carry a
+      # file nobody reviews. The script refuses a placeholder or malformed id,
+      # and overwrites any file already present, so an ambient state file cannot
+      # redirect this push — which is what the old comparison step defended, now
+      # defended by construction instead.
+      - name: Materialize the Val Town deployment state
+        run: node scripts/write-val-town-state.mjs apps/vals/ai-visibility-check
 
-          STATE_VAL_ID=$(node -p "JSON.parse(require('node:fs').readFileSync('./apps/vals/ai-visibility-check/.vt/state.json', 'utf8')).val?.id || ''")
-          STATE_BRANCH_ID=$(node -p "JSON.parse(require('node:fs').readFileSync('./apps/vals/ai-visibility-check/.vt/state.json', 'utf8')).branch?.id || ''")
-
-          if [ "$STATE_VAL_ID" != "$VAL_TOWN_EXPECTED_VAL_ID" ]; then
-            echo "::error::Refusing to deploy unexpected Val ID: $STATE_VAL_ID"
-            exit 1
-          fi
-
-          if [ "$STATE_BRANCH_ID" != "$VAL_TOWN_EXPECTED_BRANCH_ID" ]; then
-            echo "::error::Refusing to deploy unexpected Val branch ID: $STATE_BRANCH_ID"
-            exit 1
-          fi
+      # Two hand-typed UUIDs decide what `vt push` overwrites, and nothing so far
+      # has checked that they name the Val we mean — only that the workflow is
+      # their only source. Ask the API before pushing: a 404 on the branch means
+      # the ids come from different Vals, and a name mismatch means the whole
+      # target is wrong. See scripts/verify-val-town-target.mjs.
+      - name: Verify the pinned Val Town target
+        run: node scripts/verify-val-town-target.mjs
 
       # A stale mirror would ship skills that no longer match `skills/`, and the
       # Deno checks cannot see it: the generated modules compile either way.
