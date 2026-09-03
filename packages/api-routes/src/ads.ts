@@ -1336,6 +1336,15 @@ async function executeAdsOperation(
     // remediation, and the check below runs either way: an operation with no
     // remediateStatus (archive) therefore fails loudly on a mismatch rather
     // than passing silently.
+    //
+    // The status compared here is the one the mutation's OWN response carried,
+    // never a follow-up read. That matters for archive: the provider's list
+    // endpoints are eventually consistent and were observed on 2026-09-02 still
+    // reporting a freshly archived campaign as `paused` while the direct
+    // single-entity read already reported `archived`. Verifying this
+    // postcondition with a list read would turn a landed archive into a bogus
+    // 502 and an unknown receipt, so it must stay a write-response check (and
+    // any read added here must be a GET by id).
     if (input.expectedStatus !== undefined && result.status !== input.expectedStatus) {
       if (input.remediateStatus) result = await input.remediateStatus(result)
       if (result.status !== input.expectedStatus) {
@@ -1486,6 +1495,17 @@ function claimOperationForReconciliation(
   return app.db.select().from(adsOperations).where(eq(adsOperations.id, row.id)).get()
 }
 
+/**
+ * Re-read one entity by id to decide a recorded operation's real outcome.
+ *
+ * Every branch is a DIRECT single-entity read. It must stay that way: the
+ * provider's list endpoints are eventually consistent, and a live archive on
+ * 2026-09-02 came back `archived` from the by-id read while the campaigns list
+ * still said `paused`. Resolving a `*_archive` receipt from a lagging list
+ * would score the archive `ADS_RECONCILIATION_MISMATCH`, burn a reconcile
+ * attempt, and eventually quarantine an operation that in fact succeeded.
+ * Never swap these for a list walk plus a find-by-id.
+ */
 async function getEntityForReconciliation(
   operator: AdsOperator,
   apiKey: string,
@@ -2805,6 +2825,14 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
    *    throws when it still does not match, so omitting it makes a postcondition
    *    mismatch surface as a loud unknown/failed receipt instead of a silent
    *    pass or a second irreversible write.
+   *
+   * Both reads on this path are single-entity reads by id: the precondition
+   * uses operator.getCampaign/getAdGroup/getAd, and the archived postcondition
+   * is read off the archive call's own response. The provider's LIST endpoints
+   * are eventually consistent — on 2026-09-02 a campaign confirmed `archived`
+   * by the by-id read was still returned as `paused` by the campaigns list — so
+   * a list read must never be introduced here or in the reconciler. A lagging
+   * list would make a landed, irreversible archive look like a failure.
    */
   app.post<{ Params: { name: string; id: string } }>(
     '/projects/:name/ads/campaigns/:id/archive',

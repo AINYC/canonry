@@ -413,10 +413,10 @@ describe('campaign write primitives', () => {
     expectJsonPost(calls[0]!, `campaigns/${FIXTURE_CAMPAIGN.id}/pause`)
   })
 
-  // The archive path is inferred by symmetry with pause/activate and is NOT
-  // fixture-verified against the provider; this test pins the request we send,
-  // not the provider's contract.
-  it('posts the inferred campaign archive action without a request body', async () => {
+  // The archive path and its `archived` response were verified live on
+  // 2026-09-02 against a Canonry-owned test advertiser account; this test pins
+  // the request we send against that confirmed contract.
+  it('posts the campaign archive action without a request body', async () => {
     const calls = mockFetchOnce({ ...FIXTURE_CAMPAIGN, status: 'archived' })
     await archiveCampaign('test-key', FIXTURE_CAMPAIGN.id)
     expectJsonPost(calls[0]!, `campaigns/${FIXTURE_CAMPAIGN.id}/archive`)

@@ -486,11 +486,17 @@ export async function pauseCampaign(apiKey: string, campaignId: string): Promise
 }
 
 /**
- * Archive is IRREVERSIBLE upstream. The `{entity}/{id}/archive` path below is
- * INFERRED BY SYMMETRY with the verified `/pause` and `/activate` actions; it
- * is NOT confirmed by a captured provider fixture. Exercise it against a test
- * advertiser account before it is used on a managed advertiser account, and
- * replace this note with the captured evidence once it exists.
+ * Archive is IRREVERSIBLE upstream. The `{entity}/{id}/archive` path and the
+ * `archived` status it returns were VERIFIED LIVE on 2026-09-02 against a
+ * Canonry-owned test advertiser account: `POST campaigns/{id}/archive`
+ * answered with `status: "archived"`, both for an entity paused earlier and
+ * for one paused immediately before the call.
+ *
+ * That run also established that the provider's LIST endpoints are eventually
+ * consistent: a campaign the direct `campaigns/{id}` read already reported as
+ * `archived` was still reported as `paused` by the campaigns list. An archive
+ * must therefore only ever be confirmed by a single-entity read; see the
+ * archive routes and reconciler in @ainyc/canonry-api-routes.
  */
 export async function archiveCampaign(apiKey: string, campaignId: string): Promise<OpenAiAdsCampaign> {
   validateApiKey(apiKey)
@@ -544,7 +550,7 @@ export async function pauseAdGroup(apiKey: string, adGroupId: string): Promise<O
   return adsFetch<OpenAiAdsAdGroup>(apiKey, `ad_groups/${encodeURIComponent(adGroupId)}/pause`, [], 'POST')
 }
 
-/** Irreversible upstream; the `/archive` path is inferred, not fixture-verified (see archiveCampaign). */
+/** Irreversible upstream; the `/archive` path was verified live on 2026-09-02 (see archiveCampaign). */
 export async function archiveAdGroup(apiKey: string, adGroupId: string): Promise<OpenAiAdsAdGroup> {
   validateApiKey(apiKey)
   validateId(adGroupId, 'Ad group id')
@@ -594,7 +600,7 @@ export async function pauseAd(apiKey: string, adId: string): Promise<OpenAiAdsAd
   return adsFetch<OpenAiAdsAd>(apiKey, `ads/${encodeURIComponent(adId)}/pause`, [], 'POST')
 }
 
-/** Irreversible upstream; the `/archive` path is inferred, not fixture-verified (see archiveCampaign). */
+/** Irreversible upstream; the `/archive` path was verified live on 2026-09-02 (see archiveCampaign). */
 export async function archiveAd(apiKey: string, adId: string): Promise<OpenAiAdsAd> {
   validateApiKey(apiKey)
   validateId(adId, 'Ad id')

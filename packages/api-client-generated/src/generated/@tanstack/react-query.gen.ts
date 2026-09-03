@@ -4854,7 +4854,7 @@ export const postApiV1ProjectsByNameAdsAdsByIdPauseMutation = (options?: Partial
 /**
  * Archive an OpenAI Ads campaign (irreversible)
  *
- * IRREVERSIBLE. The entity must already be paused, and expectedUpdatedAt must match the live upstream revision, so an active entity is refused and a stale version is refused. There is no remediation: an unconfirmed archived state leaves the receipt unknown for reconciliation. The upstream archive path is not yet fixture-verified — exercise it on a test advertiser account first.
+ * IRREVERSIBLE. The entity must already be paused, and expectedUpdatedAt must match the live upstream revision, so an active entity is refused and a stale version is refused. There is no remediation: an unconfirmed archived state leaves the receipt unknown for reconciliation. The upstream archive path and its archived status transition were verified live against a Canonry-owned test advertiser account on 2026-09-02. The provider list endpoints are eventually consistent and can still report a freshly archived entity as paused, so the archived state is confirmed by a direct single-entity read, never by a list.
  */
 export const postApiV1ProjectsByNameAdsCampaignsByIdArchiveMutation = (options?: Partial<Options<PostApiV1ProjectsByNameAdsCampaignsByIdArchiveData>>): UseMutationOptions<PostApiV1ProjectsByNameAdsCampaignsByIdArchiveResponse, PostApiV1ProjectsByNameAdsCampaignsByIdArchiveError, Options<PostApiV1ProjectsByNameAdsCampaignsByIdArchiveData>> => {
     const mutationOptions: UseMutationOptions<PostApiV1ProjectsByNameAdsCampaignsByIdArchiveResponse, PostApiV1ProjectsByNameAdsCampaignsByIdArchiveError, Options<PostApiV1ProjectsByNameAdsCampaignsByIdArchiveData>> = {
@@ -4873,7 +4873,7 @@ export const postApiV1ProjectsByNameAdsCampaignsByIdArchiveMutation = (options?:
 /**
  * Archive an OpenAI Ads ad group (irreversible)
  *
- * IRREVERSIBLE. The entity must already be paused, and expectedUpdatedAt must match the live upstream revision, so an active entity is refused and a stale version is refused. There is no remediation: an unconfirmed archived state leaves the receipt unknown for reconciliation. The upstream archive path is not yet fixture-verified — exercise it on a test advertiser account first.
+ * IRREVERSIBLE. The entity must already be paused, and expectedUpdatedAt must match the live upstream revision, so an active entity is refused and a stale version is refused. There is no remediation: an unconfirmed archived state leaves the receipt unknown for reconciliation. The upstream archive path and its archived status transition were verified live against a Canonry-owned test advertiser account on 2026-09-02. The provider list endpoints are eventually consistent and can still report a freshly archived entity as paused, so the archived state is confirmed by a direct single-entity read, never by a list.
  */
 export const postApiV1ProjectsByNameAdsAdGroupsByIdArchiveMutation = (options?: Partial<Options<PostApiV1ProjectsByNameAdsAdGroupsByIdArchiveData>>): UseMutationOptions<PostApiV1ProjectsByNameAdsAdGroupsByIdArchiveResponse, PostApiV1ProjectsByNameAdsAdGroupsByIdArchiveError, Options<PostApiV1ProjectsByNameAdsAdGroupsByIdArchiveData>> => {
     const mutationOptions: UseMutationOptions<PostApiV1ProjectsByNameAdsAdGroupsByIdArchiveResponse, PostApiV1ProjectsByNameAdsAdGroupsByIdArchiveError, Options<PostApiV1ProjectsByNameAdsAdGroupsByIdArchiveData>> = {
@@ -4892,7 +4892,7 @@ export const postApiV1ProjectsByNameAdsAdGroupsByIdArchiveMutation = (options?: 
 /**
  * Archive an OpenAI Ads ad (irreversible)
  *
- * IRREVERSIBLE. The entity must already be paused, and expectedUpdatedAt must match the live upstream revision, so an active entity is refused and a stale version is refused. There is no remediation: an unconfirmed archived state leaves the receipt unknown for reconciliation. The upstream archive path is not yet fixture-verified — exercise it on a test advertiser account first.
+ * IRREVERSIBLE. The entity must already be paused, and expectedUpdatedAt must match the live upstream revision, so an active entity is refused and a stale version is refused. There is no remediation: an unconfirmed archived state leaves the receipt unknown for reconciliation. The upstream archive path and its archived status transition were verified live against a Canonry-owned test advertiser account on 2026-09-02. The provider list endpoints are eventually consistent and can still report a freshly archived entity as paused, so the archived state is confirmed by a direct single-entity read, never by a list.
  */
 export const postApiV1ProjectsByNameAdsAdsByIdArchiveMutation = (options?: Partial<Options<PostApiV1ProjectsByNameAdsAdsByIdArchiveData>>): UseMutationOptions<PostApiV1ProjectsByNameAdsAdsByIdArchiveResponse, PostApiV1ProjectsByNameAdsAdsByIdArchiveError, Options<PostApiV1ProjectsByNameAdsAdsByIdArchiveData>> => {
     const mutationOptions: UseMutationOptions<PostApiV1ProjectsByNameAdsAdsByIdArchiveResponse, PostApiV1ProjectsByNameAdsAdsByIdArchiveError, Options<PostApiV1ProjectsByNameAdsAdsByIdArchiveData>> = {

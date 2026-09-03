@@ -4515,7 +4515,7 @@ const routeCatalog: OpenApiOperation[] = [
     method: 'post',
     path: '/api/v1/projects/{name}/ads/campaigns/{id}/archive',
     summary: 'Archive an OpenAI Ads campaign (irreversible)',
-    description: 'IRREVERSIBLE. The entity must already be paused, and expectedUpdatedAt must match the live upstream revision, so an active entity is refused and a stale version is refused. There is no remediation: an unconfirmed archived state leaves the receipt unknown for reconciliation. The upstream archive path is not yet fixture-verified — exercise it on a test advertiser account first.',
+    description: 'IRREVERSIBLE. The entity must already be paused, and expectedUpdatedAt must match the live upstream revision, so an active entity is refused and a stale version is refused. There is no remediation: an unconfirmed archived state leaves the receipt unknown for reconciliation. The upstream archive path and its archived status transition were verified live against a Canonry-owned test advertiser account on 2026-09-02. The provider list endpoints are eventually consistent and can still report a freshly archived entity as paused, so the archived state is confirmed by a direct single-entity read, never by a list.',
     tags: ['ads'],
     parameters: [nameParameter, { name: 'id', in: 'path', required: true, description: 'Campaign ID.', schema: stringSchema }],
     requestBody: { required: true, content: { 'application/json': { schema: {
@@ -4536,7 +4536,7 @@ const routeCatalog: OpenApiOperation[] = [
     method: 'post',
     path: '/api/v1/projects/{name}/ads/ad-groups/{id}/archive',
     summary: 'Archive an OpenAI Ads ad group (irreversible)',
-    description: 'IRREVERSIBLE. The entity must already be paused, and expectedUpdatedAt must match the live upstream revision, so an active entity is refused and a stale version is refused. There is no remediation: an unconfirmed archived state leaves the receipt unknown for reconciliation. The upstream archive path is not yet fixture-verified — exercise it on a test advertiser account first.',
+    description: 'IRREVERSIBLE. The entity must already be paused, and expectedUpdatedAt must match the live upstream revision, so an active entity is refused and a stale version is refused. There is no remediation: an unconfirmed archived state leaves the receipt unknown for reconciliation. The upstream archive path and its archived status transition were verified live against a Canonry-owned test advertiser account on 2026-09-02. The provider list endpoints are eventually consistent and can still report a freshly archived entity as paused, so the archived state is confirmed by a direct single-entity read, never by a list.',
     tags: ['ads'],
     parameters: [nameParameter, { name: 'id', in: 'path', required: true, description: 'Ad group ID.', schema: stringSchema }],
     requestBody: { required: true, content: { 'application/json': { schema: {
@@ -4557,7 +4557,7 @@ const routeCatalog: OpenApiOperation[] = [
     method: 'post',
     path: '/api/v1/projects/{name}/ads/ads/{id}/archive',
     summary: 'Archive an OpenAI Ads ad (irreversible)',
-    description: 'IRREVERSIBLE. The entity must already be paused, and expectedUpdatedAt must match the live upstream revision, so an active entity is refused and a stale version is refused. There is no remediation: an unconfirmed archived state leaves the receipt unknown for reconciliation. The upstream archive path is not yet fixture-verified — exercise it on a test advertiser account first.',
+    description: 'IRREVERSIBLE. The entity must already be paused, and expectedUpdatedAt must match the live upstream revision, so an active entity is refused and a stale version is refused. There is no remediation: an unconfirmed archived state leaves the receipt unknown for reconciliation. The upstream archive path and its archived status transition were verified live against a Canonry-owned test advertiser account on 2026-09-02. The provider list endpoints are eventually consistent and can still report a freshly archived entity as paused, so the archived state is confirmed by a direct single-entity read, never by a list.',
     tags: ['ads'],
     parameters: [nameParameter, { name: 'id', in: 'path', required: true, description: 'Ad ID.', schema: stringSchema }],
     requestBody: { required: true, content: { 'application/json': { schema: {

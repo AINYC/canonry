@@ -220,8 +220,11 @@ canonry ads campaign activate-tree <project> <campaign-id> --input <json-file|->
 # remediation — an unconfirmed archived state leaves the receipt `unknown` with
 # `ADS_ARCHIVED_POSTCONDITION_FAILED` for reconciliation instead of a second irreversible write. Archive
 # is intentionally NOT exposed as an MCP tool (classified `deferred`): it stays a human API surface.
-# The upstream `/archive` path is inferred by symmetry with `/pause` and is NOT fixture-verified —
-# exercise it against a test advertiser account before running it on a managed advertiser account.
+# The upstream `/archive` path and its `archived` status transition were VERIFIED LIVE on 2026-09-02
+# against a Canonry-owned test advertiser account. That run also proved the provider's LIST endpoints are
+# eventually consistent: a campaign the direct single-entity read already reported `archived` was still
+# reported `paused` by the campaigns list. An archive is therefore confirmed only by the archive response
+# itself and, on reconciliation, by a direct GET by id — never by a list read.
 canonry ads sync <project>                            # trigger an ads-sync run
 canonry ads campaigns <project> [--format json|jsonl] # snapshots incl. context hints
 canonry ads insights <project> [--level campaign|ad_group] [--entity <id>] [--from <d>] [--to <d>] [--format json|jsonl]

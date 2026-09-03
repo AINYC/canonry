@@ -1380,6 +1380,85 @@ describe('ads routes', () => {
     })
   })
 
+  // The provider's LIST endpoints are eventually consistent. A live archive on
+  // 2026-09-02 against a Canonry-owned test advertiser account came back
+  // `archived` from the by-id read while the campaigns list still reported the
+  // same campaign as `paused`. These two tests pin the invariant that follows:
+  // an archive is confirmed by the write's own response and by GET-by-id, and
+  // NEVER by a list read, which would turn a landed irreversible archive into a
+  // bogus 502 and then quarantine the receipt.
+  it('confirms an archive without reading the eventually consistent list', async () => {
+    await ctx.app.close()
+    fs.rmSync(ctx.tmpDir, { recursive: true, force: true })
+    // The list lags the write and still calls the campaign paused.
+    ctx = buildApp({ campaignCandidates: [{ id: 'cmpn_old', status: 'paused', updatedAt: 123 }] })
+    await ctx.app.ready()
+    const projectId = ctx.seedProject()
+    ctx.seedConnection(projectId)
+
+    const res = await ctx.app.inject({
+      method: 'POST', url: '/projects/acme/ads/campaigns/cmpn_old/archive', payload: {
+        operationKey: 'retire:campaign:stale-list',
+        expectedUpdatedAt: 123,
+      },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toMatchObject({
+      replayed: false,
+      operation: { kind: AdsOperationKinds.campaign_archive, state: 'succeeded' },
+    })
+    expect(ctx.operatorCalls.map((entry) => entry.method)).toEqual(['getCampaign', 'archiveCampaign'])
+    expect(ctx.operatorCalls.some((entry) => entry.method.startsWith('list'))).toBe(false)
+  })
+
+  it('reconciles an archive receipt by direct read while the list still reports paused', async () => {
+    await ctx.app.close()
+    fs.rmSync(ctx.tmpDir, { recursive: true, force: true })
+    ctx = buildApp({
+      currentStatus: 'archived',
+      campaignCandidates: [{ id: 'cmpn_old', status: 'paused', updatedAt: 123 }],
+    })
+    await ctx.app.ready()
+    const projectId = ctx.seedProject()
+    ctx.seedConnection(projectId)
+
+    // The archive landed upstream but its response was lost, so the receipt is
+    // unknown with the provider id already checkpointed — exactly the state the
+    // reconciler has to resolve.
+    const operationKey = 'retire:campaign:reconcile-stale-list'
+    ctx.db.insert(adsOperations).values({
+      id: 'op_archive_stale_list',
+      projectId,
+      adAccountId: 'adacct_aaa',
+      operationKey,
+      requestHash: 'b'.repeat(64),
+      kind: AdsOperationKinds.campaign_archive,
+      state: AdsOperationStates.unknown,
+      entityType: 'campaign',
+      entityId: 'cmpn_old',
+      errorCode: 'ADS_ARCHIVED_POSTCONDITION_FAILED',
+      reconcileStrategy: 'known_entity',
+      reconcileFields: { status: 'archived' },
+      createdAt: NOW,
+      updatedAt: NOW,
+    }).run()
+
+    const response = await ctx.app.inject({
+      method: 'POST',
+      url: `/projects/acme/ads/operations/${encodeURIComponent(operationKey)}/reconcile`,
+      payload: {},
+    })
+
+    expect(JSON.parse(response.body)).toMatchObject({
+      resolved: true,
+      operation: { state: 'succeeded', entityId: 'cmpn_old' },
+    })
+    // A list walk would have matched the stale `paused` row against the desired
+    // `archived` state and quarantined a successful archive as a mismatch.
+    expect(ctx.operatorCalls).toEqual([{ method: 'getCampaign', input: undefined }])
+  })
+
   it('refuses an archive without the ads.write scope', async () => {
     await ctx.app.close()
     fs.rmSync(ctx.tmpDir, { recursive: true, force: true })

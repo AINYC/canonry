@@ -4187,7 +4187,7 @@ export const postApiV1ProjectsByNameAdsAdsByIdPause = <ThrowOnError extends bool
 /**
  * Archive an OpenAI Ads campaign (irreversible)
  *
- * IRREVERSIBLE. The entity must already be paused, and expectedUpdatedAt must match the live upstream revision, so an active entity is refused and a stale version is refused. There is no remediation: an unconfirmed archived state leaves the receipt unknown for reconciliation. The upstream archive path is not yet fixture-verified — exercise it on a test advertiser account first.
+ * IRREVERSIBLE. The entity must already be paused, and expectedUpdatedAt must match the live upstream revision, so an active entity is refused and a stale version is refused. There is no remediation: an unconfirmed archived state leaves the receipt unknown for reconciliation. The upstream archive path and its archived status transition were verified live against a Canonry-owned test advertiser account on 2026-09-02. The provider list endpoints are eventually consistent and can still report a freshly archived entity as paused, so the archived state is confirmed by a direct single-entity read, never by a list.
  */
 export const postApiV1ProjectsByNameAdsCampaignsByIdArchive = <ThrowOnError extends boolean = false>(options: Options<PostApiV1ProjectsByNameAdsCampaignsByIdArchiveData, ThrowOnError>) => {
     return (options.client ?? client).post<PostApiV1ProjectsByNameAdsCampaignsByIdArchiveResponses, PostApiV1ProjectsByNameAdsCampaignsByIdArchiveErrors, ThrowOnError>({
@@ -4209,7 +4209,7 @@ export const postApiV1ProjectsByNameAdsCampaignsByIdArchive = <ThrowOnError exte
 /**
  * Archive an OpenAI Ads ad group (irreversible)
  *
- * IRREVERSIBLE. The entity must already be paused, and expectedUpdatedAt must match the live upstream revision, so an active entity is refused and a stale version is refused. There is no remediation: an unconfirmed archived state leaves the receipt unknown for reconciliation. The upstream archive path is not yet fixture-verified — exercise it on a test advertiser account first.
+ * IRREVERSIBLE. The entity must already be paused, and expectedUpdatedAt must match the live upstream revision, so an active entity is refused and a stale version is refused. There is no remediation: an unconfirmed archived state leaves the receipt unknown for reconciliation. The upstream archive path and its archived status transition were verified live against a Canonry-owned test advertiser account on 2026-09-02. The provider list endpoints are eventually consistent and can still report a freshly archived entity as paused, so the archived state is confirmed by a direct single-entity read, never by a list.
  */
 export const postApiV1ProjectsByNameAdsAdGroupsByIdArchive = <ThrowOnError extends boolean = false>(options: Options<PostApiV1ProjectsByNameAdsAdGroupsByIdArchiveData, ThrowOnError>) => {
     return (options.client ?? client).post<PostApiV1ProjectsByNameAdsAdGroupsByIdArchiveResponses, PostApiV1ProjectsByNameAdsAdGroupsByIdArchiveErrors, ThrowOnError>({
@@ -4231,7 +4231,7 @@ export const postApiV1ProjectsByNameAdsAdGroupsByIdArchive = <ThrowOnError exten
 /**
  * Archive an OpenAI Ads ad (irreversible)
  *
- * IRREVERSIBLE. The entity must already be paused, and expectedUpdatedAt must match the live upstream revision, so an active entity is refused and a stale version is refused. There is no remediation: an unconfirmed archived state leaves the receipt unknown for reconciliation. The upstream archive path is not yet fixture-verified — exercise it on a test advertiser account first.
+ * IRREVERSIBLE. The entity must already be paused, and expectedUpdatedAt must match the live upstream revision, so an active entity is refused and a stale version is refused. There is no remediation: an unconfirmed archived state leaves the receipt unknown for reconciliation. The upstream archive path and its archived status transition were verified live against a Canonry-owned test advertiser account on 2026-09-02. The provider list endpoints are eventually consistent and can still report a freshly archived entity as paused, so the archived state is confirmed by a direct single-entity read, never by a list.
  */
 export const postApiV1ProjectsByNameAdsAdsByIdArchive = <ThrowOnError extends boolean = false>(options: Options<PostApiV1ProjectsByNameAdsAdsByIdArchiveData, ThrowOnError>) => {
     return (options.client ?? client).post<PostApiV1ProjectsByNameAdsAdsByIdArchiveResponses, PostApiV1ProjectsByNameAdsAdsByIdArchiveErrors, ThrowOnError>({
