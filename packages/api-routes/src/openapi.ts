@@ -4,6 +4,8 @@ import {
   AdsAdGroupBillingEventTypes,
   AdsCampaignBiddingTypes,
   AdsOperationStates,
+  runKindSchema,
+  runStatusSchema,
 } from '@ainyc/canonry-contracts'
 import {
   buildComponentSchemas,
@@ -328,26 +330,21 @@ const scheduleKindQueryParameter: OpenApiParameter = {
   schema: { $ref: '#/components/schemas/SchedulableRunKind' },
 }
 
+// Both list filters take their enum from the contracts schema the route
+// validates against, so the spec (and the generated SDK) cannot drift from
+// what the server accepts.
 const runsListKindQueryParameter: OpenApiParameter = {
   name: 'kind',
   in: 'query',
-  description: 'Restrict results to a single run kind. Without this filter, integration syncs (bing-inspect, gsc-sync, ga-sync) can fill the default 500-row cap within minutes on busy projects and push answer-visibility runs out of the response.',
-  schema: {
-    type: 'string',
-    enum: [
-      'answer-visibility',
-      'site-audit',
-      'gsc-sync',
-      'inspect-sitemap',
-      'ga-sync',
-      'bing-inspect',
-      'bing-inspect-sitemap',
-      'backlink-extract',
-      'traffic-sync',
-      'aeo-discover-seed',
-      'aeo-discover-probe',
-    ],
-  },
+  description: 'Restrict results to a single run kind. Without this filter, integration syncs (bing-inspect, gsc-sync, ga-sync) can fill the default 500-row cap within minutes on busy projects and push answer-visibility runs out of the response. Unknown values are rejected with 400.',
+  schema: { type: 'string', enum: [...runKindSchema.options] },
+}
+
+const runsListStatusQueryParameter: OpenApiParameter = {
+  name: 'status',
+  in: 'query',
+  description: 'Restrict results to a single run status, e.g. "running" to find in-flight work or "failed" to triage. Unknown values are rejected with 400 rather than returning an empty list.',
+  schema: { type: 'string', enum: [...runStatusSchema.options] },
 }
 
 const runsListSinceQueryParameter: OpenApiParameter = {
@@ -2060,7 +2057,7 @@ const routeCatalog: OpenApiOperation[] = [
     path: '/api/v1/projects/{name}/runs',
     summary: 'List project runs',
     tags: ['runs'],
-    parameters: [nameParameter, limitQueryParameter, runsListKindQueryParameter],
+    parameters: [nameParameter, limitQueryParameter, runsListKindQueryParameter, runsListStatusQueryParameter],
     responses: {
       200: jsonArrayResponse('Runs returned.', 'RunDto'),
     },
@@ -2085,6 +2082,7 @@ const routeCatalog: OpenApiOperation[] = [
       runsListSinceQueryParameter,
       runsListIncludeProbeQueryParameter,
       runsListKindQueryParameter,
+      runsListStatusQueryParameter,
     ],
     responses: {
       200: jsonArrayResponse('Runs returned.', 'RunDto'),
