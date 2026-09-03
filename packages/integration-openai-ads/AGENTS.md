@@ -47,8 +47,11 @@ before parents, and rolls back parents before children on failure.
   returns values as the API sends them.
 - **Bidding and billing vocabularies are closed**: campaign `bidding_type` is
   `impressions` or `clicks`; ad-group `billing_event_type` is `impression` or
-  `click`. A click campaign requires at least one unique
-  `conversion_event_setting_id`, and its ad groups must use click billing.
+  `click`. A click campaign's ad groups must use click billing.
+  `conversion_event_setting_ids` is a SEPARATE, optional optimization target,
+  not a condition of click billing: the provider accepts `bidding_type=clicks`
+  with none attached (verified live), so the client validates only the list's
+  own shape (unique, well-formed IDs).
   Omitted campaign bidding fields still use the provider's documented legacy
   `impressions` default. Canonry's route adapter materializes its own legacy
   defaults without changing the parsed operation payload.

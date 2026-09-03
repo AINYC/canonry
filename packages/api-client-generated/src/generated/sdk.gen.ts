@@ -3995,7 +3995,7 @@ export const getApiV1ProjectsByNameAdsCampaigns = <ThrowOnError extends boolean 
 /**
  * Create a paused OpenAI Ads campaign
  *
- * The server always creates the campaign paused. Click bidding requires at least one unique conversion event-setting ID. Omit both bidding fields for legacy impressions mode. Status is not accepted from the caller.
+ * The server always creates the campaign paused. biddingType is what the account is billed for and is immutable after creation; conversionEventSettingIds is the independent, optional optimization target, so click bidding may carry none. Omit both bidding fields for legacy impressions mode. Status is not accepted from the caller.
  */
 export const postApiV1ProjectsByNameAdsCampaigns = <ThrowOnError extends boolean = false>(options: Options<PostApiV1ProjectsByNameAdsCampaignsData, ThrowOnError>) => {
     return (options.client ?? client).post<PostApiV1ProjectsByNameAdsCampaignsResponses, PostApiV1ProjectsByNameAdsCampaignsErrors, ThrowOnError>({

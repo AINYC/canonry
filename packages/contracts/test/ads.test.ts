@@ -432,7 +432,7 @@ describe('ads lifecycle contracts', () => {
     }).success).toBe(false)
   })
 
-  test('click bidding requires non-empty unique conversion event setting IDs', () => {
+  test('click bidding is independent of conversion event settings', () => {
     const base = {
       operationKey: 'weekend:campaign:clicks',
       name: 'AEO Audit Leads',
@@ -441,11 +441,15 @@ describe('ads lifecycle contracts', () => {
       biddingType: AdsCampaignBiddingTypes.clicks,
     }
 
-    expect(adsCampaignCreateRequestSchema.safeParse(base).success).toBe(false)
+    // Billing (biddingType) and optimization (conversion events) are separate
+    // decisions: paying per click without conversion tracking is a supported
+    // configuration, and biddingType cannot be changed after creation.
+    expect(adsCampaignCreateRequestSchema.safeParse(base).success).toBe(true)
+    expect(adsCampaignCreateRequestSchema.parse(base)).not.toHaveProperty('conversionEventSettingIds')
     expect(adsCampaignCreateRequestSchema.safeParse({
       ...base,
       conversionEventSettingIds: [],
-    }).success).toBe(false)
+    }).success).toBe(true)
     expect(adsCampaignCreateRequestSchema.safeParse({
       ...base,
       conversionEventSettingIds: ['ces_lead', 'ces_lead'],

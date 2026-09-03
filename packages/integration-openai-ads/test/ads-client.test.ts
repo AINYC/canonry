@@ -421,12 +421,10 @@ describe('campaign write primitives', () => {
     expect(calls).toHaveLength(0)
   })
 
-  it('rejects click campaigns without non-empty unique conversion event setting IDs', async () => {
+  it('rejects malformed conversion event setting IDs before calling fetch', async () => {
     const calls = mockFetchOnce(FIXTURE_CAMPAIGN)
     const invalidConversionIds: unknown[] = [
-      undefined,
       'cnvset_1',
-      [],
       [''],
       ['cnvset_1', 'cnvset_1'],
     ]
@@ -435,12 +433,30 @@ describe('campaign write primitives', () => {
       const request = {
         ...CREATE_CAMPAIGN_REQUEST,
         bidding_type: OpenAiAdsBiddingTypes.clicks,
-        ...(conversionIds === undefined ? {} : { conversion_event_setting_ids: conversionIds }),
+        conversion_event_setting_ids: conversionIds,
       } as OpenAiAdsCreateCampaignRequest
       await expect(() => createCampaign('test-key', request)).rejects.toMatchObject({ status: 400 })
     }
 
     expect(calls).toHaveLength(0)
+  })
+
+  it('sends a click campaign that carries no conversion event setting IDs', async () => {
+    // bidding_type is billing, conversion_event_setting_ids is optimization.
+    // The provider accepts click billing with the ID list omitted or empty.
+    for (const conversionIds of [undefined, [] as string[]]) {
+      const calls = mockFetchOnce(FIXTURE_CAMPAIGN)
+      const request = {
+        ...CREATE_CAMPAIGN_REQUEST,
+        bidding_type: OpenAiAdsBiddingTypes.clicks,
+        ...(conversionIds === undefined ? {} : { conversion_event_setting_ids: conversionIds }),
+      } as OpenAiAdsCreateCampaignRequest
+
+      await createCampaign('test-key', request)
+
+      expect(calls).toHaveLength(1)
+      expectJsonPost(calls[0]!, 'campaigns', request)
+    }
   })
 
   it('rejects unknown campaign bidding types before calling fetch', async () => {

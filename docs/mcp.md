@@ -122,9 +122,10 @@ verifying live state on the receipt-bound account. Neither recovery path retries
 an ambiguous mutation or binds an uncheckpointed create by mutable-field
 similarity. Fresh pending generic receipts cannot be manually claimed, and
 inconclusive generic inspections back off before a five-attempt quarantine.
-Click campaigns must name at least one
-provider-issued conversion event-setting ID and their ad groups must use click
-billing; Canonry rejects a parent/child bidding mismatch before any mutation.
+Click campaigns bill for clicks and their ad groups must use click billing;
+Canonry rejects a parent/child bidding mismatch before any mutation. Naming
+provider-issued conversion event-setting IDs is a separate, optional
+optimization choice, not a requirement of click billing.
 Complete the live-provider and
 production-graduation checks in the
 [CLI operator reference](../skills/canonry/references/canonry-cli.md#guarded-operator-release-gates)

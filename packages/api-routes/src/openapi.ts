@@ -4268,7 +4268,7 @@ const routeCatalog: OpenApiOperation[] = [
     method: 'post',
     path: '/api/v1/projects/{name}/ads/campaigns',
     summary: 'Create a paused OpenAI Ads campaign',
-    description: 'The server always creates the campaign paused. Click bidding requires at least one unique conversion event-setting ID. Omit both bidding fields for legacy impressions mode. Status is not accepted from the caller.',
+    description: 'The server always creates the campaign paused. biddingType is what the account is billed for and is immutable after creation; conversionEventSettingIds is the independent, optional optimization target, so click bidding may carry none. Omit both bidding fields for legacy impressions mode. Status is not accepted from the caller.',
     tags: ['ads'],
     parameters: [nameParameter],
     requestBody: {
@@ -4289,7 +4289,7 @@ const routeCatalog: OpenApiOperation[] = [
             type: 'array',
             uniqueItems: true,
             items: stringSchema,
-            description: 'Required and non-empty when biddingType is clicks.',
+            description: 'Optional conversion events to optimize delivery toward. Independent of biddingType: a clicks campaign may omit these.',
           },
         },
       } } },

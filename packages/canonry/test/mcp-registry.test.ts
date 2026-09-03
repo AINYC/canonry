@@ -736,9 +736,19 @@ describe('MCP tool registry', () => {
       },
     }
     expect(adsCampaignCreate?.inputSchema.parse(clickCampaign)).toEqual(clickCampaign)
-    expect(() => adsCampaignCreate?.inputSchema.parse({
+    // Click billing does not require conversion events: the campaign may carry
+    // an empty list, or omit the field entirely.
+    const clickCampaignNoEvents = {
       ...clickCampaign,
       request: { ...clickCampaign.request, conversionEventSettingIds: [] },
+    }
+    expect(adsCampaignCreate?.inputSchema.parse(clickCampaignNoEvents)).toEqual(clickCampaignNoEvents)
+    const { conversionEventSettingIds: _omitted, ...clickRequestWithoutEvents } = clickCampaign.request
+    const clickCampaignOmitted = { ...clickCampaign, request: clickRequestWithoutEvents }
+    expect(adsCampaignCreate?.inputSchema.parse(clickCampaignOmitted)).toEqual(clickCampaignOmitted)
+    expect(() => adsCampaignCreate?.inputSchema.parse({
+      ...clickCampaign,
+      request: { ...clickCampaign.request, conversionEventSettingIds: ['dupe', 'dupe'] },
     })).toThrow()
 
     const adsCampaignActivateTree = canonryMcpTools.find(
