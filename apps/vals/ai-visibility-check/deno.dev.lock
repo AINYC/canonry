@@ -2,7 +2,7 @@
   "version": "5",
   "specifiers": {
     "npm:@canonry/aeo-audit@7.1.0": "7.1.0",
-    "npm:@canonry/val-kit@0.1.0": "0.1.0",
+    "npm:@canonry/val-kit@0.2.0": "0.2.0",
     "npm:@libsql/client@0.17.2": "0.17.2",
     "npm:hono@4.12.25": "4.12.25"
   },
@@ -16,7 +16,7 @@
       ],
       "bin": true
     },
-    "@canonry/val-kit@0.1.0": {
+    "@canonry/val-kit@0.2.0": {
       "dependencies": [
         "@google/genai"
       ]
@@ -524,7 +524,7 @@
   },
   "workspace": {
     "links": {
-      "npm:@canonry/val-kit@0.1.0": {
+      "npm:@canonry/val-kit@0.2.0": {
         "dependencies": [
           "npm:@google/genai@1.46.0"
         ]

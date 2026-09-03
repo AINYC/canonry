@@ -1,5 +1,5 @@
 import { Hono } from 'npm:hono@4.12.25'
-import type { ValTownConfig } from 'npm:@canonry/val-kit@0.1.0/config'
+import type { ValTownConfig } from 'npm:@canonry/val-kit@0.2.0/config'
 import {
   type CheckRecord,
   checkFingerprint,
@@ -11,13 +11,13 @@ import {
   PUBLIC_CHECK_EXECUTION_LEASE_MS,
   PUBLIC_CHECK_EXECUTION_LEASE_NAME,
   PUBLIC_RATE_LIMITED_ERROR_CODE,
-} from 'npm:@canonry/val-kit@0.1.0/jobs'
+} from 'npm:@canonry/val-kit@0.2.0/jobs'
 import {
   HumanVerificationError,
   normalizePublicDomain,
   PublicUrlError,
   utcDay,
-} from 'npm:@canonry/val-kit@0.1.0/security'
+} from 'npm:@canonry/val-kit@0.2.0/security'
 import { PublicQuotaError } from '../jobs/public-check.ts'
 import { createMcpHandler } from '../mcp/server.ts'
 import { CHECK_FINGERPRINT_NAMESPACE, type CheckResult } from '../runtime/check-result.ts'

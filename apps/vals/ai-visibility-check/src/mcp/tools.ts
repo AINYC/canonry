@@ -13,15 +13,15 @@
  * every client across both protocol eras renders text content, while typed
  * output is newer and unevenly implemented.
  */
-import { type CheckRecord, checkFingerprint, type CheckStore, isCheckExpired } from 'npm:@canonry/val-kit@0.1.0/jobs'
-import { listSkillResources, readSkillResource, skillIndex } from 'npm:@canonry/val-kit@0.1.0/mcp'
-import { normalizePublicDomain, PublicUrlError } from 'npm:@canonry/val-kit@0.1.0/security'
+import { type CheckRecord, checkFingerprint, type CheckStore, isCheckExpired } from 'npm:@canonry/val-kit@0.2.0/jobs'
+import { listSkillResources, readSkillResource, skillIndex } from 'npm:@canonry/val-kit@0.2.0/mcp'
+import { normalizePublicDomain, PublicUrlError } from 'npm:@canonry/val-kit@0.2.0/security'
 import {
   computeMentionShare,
   computeShareOfVoice,
   type ShareOfVoice,
   type VisibilityEvidence,
-} from 'npm:@canonry/val-kit@0.1.0/visibility'
+} from 'npm:@canonry/val-kit@0.2.0/visibility'
 import { CHECK_FINGERPRINT_NAMESPACE, type CheckResult } from '../runtime/check-result.ts'
 import { orderFactors } from '../site-health/factor-order.ts'
 

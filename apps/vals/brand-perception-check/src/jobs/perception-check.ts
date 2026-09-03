@@ -5,14 +5,14 @@ import {
   PUBLIC_CHECK_UNAVAILABLE,
   type PublicCheckDispatchOptions,
   type PublicCheckRunner,
-} from 'npm:@canonry/val-kit@0.1.0/jobs'
+} from 'npm:@canonry/val-kit@0.2.0/jobs'
 import type {
   PerceptionEvidence,
   PerceptionProbePort,
   PerceptionReport,
   PerceptionSummary,
-} from 'npm:@canonry/val-kit@0.1.0/perception'
-import { safeProviderErrorMessage } from 'npm:@canonry/val-kit@0.1.0/visibility'
+} from 'npm:@canonry/val-kit@0.2.0/perception'
+import { safeProviderErrorMessage } from 'npm:@canonry/val-kit@0.2.0/visibility'
 import { CHECK_RESULT_SCHEMA_VERSION, type PerceptionCheckResult } from '../runtime/check-result.ts'
 
 /**

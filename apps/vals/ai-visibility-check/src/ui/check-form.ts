@@ -1,4 +1,4 @@
-import type { ValTownConfig } from 'npm:@canonry/val-kit@0.1.0/config'
+import type { ValTownConfig } from 'npm:@canonry/val-kit@0.2.0/config'
 import type { CheckFormViewModel } from './types.ts'
 
 type PublicCheckFormConfig = Pick<

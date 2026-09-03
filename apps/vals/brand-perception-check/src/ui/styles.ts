@@ -11,7 +11,7 @@
  * The kit is not edited to hold it. A rule no other Val can use is not a shared
  * value; it is this product's surface, and the seam says that stays here.
  */
-import { canonryDemoStyles } from 'npm:@canonry/val-kit@0.1.0/ui'
+import { canonryDemoStyles } from 'npm:@canonry/val-kit@0.2.0/ui'
 
 const PERCEPTION_STYLES = String.raw`
 /* One instrument, so no tabs: the report starts straight after the header and

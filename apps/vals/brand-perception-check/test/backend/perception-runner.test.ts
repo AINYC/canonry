@@ -11,21 +11,21 @@ import {
   type CheckStore,
   createRequestBoundDispatcher,
   newCheckRecord,
-} from 'npm:@canonry/val-kit@0.1.0/jobs'
+} from 'npm:@canonry/val-kit@0.2.0/jobs'
 import {
   type PerceptionEvidence,
   type PerceptionProbeInput,
   type PerceptionProbePort,
   type PerceptionReport,
   summarizePerception,
-} from 'npm:@canonry/val-kit@0.1.0/perception'
-import { MemoryCheckStore } from 'npm:@canonry/val-kit@0.1.0/storage'
+} from 'npm:@canonry/val-kit@0.2.0/perception'
+import { MemoryCheckStore } from 'npm:@canonry/val-kit@0.2.0/storage'
 import {
   emptyAnswerReason,
   runVisibilityProbe,
   type VisibilityProviderAdapter,
   type VisibilityProviderResponse,
-} from 'npm:@canonry/val-kit@0.1.0/visibility'
+} from 'npm:@canonry/val-kit@0.2.0/visibility'
 import {
   createPerceptionCheckRunner,
   perceptionPhaseError,

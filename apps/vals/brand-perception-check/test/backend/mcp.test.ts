@@ -1,7 +1,7 @@
-import type { ValTownConfig } from 'npm:@canonry/val-kit@0.1.0/config'
-import { type CheckRecord, checkFingerprint, type JobDispatcher } from 'npm:@canonry/val-kit@0.1.0/jobs'
-import { LocalBypassHumanVerifier } from 'npm:@canonry/val-kit@0.1.0/security'
-import { MemoryCheckStore } from 'npm:@canonry/val-kit@0.1.0/storage'
+import type { ValTownConfig } from 'npm:@canonry/val-kit@0.2.0/config'
+import { type CheckRecord, checkFingerprint, type JobDispatcher } from 'npm:@canonry/val-kit@0.2.0/jobs'
+import { LocalBypassHumanVerifier } from 'npm:@canonry/val-kit@0.2.0/security'
+import { MemoryCheckStore } from 'npm:@canonry/val-kit@0.2.0/storage'
 import { createValTownApp } from '../../src/app/app.ts'
 import { CHECK_FINGERPRINT_NAMESPACE, type PerceptionCheckResult } from '../../src/runtime/check-result.ts'
 

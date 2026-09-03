@@ -1,5 +1,5 @@
-import { MAX_USER_QUERIES } from 'npm:@canonry/val-kit@0.1.0/jobs'
-import { canonryGlyph, canonryMark } from 'npm:@canonry/val-kit@0.1.0/ui'
+import { MAX_USER_QUERIES } from 'npm:@canonry/val-kit@0.2.0/jobs'
+import { canonryGlyph, canonryMark } from 'npm:@canonry/val-kit@0.2.0/ui'
 import { brandPerceptionClientScript, QUERY_HINT_SUFFIX } from './client.ts'
 import { brandPerceptionStyles } from './styles.ts'
 import type {

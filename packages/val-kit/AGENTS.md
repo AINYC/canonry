@@ -116,7 +116,7 @@ extension (repo convention; tsup and tsc resolve them to the `.ts` source).
 
 ## Versioning and publishing
 
-Vals pin an EXACT version (`npm:@canonry/val-kit@0.1.0/...`), so a change here reaches a val only when its
+Vals pin an EXACT version (`npm:@canonry/val-kit@0.2.0/...`), so a change here reaches a val only when its
 specifier is bumped. Before publishing, a val resolves the kit locally through Deno `links` so an unreleased change
 can be run end to end; after publishing, the pin moves.
 

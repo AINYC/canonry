@@ -15,14 +15,14 @@
  *   deno task dev            # stubs, no network
  *   GEMINI_API_KEY=… deno task dev
  */
-import { loadValTownConfig } from 'npm:@canonry/val-kit@0.1.0/config'
-import { createRequestBoundDispatcher } from 'npm:@canonry/val-kit@0.1.0/jobs'
-import { MemoryCheckStore } from 'npm:@canonry/val-kit@0.1.0/storage'
+import { loadValTownConfig } from 'npm:@canonry/val-kit@0.2.0/config'
+import { createRequestBoundDispatcher } from 'npm:@canonry/val-kit@0.2.0/jobs'
+import { MemoryCheckStore } from 'npm:@canonry/val-kit@0.2.0/storage'
 import {
   createGeminiValVisibilityProbe,
   type VisibilityProbePort,
   type VisibilityReport,
-} from 'npm:@canonry/val-kit@0.1.0/visibility'
+} from 'npm:@canonry/val-kit@0.2.0/visibility'
 import { createValTownApp } from '../src/app/app.ts'
 import { createPublicCheckRunner } from '../src/jobs/public-check.ts'
 import type { CheckResult } from '../src/runtime/check-result.ts'

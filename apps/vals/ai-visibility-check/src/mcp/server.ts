@@ -23,7 +23,7 @@ import {
   parseMcpRequest,
   readSkillResource,
   SUPPORTED_PROTOCOL_VERSIONS,
-} from 'npm:@canonry/val-kit@0.1.0/mcp'
+} from 'npm:@canonry/val-kit@0.2.0/mcp'
 import { callMcpTool, type McpToolContext, mcpTools, type StartCheckFn } from './tools.ts'
 
 /** Version of this MCP surface, not of the Canonry package the val samples. */

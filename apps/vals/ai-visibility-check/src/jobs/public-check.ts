@@ -5,12 +5,12 @@ import {
   PUBLIC_CHECK_UNAVAILABLE,
   type PublicCheckDispatchOptions,
   type PublicCheckRunner,
-} from 'npm:@canonry/val-kit@0.1.0/jobs'
+} from 'npm:@canonry/val-kit@0.2.0/jobs'
 import {
   safeProviderErrorMessage,
   type VisibilityProbePort,
   type VisibilityReport,
-} from 'npm:@canonry/val-kit@0.1.0/visibility'
+} from 'npm:@canonry/val-kit@0.2.0/visibility'
 import { CHECK_RESULT_SCHEMA_VERSION, type CheckResult } from '../runtime/check-result.ts'
 import type { SiteHealthRunner, SiteHealthSample } from '../site-health/types.ts'
 

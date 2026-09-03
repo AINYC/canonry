@@ -1,4 +1,4 @@
-import { VAL_TOWN_GEMINI_PERCEPTION_LIMITS, VERDICT_EXTRACT_LIMITS } from 'npm:@canonry/val-kit@0.1.0/perception'
+import { VAL_TOWN_GEMINI_PERCEPTION_LIMITS, VERDICT_EXTRACT_LIMITS } from 'npm:@canonry/val-kit@0.2.0/perception'
 import { PUBLIC_CHECK_WORK_BUDGET_MS } from '../../src/jobs/perception-check.ts'
 
 function assert(condition: unknown, message: string): asserts condition {

@@ -155,7 +155,7 @@ every engine release and the val would have sat on an old engine while Canonry m
 A new file importing the engine is picked up with no change to either, which is the point of scanning rather than
 listing.
 
-`npm:@canonry/val-kit@0.1.0/<subpath>` is the same pattern for the same reason, and it is guarded the same way:
+`npm:@canonry/val-kit@0.2.0/<subpath>` is the same pattern for the same reason, and it is guarded the same way:
 `packages/canonry/test/val-kit-dependency-contract.test.ts` asserts each val's inline kit specifiers collapse to one
 version, that it equals `packages/val-kit/package.json`, and that the two Deno configs stay on their respective sides
 of the seam. It iterates `apps/vals/*`, so a second val is covered on the day it lands. The deploy workflow repeats the
@@ -485,7 +485,7 @@ machinery, MCP framing, the generated skills, and the design tokens — is `@can
 
 ## Dependencies
 
-Every dependency is fully qualified at the import site (`npm:hono@4.12.25`, `npm:@canonry/val-kit@0.1.0/jobs`,
+Every dependency is fully qualified at the import site (`npm:hono@4.12.25`, `npm:@canonry/val-kit@0.2.0/jobs`,
 `https://esm.town/v/std/sqlite/main.ts`). Val Town resolves the module graph from esm.town and does NOT apply a pushed
 `deno.json` import map, so a bare specifier deploys and then throws `not a dependency and not in import map` at the
 first request. `deno.json` therefore excludes the `no-import-prefix` lint rule, which exists to enforce the opposite
