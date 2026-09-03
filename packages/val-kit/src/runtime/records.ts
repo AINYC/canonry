@@ -15,24 +15,31 @@ const MIN_QUERY_CHARS = 3
 const MAX_QUERY_CHARS = 200
 
 /**
- * Reuse identity for a domain check. It is versioned because it keys the cache
- * and the one-active-check index: changing what a check measures without
- * changing this prefix would let an old result answer a new question.
+ * Reuse identity for a domain check.
  *
- * v3 adds the brands each answer names, which is what mention share is built
- * from. A v2 record cannot satisfy a v3 request: it carries `namedBrands: null`
- * on every row, so the visitor would get a result silently missing half the
- * report and no way to tell why. Bumping the prefix retires those records at
- * the moment the signal set changed rather than at their own TTL.
+ * The key is both the cache key and the one-active-check index, so everything
+ * that changes what a check PRODUCES has to be in it.
  *
- * The caller's own questions are part of that identity. They change what the
- * check MEASURES, so two requests for one domain with different questions must
- * never share a result: without them in the key, the second caller silently
- * receives answers to the first caller's questions. Order is preserved rather
- * than sorted, so the key is exactly what was asked.
+ * `namespace` is that "what". It names the product and the version of the
+ * result schema the product stores, and the kit requires it because the kit
+ * cannot know either. Two products sharing one store must never collide — a
+ * perception check and a visibility check for the same domain measure
+ * different things and share nothing — and a product that adds a measured
+ * signal retires its own stale records by bumping its OWN namespace, at the
+ * moment the signal set changed rather than at each record's own TTL. A
+ * namespace is never bumped on another product's behalf.
+ *
+ * The caller's own questions are part of that identity too. They change what
+ * the check MEASURES, so two requests for one domain with different questions
+ * must never share a result: without them in the key, the second caller
+ * silently receives answers to the first caller's questions. Order is preserved
+ * rather than sorted, so the key is exactly what was asked.
  */
-export function checkFingerprint(domain: string, userQueries: readonly string[] = []): string {
-  const base = `visibility-v3:${domain}`
+export function checkFingerprint(namespace: string, domain: string, userQueries: readonly string[] = []): string {
+  if (namespace.trim() === '') {
+    throw new Error('checkFingerprint requires a product namespace; an empty one would collide across products.')
+  }
+  const base = `${namespace}:${domain}`
   if (userQueries.length === 0) return base
   return `${base}|${userQueries.join('\u0001')}`
 }

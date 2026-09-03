@@ -212,14 +212,18 @@ test('adding a measured signal retires the records that lack it', () => {
   // The reuse key must change when what a check PRODUCES changes. Mention share
   // was added to every new check, but a cached pre-extraction record still
   // satisfied a request for the same domain, so a visitor got a result silently
-  // missing half the report until the old row hit its own 24h TTL.
-  const key = checkFingerprint('example.com')
+  // missing half the report until the old row hit its own 24h TTL. The lever is
+  // the namespace, which the product passes and the kit never invents.
+  const key = checkFingerprint('visibility-v3', 'example.com')
   assert(key.startsWith('visibility-v3:'), `the version must move with the signal set, got ${key}`)
-  assert(!key.includes('visibility-v2'), 'a v2 record must not satisfy a v3 request')
+  assert(
+    checkFingerprint('visibility-v2', 'example.com') !== key,
+    'a v2 record must not satisfy a v3 request',
+  )
 
   // The caller's own questions still join the identity, unchanged.
   assert(
-    checkFingerprint('example.com', ['a question']) !== key,
+    checkFingerprint('visibility-v3', 'example.com', ['a question']) !== key,
     'different questions are still different checks',
   )
 })

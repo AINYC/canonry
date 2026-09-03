@@ -1,12 +1,9 @@
-import {
-  type CheckRecord,
-  checkFingerprint,
-  type FactorSample,
-  type SiteHealthSample,
-} from 'npm:@canonry/val-kit@0.1.0/jobs'
+import { type CheckRecord, checkFingerprint } from 'npm:@canonry/val-kit@0.1.0/jobs'
 import { MemoryCheckStore } from 'npm:@canonry/val-kit@0.1.0/storage'
 import { callMcpTool } from '../../src/mcp/tools.ts'
+import { CHECK_FINGERPRINT_NAMESPACE, type CheckResult } from '../../src/runtime/check-result.ts'
 import { compareFactorRank, orderFactors } from '../../src/site-health/factor-order.ts'
+import type { FactorSample, SiteHealthSample } from '../../src/site-health/types.ts'
 import { toCanonryDemoViewModel } from '../../src/ui/from-check-record.ts'
 
 function equal<T>(actual: T, expected: T, message = 'values differ'): void {
@@ -118,10 +115,10 @@ function siteHealth(
   }
 }
 
-function record(sample: SiteHealthSample = siteHealth()): CheckRecord {
+function record(sample: SiteHealthSample = siteHealth()): CheckRecord<CheckResult> {
   return {
     id: '11111111-2222-4333-8444-555555555555',
-    fingerprint: checkFingerprint('example.com'),
+    fingerprint: checkFingerprint(CHECK_FINGERPRINT_NAMESPACE, 'example.com'),
     userQueries: [],
     domain: 'example.com',
     status: 'complete',
@@ -140,7 +137,7 @@ function record(sample: SiteHealthSample = siteHealth()): CheckRecord {
       visibility: null,
       siteHealth: sample,
     },
-  } as CheckRecord
+  } as CheckRecord<CheckResult>
 }
 
 Deno.test('factors are ranked best to worst, not listed alphabetically', () => {
@@ -185,7 +182,7 @@ Deno.test('the MCP payload is ranked in the same order the page shows', async ()
   // best, an agent reading the endpoint and a person reading the page reach
   // different conclusions from the same crawl.
   const stored = record()
-  const store = new MemoryCheckStore()
+  const store = new MemoryCheckStore<CheckResult>()
   store.checks.set(stored.id, stored)
 
   const result = await callMcpTool({ store, now: () => new Date('2026-09-01T12:00:00.000Z') }, 'get_site_health', {

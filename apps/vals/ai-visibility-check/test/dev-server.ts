@@ -16,18 +16,18 @@
  *   GEMINI_API_KEY=… deno task dev
  */
 import { loadValTownConfig } from 'npm:@canonry/val-kit@0.1.0/config'
+import { createRequestBoundDispatcher } from 'npm:@canonry/val-kit@0.1.0/jobs'
+import { MemoryCheckStore } from 'npm:@canonry/val-kit@0.1.0/storage'
 import {
-  createRequestBoundDispatcher,
-  type SiteHealthRunner,
-  type SiteHealthSample,
+  createGeminiValVisibilityProbe,
   type VisibilityProbePort,
   type VisibilityReport,
-} from 'npm:@canonry/val-kit@0.1.0/jobs'
-import { MemoryCheckStore } from 'npm:@canonry/val-kit@0.1.0/storage'
-import { createGeminiValVisibilityProbe } from 'npm:@canonry/val-kit@0.1.0/visibility'
+} from 'npm:@canonry/val-kit@0.1.0/visibility'
 import { createValTownApp } from '../src/app/app.ts'
 import { createPublicCheckRunner } from '../src/jobs/public-check.ts'
+import type { CheckResult } from '../src/runtime/check-result.ts'
 import { createSiteHealthRunner } from '../src/site-health/runner.ts'
+import type { SiteHealthRunner, SiteHealthSample } from '../src/site-health/types.ts'
 import {
   canonryDemoClientScript,
   canonryDemoStyles,
@@ -259,7 +259,7 @@ function stubSiteHealth(): SiteHealthRunner {
   }
 }
 
-const store = new MemoryCheckStore()
+const store = new MemoryCheckStore<CheckResult>()
 await store.initialize()
 
 const runner = createPublicCheckRunner({

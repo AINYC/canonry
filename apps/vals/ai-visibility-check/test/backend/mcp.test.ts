@@ -3,6 +3,7 @@ import { type CheckRecord, checkFingerprint, type JobDispatcher } from 'npm:@can
 import { LocalBypassHumanVerifier } from 'npm:@canonry/val-kit@0.1.0/security'
 import { MemoryCheckStore } from 'npm:@canonry/val-kit@0.1.0/storage'
 import { createValTownApp } from '../../src/app/app.ts'
+import { CHECK_FINGERPRINT_NAMESPACE, type CheckResult } from '../../src/runtime/check-result.ts'
 
 function equal<T>(actual: T, expected: T, message = 'values differ'): void {
   if (!Object.is(actual, expected)) {
@@ -53,10 +54,10 @@ function config(overrides: Partial<ValTownConfig> = {}): ValTownConfig {
  * The failed row is the important one — it is what proves a failure stays
  * unmeasured instead of being reported as a negative observation.
  */
-function completedRecord(overrides: Partial<CheckRecord> = {}): CheckRecord {
+function completedRecord(overrides: Partial<CheckRecord<CheckResult>> = {}): CheckRecord<CheckResult> {
   return {
     id: '11111111-2222-4333-8444-555555555555',
-    fingerprint: checkFingerprint('example.com'),
+    fingerprint: checkFingerprint(CHECK_FINGERPRINT_NAMESPACE, 'example.com'),
     userQueries: [],
     domain: 'example.com',
     status: 'complete',
@@ -186,8 +187,11 @@ function completedRecord(overrides: Partial<CheckRecord> = {}): CheckRecord {
   }
 }
 
-function createHarness(records: CheckRecord[] = [completedRecord()], overrides: Partial<ValTownConfig> = {}) {
-  const store = new MemoryCheckStore()
+function createHarness(
+  records: CheckRecord<CheckResult>[] = [completedRecord()],
+  overrides: Partial<ValTownConfig> = {},
+) {
+  const store = new MemoryCheckStore<CheckResult>()
   for (const record of records) store.checks.set(record.id, record)
   const dispatched: string[] = []
   const dispatcher: JobDispatcher = {

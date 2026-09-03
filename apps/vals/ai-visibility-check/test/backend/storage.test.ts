@@ -16,7 +16,6 @@ import {
   createRequestBoundDispatcher,
   newCheckRecord,
   PUBLIC_CHECK_EXECUTION_LEASE_NAME,
-  type SiteHealthRunner,
 } from 'npm:@canonry/val-kit@0.1.0/jobs'
 import { LocalBypassHumanVerifier } from 'npm:@canonry/val-kit@0.1.0/security'
 import {
@@ -28,6 +27,8 @@ import {
 } from 'npm:@canonry/val-kit@0.1.0/storage'
 import { createValTownApp } from '../../src/app/app.ts'
 import { createPublicCheckRunner } from '../../src/jobs/public-check.ts'
+import { CHECK_FINGERPRINT_NAMESPACE, type CheckResult } from '../../src/runtime/check-result.ts'
+import type { SiteHealthRunner } from '../../src/site-health/types.ts'
 
 const NOW = new Date('2026-09-01T12:00:00.000Z')
 const NOW_ISO = NOW.toISOString()
@@ -38,12 +39,17 @@ function equal<T>(actual: T, expected: T, message = 'values differ'): void {
   }
 }
 
-function candidate(id: string, domain = 'example.com', now = NOW): CheckRecord {
-  return newCheckRecord({ id, fingerprint: checkFingerprint(domain), domain, now })
+function candidate(id: string, domain = 'example.com', now = NOW): CheckRecord<CheckResult> {
+  return newCheckRecord<CheckResult>({
+    id,
+    fingerprint: checkFingerprint(CHECK_FINGERPRINT_NAMESPACE, domain),
+    domain,
+    now,
+  })
 }
 
 interface StoreFixture {
-  store: CheckStore
+  store: CheckStore<CheckResult>
   quotaRowCount(): Promise<number>
   checkRowCount(): Promise<number>
   close(): void
@@ -113,7 +119,7 @@ const fixtures: Array<{ name: string; create(): StoreFixture }> = [
   {
     name: 'memory',
     create() {
-      const store = new MemoryCheckStore()
+      const store = new MemoryCheckStore<CheckResult>()
       return {
         store,
         quotaRowCount() {
@@ -131,7 +137,7 @@ const fixtures: Array<{ name: string; create(): StoreFixture }> = [
     create() {
       const sqlite = new NodeSqliteClient()
       return {
-        store: new ValSqliteCheckStore(sqlite),
+        store: new ValSqliteCheckStore<CheckResult>(sqlite),
         quotaRowCount() {
           const row = sqlite.database.prepare('SELECT COUNT(*) AS count FROM canonry_quota').get() as { count?: number }
           return Promise.resolve(row.count ?? 0)
@@ -255,7 +261,7 @@ for (const fixtureFactory of fixtures) {
   })
 }
 
-function createPublicTestApp(store: CheckStore) {
+function createPublicTestApp(store: CheckStore<CheckResult>) {
   const config: ValTownConfig = {
     environment: 'test',
     checkTtlMs: 86_400_000,

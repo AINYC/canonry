@@ -13,16 +13,16 @@
  * every client across both protocol eras renders text content, while typed
  * output is newer and unevenly implemented.
  */
-import {
-  type CheckRecord,
-  checkFingerprint,
-  type CheckStore,
-  isCheckExpired,
-  type VisibilityEvidence,
-} from 'npm:@canonry/val-kit@0.1.0/jobs'
+import { type CheckRecord, checkFingerprint, type CheckStore, isCheckExpired } from 'npm:@canonry/val-kit@0.1.0/jobs'
 import { listSkillResources, readSkillResource, skillIndex } from 'npm:@canonry/val-kit@0.1.0/mcp'
 import { normalizePublicDomain, PublicUrlError } from 'npm:@canonry/val-kit@0.1.0/security'
-import { computeMentionShare, computeShareOfVoice, type ShareOfVoice } from 'npm:@canonry/val-kit@0.1.0/visibility'
+import {
+  computeMentionShare,
+  computeShareOfVoice,
+  type ShareOfVoice,
+  type VisibilityEvidence,
+} from 'npm:@canonry/val-kit@0.1.0/visibility'
+import { CHECK_FINGERPRINT_NAMESPACE, type CheckResult } from '../runtime/check-result.ts'
 import { orderFactors } from '../site-health/factor-order.ts'
 
 const CHECK_ID = /^[0-9a-f-]{36}$/i
@@ -44,10 +44,10 @@ export type StartCheckFn = (
   domain: string,
   remoteIp: string | null,
   queries: readonly string[],
-) => Promise<{ record: CheckRecord; reused: boolean }>
+) => Promise<{ record: CheckRecord<CheckResult>; reused: boolean }>
 
 export interface McpToolContext {
-  store: CheckStore
+  store: CheckStore<CheckResult>
   now: () => Date
   startCheck?: StartCheckFn
   /** Edge-provided caller identity, used only as the quota subject. */
@@ -89,7 +89,7 @@ const TARGET_SCHEMA = {
 async function resolveCheck(
   context: McpToolContext,
   args: Record<string, unknown>,
-): Promise<{ record: CheckRecord } | { error: McpToolResult }> {
+): Promise<{ record: CheckRecord<CheckResult> } | { error: McpToolResult }> {
   const checkId = typeof args.checkId === 'string' ? args.checkId.trim() : ''
   const domain = typeof args.domain === 'string' ? args.domain.trim() : ''
 
@@ -115,7 +115,10 @@ async function resolveCheck(
     return { error: fail(error instanceof PublicUrlError ? error.message : 'Enter a valid public domain.') }
   }
 
-  const record = await context.store.findReusable(checkFingerprint(normalized), now.toISOString())
+  const record = await context.store.findReusable(
+    checkFingerprint(CHECK_FINGERPRINT_NAMESPACE, normalized),
+    now.toISOString(),
+  )
   if (!record) {
     return {
       error: fail(
@@ -128,7 +131,7 @@ async function resolveCheck(
 }
 
 /** Shared envelope so every tool reports status and freshness the same way. */
-function recordEnvelope(record: CheckRecord) {
+function recordEnvelope(record: CheckRecord<CheckResult>) {
   return {
     checkId: record.id,
     domain: record.domain,
@@ -146,7 +149,7 @@ function recordEnvelope(record: CheckRecord) {
  * an absent measurement, not a miss, and collapsing the two would report a site
  * as invisible when the check simply did not complete.
  */
-function visibilitySummary(record: CheckRecord) {
+function visibilitySummary(record: CheckRecord<CheckResult>) {
   const visibility = record.result?.visibility
   if (!visibility) return { measured: false as const }
   // Only a fully generated basket is guaranteed non-brand. Caller-supplied
@@ -169,7 +172,7 @@ function visibilitySummary(record: CheckRecord) {
   }
 }
 
-function siteHealthSummary(record: CheckRecord) {
+function siteHealthSummary(record: CheckRecord<CheckResult>) {
   const siteHealth = record.result?.siteHealth
   if (!siteHealth) return { measured: false as const }
   return {

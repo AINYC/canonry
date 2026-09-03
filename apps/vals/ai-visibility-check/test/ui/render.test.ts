@@ -1,4 +1,5 @@
 import { type CheckRecord, PUBLIC_RATE_LIMITED_ERROR_CODE } from 'npm:@canonry/val-kit@0.1.0/jobs'
+import type { CheckResult } from '../../src/runtime/check-result.ts'
 import {
   assetUrl,
   canonryDemoClientScript,
@@ -29,7 +30,7 @@ function readyForm() {
 
 /** A real completed check mapped through the production view-model path. */
 function completedViewModel() {
-  const record: CheckRecord = {
+  const record: CheckRecord<CheckResult> = {
     id: 'check-ui',
     fingerprint: 'fingerprint',
     userQueries: [],
@@ -926,7 +927,7 @@ Deno.test('full public-check unavailability disables the form even with a ready 
 })
 
 Deno.test('rate-limited native records retain a rate-limit presentation state', () => {
-  const record: CheckRecord = {
+  const record: CheckRecord<CheckResult> = {
     id: 'check-rate-limited',
     fingerprint: '',
     userQueries: [],
@@ -951,7 +952,7 @@ Deno.test('rate-limited native records retain a rate-limit presentation state', 
 })
 
 Deno.test('record mapping keeps an absent visibility report absent rather than zero', () => {
-  const record: CheckRecord = {
+  const record: CheckRecord<CheckResult> = {
     id: 'check-empty',
     fingerprint: 'fingerprint',
     userQueries: [],
@@ -1030,7 +1031,7 @@ Deno.test('record mapping converts fractional probe rates into display percentag
       siteHealth: null,
       errors: [],
     },
-  } as unknown as CheckRecord
+  } as unknown as CheckRecord<CheckResult>
   const model = toCanonryDemoViewModel(record)
   const html = renderCanonryDemo(model)
 
@@ -1094,7 +1095,7 @@ Deno.test('failed provider observations stay not measured rather than false', ()
       siteHealth: null,
       errors: [],
     },
-  } as unknown as CheckRecord
+  } as unknown as CheckRecord<CheckResult>
   const html = renderCanonryDemo(toCanonryDemoViewModel(record))
 
   assert(html.includes('Not measured'), 'null visibility signals should never be rendered as false')
@@ -1182,7 +1183,7 @@ Deno.test('site-health mapping preserves not-applicable factors and partial prov
       },
       errors: [],
     },
-  } as unknown as CheckRecord
+  } as unknown as CheckRecord<CheckResult>
   const model = toCanonryDemoViewModel(record)
   const html = renderCanonryDemo(model)
 

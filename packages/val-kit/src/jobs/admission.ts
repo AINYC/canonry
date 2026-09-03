@@ -17,9 +17,14 @@ export function createRequestBoundDispatcher(runner: PublicCheckRunner): JobDisp
   return { dispatch: (checkId, dispatchOptions) => runner.run(checkId, dispatchOptions) }
 }
 
-export function newCheckRecord(
+/**
+ * A fresh queued record. `TResult` is the product's result schema; the record
+ * starts with `result: null`, so the parameter is named by the caller rather
+ * than inferred — `newCheckRecord<CheckResult>({ ... })`.
+ */
+export function newCheckRecord<TResult = unknown>(
   input: { id: string; fingerprint: string; domain: string; now: Date; userQueries?: readonly string[] },
-): CheckRecord {
+): CheckRecord<TResult> {
   const timestamp = input.now.toISOString()
   return {
     id: input.id,

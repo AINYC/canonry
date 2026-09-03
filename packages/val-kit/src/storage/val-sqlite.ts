@@ -2,7 +2,7 @@ import type {
   CheckAdmission,
   CheckAdmissionInput,
   CheckRecord,
-  CheckResult,
+  CheckRecordPatch,
   CheckStatus,
   CheckStore,
 } from '../runtime/types.js'
@@ -72,7 +72,7 @@ const SCHEMA = [
 ]
 
 /** Val-scoped SQLite adapter. SQL remains behind the store port for local/test parity. */
-export class ValSqliteCheckStore implements CheckStore {
+export class ValSqliteCheckStore<TResult = unknown> implements CheckStore<TResult> {
   constructor(private readonly sqlite: ValSqliteClient) {}
 
   async initialize(): Promise<void> {
@@ -90,13 +90,13 @@ export class ValSqliteCheckStore implements CheckStore {
   }
 
   /** Atomically reuse, reclaim, spend quota, and create in Val's documented write batch. */
-  async admit(input: CheckAdmissionInput): Promise<CheckAdmission> {
+  async admit(input: CheckAdmissionInput<TResult>): Promise<CheckAdmission<TResult>> {
     const results = await this.sqlite.batch(this.admissionBatch(input), 'write')
-    const reclaimed = results[0]?.rows[0] ? rowToCheck(results[0].rows[0]) : null
+    const reclaimed = results[0]?.rows[0] ? rowToCheck<TResult>(results[0].rows[0]) : null
     const candidateCreated = results[1]?.rows.length === 1
     const clientQuotaClaimed = results[2]?.rows.length === 1
     const globalQuotaClaimed = results[4]?.rows.length === 1
-    const reusable = results[10]?.rows[0] ? rowToCheck(results[10].rows[0]) : null
+    const reusable = results[10]?.rows[0] ? rowToCheck<TResult>(results[10].rows[0]) : null
 
     if (reclaimed && reusable) return { kind: 'reclaimed', record: reusable }
     if (!candidateCreated && reusable) return { kind: 'reused', record: reusable }
@@ -107,23 +107,20 @@ export class ValSqliteCheckStore implements CheckStore {
     throw new Error('Atomic admission completed without a reusable or created check.')
   }
 
-  findReusable(fingerprint: string, now: string): Promise<CheckRecord | null> {
+  findReusable(fingerprint: string, now: string): Promise<CheckRecord<TResult> | null> {
     return this.findReusableWith(fingerprint, now)
   }
 
-  async create(record: CheckRecord): Promise<void> {
+  async create(record: CheckRecord<TResult>): Promise<void> {
     await this.createWith(record)
   }
 
-  async get(id: string): Promise<CheckRecord | null> {
+  async get(id: string): Promise<CheckRecord<TResult> | null> {
     const result = await this.sqlite.execute({ sql: 'SELECT * FROM canonry_checks WHERE id = ? LIMIT 1', args: [id] })
-    return result.rows[0] ? rowToCheck(result.rows[0]) : null
+    return result.rows[0] ? rowToCheck<TResult>(result.rows[0]) : null
   }
 
-  async update(
-    id: string,
-    patch: Partial<Pick<CheckRecord, 'status' | 'updatedAt' | 'expiresAt' | 'result' | 'errorCode' | 'errorMessage'>>,
-  ): Promise<CheckRecord | null> {
+  async update(id: string, patch: CheckRecordPatch<TResult>): Promise<CheckRecord<TResult> | null> {
     const fields: string[] = []
     const args: SqlArg[] = []
     if (patch.status !== undefined) {
@@ -156,7 +153,7 @@ export class ValSqliteCheckStore implements CheckStore {
     return this.get(id)
   }
 
-  async claimJob(id: string, owner: string, now: string, leaseUntil: string): Promise<CheckRecord | null> {
+  async claimJob(id: string, owner: string, now: string, leaseUntil: string): Promise<CheckRecord<TResult> | null> {
     const result = await this.sqlite.execute({
       sql: `UPDATE canonry_checks
         SET status = 'running', updated_at = ?, lease_owner = ?, lease_until = ?
@@ -164,14 +161,10 @@ export class ValSqliteCheckStore implements CheckStore {
         RETURNING *`,
       args: [now, owner, leaseUntil, id, now],
     })
-    return result.rows[0] ? rowToCheck(result.rows[0]) : null
+    return result.rows[0] ? rowToCheck<TResult>(result.rows[0]) : null
   }
 
-  async finalizeJob(
-    id: string,
-    owner: string,
-    patch: Partial<Pick<CheckRecord, 'status' | 'updatedAt' | 'expiresAt' | 'result' | 'errorCode' | 'errorMessage'>>,
-  ): Promise<CheckRecord | null> {
+  async finalizeJob(id: string, owner: string, patch: CheckRecordPatch<TResult>): Promise<CheckRecord<TResult> | null> {
     const fields: string[] = ['lease_owner = NULL', 'lease_until = NULL']
     const args: SqlArg[] = []
     if (patch.status !== undefined) {
@@ -203,10 +196,10 @@ export class ValSqliteCheckStore implements CheckStore {
       sql: `UPDATE canonry_checks SET ${fields.join(', ')} WHERE id = ? AND lease_owner = ? RETURNING *`,
       args,
     })
-    return result.rows[0] ? rowToCheck(result.rows[0]) : null
+    return result.rows[0] ? rowToCheck<TResult>(result.rows[0]) : null
   }
 
-  async requeueJob(id: string, owner: string, now: string): Promise<CheckRecord | null> {
+  async requeueJob(id: string, owner: string, now: string): Promise<CheckRecord<TResult> | null> {
     const result = await this.sqlite.execute({
       sql: `UPDATE canonry_checks
         SET status = 'queued', updated_at = ?, lease_owner = NULL, lease_until = NULL
@@ -214,7 +207,7 @@ export class ValSqliteCheckStore implements CheckStore {
         RETURNING *`,
       args: [now, id, owner],
     })
-    return result.rows[0] ? rowToCheck(result.rows[0]) : null
+    return result.rows[0] ? rowToCheck<TResult>(result.rows[0]) : null
   }
 
   async claimGlobalLease(name: string, holder: string, now: string, leaseUntil: string): Promise<boolean> {
@@ -236,7 +229,7 @@ export class ValSqliteCheckStore implements CheckStore {
     return this.claimQuotaWith(scope, subject, day, max)
   }
 
-  private admissionBatch(input: CheckAdmissionInput): ValSqliteStatement[] {
+  private admissionBatch(input: CheckAdmissionInput<TResult>): ValSqliteStatement[] {
     const candidate = input.candidate
     const activeCheckWhere = `(status = 'queued'
       OR (status = 'running' AND lease_until IS NOT NULL AND lease_until > ?)
@@ -388,7 +381,7 @@ export class ValSqliteCheckStore implements CheckStore {
     ]
   }
 
-  private async findReusableWith(fingerprint: string, now: string): Promise<CheckRecord | null> {
+  private async findReusableWith(fingerprint: string, now: string): Promise<CheckRecord<TResult> | null> {
     const result = await this.sqlite.execute({
       sql: `SELECT * FROM canonry_checks
         WHERE fingerprint = ?
@@ -401,10 +394,10 @@ export class ValSqliteCheckStore implements CheckStore {
       args: [fingerprint, now, now],
     })
     const row = result.rows[0]
-    return row ? rowToCheck(row) : null
+    return row ? rowToCheck<TResult>(row) : null
   }
 
-  private async createWith(record: CheckRecord): Promise<void> {
+  private async createWith(record: CheckRecord<TResult>): Promise<void> {
     await this.sqlite.execute({
       sql: `INSERT INTO canonry_checks
         (id, fingerprint, domain, status, created_at, updated_at, expires_at, result_json, error_code, error_message, lease_owner, lease_until, user_queries)
@@ -441,7 +434,18 @@ export class ValSqliteCheckStore implements CheckStore {
   }
 }
 
-function rowToCheck(row: unknown): CheckRecord {
+/**
+ * The one place the kit crosses back into a product's own type.
+ *
+ * `result_json` is opaque storage: the store wrote whatever the product handed
+ * it and never looked inside, so on the way out there is nothing to validate
+ * against and this assertion is the boundary. It is asserted rather than
+ * checked deliberately — a store that verified the shape would have to know
+ * it, which is the coupling `CheckRecord<TResult>` exists to remove. The
+ * product owns its result schema, and its fingerprint namespace is what
+ * retires rows written under an older version of it.
+ */
+function rowToCheck<TResult>(row: unknown): CheckRecord<TResult> {
   const value = row as Record<string, unknown>
   const resultJson = readString(value, 'result_json')
   return {
@@ -452,7 +456,7 @@ function rowToCheck(row: unknown): CheckRecord {
     createdAt: readString(value, 'created_at') ?? '',
     updatedAt: readString(value, 'updated_at') ?? '',
     expiresAt: readString(value, 'expires_at'),
-    result: resultJson ? JSON.parse(resultJson) as CheckResult : null,
+    result: resultJson ? JSON.parse(resultJson) as TResult : null,
     errorCode: readString(value, 'error_code'),
     errorMessage: readString(value, 'error_message'),
     leaseOwner: readString(value, 'lease_owner'),

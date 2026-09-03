@@ -20,6 +20,35 @@ A module belongs here only if all of these hold:
 The test for a candidate is mechanical: if it references a visibility or site-health type, string, or phase, it is
 not generic, whatever else is true of it.
 
+## A product's result is stored, never read
+
+The kit runs a check; the val decides what a check MEASURES. So `CheckRecord<TResult>` carries the product's own
+result schema as a type parameter and the kit never looks inside it: the stores stringify it on write and hand it
+back on read, and `rowToCheck` is the single boundary assertion on the way out. Nothing here may narrow, validate, or
+branch on `result` — a store that knew the shape would have to be edited for the second product, which is the
+coupling the parameter removes. `SiteHealthSample`, `CheckResult`, and the site-health phase left for
+`apps/vals/ai-visibility-check/` for exactly that reason; `VisibilityReport` and `VisibilityProbePort` stayed,
+because they are what the visibility INSTRUMENT produces, not what a product stores.
+
+A val names the parameter once, where it builds its store — `new ValSqliteCheckStore<CheckResult>(sqlite)` — and
+every record it takes out is typed from there.
+
+## The fingerprint namespace belongs to the product
+
+`checkFingerprint(namespace, domain, userQueries)` takes the namespace as a REQUIRED first argument, and an empty one
+is refused rather than defaulted. The key is both the 24h cache key and the one-active-check index, so two products
+sharing a namespace would serve each other's results as cache hits — a different measurement entirely, reported as a
+hit.
+
+Each product owns exactly one namespace and bumps only its own, to retire its own records when it starts measuring
+something new. A new product means a NEW namespace, never a bump of another product's: bumping someone else's
+retires their live cache and changes nothing about yours.
+
+The produced string is a STORED value — every record already written carries the exact bytes the function returned —
+so the format is a compatibility contract. `test/records.test.ts` pins the literals for that reason: a reformat that
+reads as harmless orphans every stored record, and the only symptom is a cache that stops hitting and a bill that
+goes up.
+
 ## Subpaths
 
 `.`, `./visibility`, `./security`, `./storage`, `./jobs`, `./mcp`, `./ui`, `./config`. Each is a `src/<name>.ts`
@@ -30,6 +59,11 @@ barrel and a tsup entry; `.` re-exports the rest. Adding a subpath means adding 
 `visibility/contracts.ts` and the display-safe source stored on a record in `runtime/types.ts`. Two star re-exports
 of one name are ambiguous, which drops it from the root barrel silently, so `src/index.ts` names the winner
 explicitly. Keep that line if either declaration moves.
+
+`VisibilityReport`, `VisibilityEvidence`, `VisibilitySummary`, `VisibilityProbePort`, and `VisibilityProbeInput` are
+declared in `runtime/types.ts` and re-exported BY NAME from `visibility.ts`, so `./visibility` and `./jobs` both
+resolve them to one declaration and no consumer has to move. Named rather than starred, for the `VisibilitySource`
+reason directly above.
 
 ## Build
 

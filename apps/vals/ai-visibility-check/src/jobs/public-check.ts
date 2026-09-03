@@ -1,18 +1,18 @@
 import {
-  CHECK_RESULT_SCHEMA_VERSION,
-  type CheckResult,
   type CheckStore,
   PUBLIC_CHECK_EXECUTION_LEASE_MS,
   PUBLIC_CHECK_EXECUTION_LEASE_NAME,
   PUBLIC_CHECK_UNAVAILABLE,
   type PublicCheckDispatchOptions,
   type PublicCheckRunner,
-  type SiteHealthRunner,
-  type SiteHealthSample,
+} from 'npm:@canonry/val-kit@0.1.0/jobs'
+import {
+  safeProviderErrorMessage,
   type VisibilityProbePort,
   type VisibilityReport,
-} from 'npm:@canonry/val-kit@0.1.0/jobs'
-import { safeProviderErrorMessage } from 'npm:@canonry/val-kit@0.1.0/visibility'
+} from 'npm:@canonry/val-kit@0.1.0/visibility'
+import { CHECK_RESULT_SCHEMA_VERSION, type CheckResult } from '../runtime/check-result.ts'
+import type { SiteHealthRunner, SiteHealthSample } from '../site-health/types.ts'
 
 /**
  * Ceiling for one check's provider work. The visibility probe and the site
@@ -89,7 +89,7 @@ export class PublicQuotaError extends Error {
 }
 
 export interface PublicCheckRunnerOptions {
-  store: CheckStore
+  store: CheckStore<CheckResult>
   visibilityProbe: VisibilityProbePort | null
   siteHealthRunner: SiteHealthRunner
   ttlMs: number

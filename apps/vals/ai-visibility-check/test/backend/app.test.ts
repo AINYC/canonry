@@ -6,15 +6,14 @@ import {
   newCheckRecord,
   PUBLIC_CHECK_EXECUTION_LEASE_NAME,
   PUBLIC_RATE_LIMITED_ERROR_CODE,
-  type SiteHealthRunner,
-  type SiteHealthSample,
-  type VisibilityProbePort,
-  type VisibilityReport,
 } from 'npm:@canonry/val-kit@0.1.0/jobs'
 import { LocalBypassHumanVerifier, UnavailableHumanVerifier } from 'npm:@canonry/val-kit@0.1.0/security'
 import { MemoryCheckStore } from 'npm:@canonry/val-kit@0.1.0/storage'
+import type { VisibilityProbePort, VisibilityReport } from 'npm:@canonry/val-kit@0.1.0/visibility'
 import { createValTownApp } from '../../src/app/app.ts'
 import { createPublicCheckRunner } from '../../src/jobs/public-check.ts'
+import { CHECK_FINGERPRINT_NAMESPACE, type CheckResult } from '../../src/runtime/check-result.ts'
+import type { SiteHealthRunner, SiteHealthSample } from '../../src/site-health/types.ts'
 
 function equal<T>(actual: T, expected: T, message = 'values differ'): void {
   if (!Object.is(actual, expected)) {
@@ -167,7 +166,7 @@ async function createTestApp(
     now?: () => Date
   } = {},
 ) {
-  const store = new MemoryCheckStore()
+  const store = new MemoryCheckStore<CheckResult>()
   await store.initialize()
   const runtimeConfig = config(options.runtimeConfig)
   const runner = createPublicCheckRunner({
@@ -196,9 +195,9 @@ async function createTestApp(
 Deno.test('expired public results are no longer readable by their check ID', async () => {
   const { app, store } = await createTestApp({ now: () => new Date('2026-09-02T00:00:00.000Z') })
   const expired = {
-    ...newCheckRecord({
+    ...newCheckRecord<CheckResult>({
       id: 'f0f0f0f0-0000-4000-8000-000000000099',
-      fingerprint: checkFingerprint('expired.example'),
+      fingerprint: checkFingerprint(CHECK_FINGERPRINT_NAMESPACE, 'expired.example'),
       userQueries: [],
       domain: 'expired.example',
       now: new Date('2026-08-31T00:00:00.000Z'),
@@ -234,7 +233,10 @@ Deno.test('failed public results receive a TTL and expire from their public chec
   equal(body.check.status, 'failed')
   equal(body.check.expiresAt, '2026-09-01T12:00:01.000Z')
   equal((await store.get(body.check.id))?.expiresAt, body.check.expiresAt)
-  equal(await store.findReusable(checkFingerprint('failed.example'), clock.toISOString()), null)
+  equal(
+    await store.findReusable(checkFingerprint(CHECK_FINGERPRINT_NAMESPACE, 'failed.example'), clock.toISOString()),
+    null,
+  )
 
   clock = new Date('2026-09-01T12:00:01.001Z')
   const expired = await app.fetch(new Request(`https://val.test/api/checks/${body.check.id}`))
@@ -271,9 +273,9 @@ Deno.test('public API stores clipped normalized evidence, never its raw provider
 Deno.test('a stale running record is reclaimed and dispatched when the domain is resubmitted', async () => {
   const { app, store } = await createTestApp()
   const stale = {
-    ...newCheckRecord({
+    ...newCheckRecord<CheckResult>({
       id: 'f0f0f0f0-0000-4000-8000-000000000001',
-      fingerprint: checkFingerprint('example.com'),
+      fingerprint: checkFingerprint(CHECK_FINGERPRINT_NAMESPACE, 'example.com'),
       userQueries: [],
       domain: 'example.com',
       now: new Date('2026-09-01T11:00:00.000Z'),
@@ -411,9 +413,9 @@ Deno.test('an active same-domain check remains reusable while another domain hol
   const clock = new Date('2026-09-01T12:00:00.000Z')
   const { app, store } = await createTestApp({ now: () => clock })
   const active = {
-    ...newCheckRecord({
+    ...newCheckRecord<CheckResult>({
       id: 'f0f0f0f0-0000-4000-8000-000000000077',
-      fingerprint: checkFingerprint('active.example'),
+      fingerprint: checkFingerprint(CHECK_FINGERPRINT_NAMESPACE, 'active.example'),
       userQueries: [],
       domain: 'active.example',
       now: clock,

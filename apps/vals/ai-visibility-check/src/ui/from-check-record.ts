@@ -1,15 +1,18 @@
-import { computeMentionShare, computeShareOfVoice, type ShareOfVoice } from 'npm:@canonry/val-kit@0.1.0/visibility'
-import { orderFactors } from '../site-health/factor-order.ts'
 import {
   type CheckRecord,
-  type CheckResult,
   PUBLIC_CHECK_UNAVAILABLE,
   PUBLIC_RATE_LIMITED_ERROR_CODE,
-  type SiteHealthPageSample,
-  type SiteHealthSample,
+} from 'npm:@canonry/val-kit@0.1.0/jobs'
+import {
+  computeMentionShare,
+  computeShareOfVoice,
+  type ShareOfVoice,
   type VisibilityEvidence,
   type VisibilityReport,
-} from 'npm:@canonry/val-kit@0.1.0/jobs'
+} from 'npm:@canonry/val-kit@0.1.0/visibility'
+import type { CheckResult } from '../runtime/check-result.ts'
+import { orderFactors } from '../site-health/factor-order.ts'
+import type { SiteHealthPageSample, SiteHealthSample } from '../site-health/types.ts'
 import type {
   CanonryDemoViewModel,
   CheckFormViewModel,
@@ -40,7 +43,7 @@ const LOCAL_READY_FORM: CheckFormViewModel = {
  * It deliberately never turns an absent provider report into a 0% score.
  */
 export function toCanonryDemoViewModel(
-  record: CheckRecord | null,
+  record: CheckRecord<CheckResult> | null,
   options: CheckRecordViewOptions = {},
 ): CanonryDemoViewModel {
   const domain = record?.domain ?? ''
@@ -78,7 +81,7 @@ export function toCanonryDemoViewModel(
  * probe that failed, a crawl that errored, or a recorded phase error. Nothing
  * failed means no caution, whatever the stored status says.
  */
-function hasFailedWork(record: CheckRecord): boolean {
+function hasFailedWork(record: CheckRecord<CheckResult>): boolean {
   const result = record.result
   if (!result) return false
   if (result.errors && result.errors.length > 0) return true
@@ -86,7 +89,7 @@ function hasFailedWork(record: CheckRecord): boolean {
   return (result.visibility?.evidence ?? []).some((row) => row.mentioned === null && row.cited === null)
 }
 
-function mapStatus(record: CheckRecord): CanonryDemoViewModel['status'] {
+function mapStatus(record: CheckRecord<CheckResult>): CanonryDemoViewModel['status'] {
   if (record.errorCode === PUBLIC_RATE_LIMITED_ERROR_CODE) return 'rate-limited'
   switch (record.status) {
     case 'queued':
@@ -443,7 +446,10 @@ function providerLabel(provider: string): string {
   return known[provider] ?? (provider ? `${provider.slice(0, 1).toUpperCase()}${provider.slice(1)}` : 'Unknown engine')
 }
 
-function buildNotice(record: CheckRecord | null, result: CheckResult | null): CanonryDemoViewModel['notice'] {
+function buildNotice(
+  record: CheckRecord<CheckResult> | null,
+  result: CheckResult | null,
+): CanonryDemoViewModel['notice'] {
   if (!record) return undefined
   if (record.errorCode === PUBLIC_RATE_LIMITED_ERROR_CODE) {
     return {

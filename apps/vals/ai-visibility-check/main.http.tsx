@@ -5,6 +5,7 @@ import { ValSqliteCheckStore } from 'npm:@canonry/val-kit@0.1.0/storage'
 import { createGeminiValVisibilityProbe } from 'npm:@canonry/val-kit@0.1.0/visibility'
 import { createValTownApp } from './src/app/app.ts'
 import { createPublicCheckRunner } from './src/jobs/public-check.ts'
+import type { CheckResult } from './src/runtime/check-result.ts'
 import { createSiteHealthRunner } from './src/site-health/runner.ts'
 import {
   canonryDemoClientScript,
@@ -18,7 +19,7 @@ import {
 } from './src/ui/index.ts'
 
 const config = loadValTownConfig(Deno.env.toObject())
-const store = new ValSqliteCheckStore(sqlite)
+const store = new ValSqliteCheckStore<CheckResult>(sqlite)
 await store.initialize()
 
 const visibilityProbe = config.geminiApiKey

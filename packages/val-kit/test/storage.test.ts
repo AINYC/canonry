@@ -27,6 +27,13 @@ import {
   type ValSqliteStatement,
 } from '../src/storage/val-sqlite.js'
 
+/**
+ * A product namespace, because the store has none. These cases are about
+ * admission, quota, and leases — the machinery every product shares — so the
+ * value only has to be stable, not to name a real val.
+ */
+const NAMESPACE = 'store-parity-v1'
+
 const NOW = new Date('2026-09-01T12:00:00.000Z')
 const NOW_ISO = NOW.toISOString()
 const DAY = '2026-09-01'
@@ -37,7 +44,7 @@ function requireRecord(result: Awaited<ReturnType<CheckStore['admit']>>): CheckR
 }
 
 function candidate(id: string, domain = 'example.com', now = NOW): CheckRecord {
-  return newCheckRecord({ id, fingerprint: checkFingerprint(domain), domain, now })
+  return newCheckRecord({ id, fingerprint: checkFingerprint(NAMESPACE, domain), domain, now })
 }
 
 function admission(record: CheckRecord, now = NOW_ISO): CheckAdmissionInput {
@@ -334,7 +341,7 @@ test('SQLite admission stays atomic when a same-domain retry arrives after the f
     expect(quotaCountOf(sqlite, 'client', 'client-a', DAY)).toBe(1)
     expect(quotaCountOf(sqlite, 'global', 'all', DAY)).toBe(1)
     const rows = sqlite.database.prepare('SELECT id FROM canonry_checks WHERE fingerprint = ?').all(
-      checkFingerprint(domain),
+      checkFingerprint(NAMESPACE, domain),
     )
     expect(rows.length).toBe(1)
   } finally {
@@ -357,7 +364,7 @@ test('SQLite admission preserves quota caps without leaving a pending check', as
     expect(clientResult.kind).toBe('quota-exhausted')
     if (clientResult.kind === 'quota-exhausted') expect(clientResult.scope).toBe('client')
     expect(quotaCountOf(clientLimited, 'client', 'client-a', DAY)).toBe(1)
-    expect(checkCount(clientLimited, checkFingerprint('client-capped.example'))).toBe(0)
+    expect(checkCount(clientLimited, checkFingerprint(NAMESPACE, 'client-capped.example'))).toBe(0)
 
     const globalStore = new ValSqliteCheckStore(globalLimited)
     await globalStore.initialize()
@@ -370,7 +377,7 @@ test('SQLite admission preserves quota caps without leaving a pending check', as
     if (globalResult.kind === 'quota-exhausted') expect(globalResult.scope).toBe('global')
     expect(quotaCountOf(globalLimited, 'client', 'client-a', DAY)).toBe(0)
     expect(quotaCountOf(globalLimited, 'global', 'all', DAY)).toBe(1)
-    expect(checkCount(globalLimited, checkFingerprint('global-capped.example'))).toBe(0)
+    expect(checkCount(globalLimited, checkFingerprint(NAMESPACE, 'global-capped.example'))).toBe(0)
   } finally {
     clientLimited.close()
     globalLimited.close()

@@ -1,4 +1,10 @@
-import type { CheckAdmission, CheckAdmissionInput, CheckRecord, CheckStore } from '../runtime/types.js'
+import type {
+  CheckAdmission,
+  CheckAdmissionInput,
+  CheckRecord,
+  CheckRecordPatch,
+  CheckStore,
+} from '../runtime/types.js'
 
 const ADMISSION_LEASE_PREFIX = 'public-check-admission:'
 const ADMISSION_LEASE_MS = 10_000
@@ -6,15 +12,15 @@ const ADMISSION_RETRIES = 8
 const ADMISSION_RETRY_DELAY_MS = 8
 
 /** Deterministic store for local development and tests. Production uses Val SQLite. */
-export class MemoryCheckStore implements CheckStore {
-  readonly checks = new Map<string, CheckRecord>()
+export class MemoryCheckStore<TResult = unknown> implements CheckStore<TResult> {
+  readonly checks = new Map<string, CheckRecord<TResult>>()
   readonly quota = new Map<string, number>()
 
   initialize(): Promise<void> {
     return Promise.resolve()
   }
 
-  async admit(input: CheckAdmissionInput): Promise<CheckAdmission> {
+  async admit(input: CheckAdmissionInput<TResult>): Promise<CheckAdmission<TResult>> {
     const leaseName = `${ADMISSION_LEASE_PREFIX}${input.candidate.fingerprint}`
     const leaseUntil = new Date(new Date(input.now).getTime() + ADMISSION_LEASE_MS).toISOString()
 
@@ -33,7 +39,7 @@ export class MemoryCheckStore implements CheckStore {
         if (stale) {
           const current = this.checks.get(stale.id)
           if (current?.status === 'running' && (!current.leaseUntil || current.leaseUntil <= input.now)) {
-            const reclaimed: CheckRecord = {
+            const reclaimed: CheckRecord<TResult> = {
               ...current,
               status: 'queued',
               updatedAt: input.now,
@@ -85,7 +91,7 @@ export class MemoryCheckStore implements CheckStore {
     return { kind: 'busy' }
   }
 
-  findReusable(fingerprint: string, now: string): Promise<CheckRecord | null> {
+  findReusable(fingerprint: string, now: string): Promise<CheckRecord<TResult> | null> {
     const candidates = [...this.checks.values()]
       .filter((check) => check.fingerprint === fingerprint)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
@@ -99,20 +105,17 @@ export class MemoryCheckStore implements CheckStore {
     return Promise.resolve(null)
   }
 
-  create(record: CheckRecord): Promise<void> {
+  create(record: CheckRecord<TResult>): Promise<void> {
     this.checks.set(record.id, clone(record))
     return Promise.resolve()
   }
 
-  get(id: string): Promise<CheckRecord | null> {
+  get(id: string): Promise<CheckRecord<TResult> | null> {
     const record = this.checks.get(id)
     return Promise.resolve(record ? clone(record) : null)
   }
 
-  update(
-    id: string,
-    patch: Partial<Pick<CheckRecord, 'status' | 'updatedAt' | 'expiresAt' | 'result' | 'errorCode' | 'errorMessage'>>,
-  ): Promise<CheckRecord | null> {
+  update(id: string, patch: CheckRecordPatch<TResult>): Promise<CheckRecord<TResult> | null> {
     const current = this.checks.get(id)
     if (!current) return Promise.resolve(null)
     const next = { ...current, ...clone(patch) }
@@ -120,33 +123,41 @@ export class MemoryCheckStore implements CheckStore {
     return Promise.resolve(clone(next))
   }
 
-  claimJob(id: string, owner: string, now: string, leaseUntil: string): Promise<CheckRecord | null> {
+  claimJob(id: string, owner: string, now: string, leaseUntil: string): Promise<CheckRecord<TResult> | null> {
     const current = this.checks.get(id)
     if (!current) return Promise.resolve(null)
     const canClaim = current.status === 'queued' ||
       (current.status === 'running' && (!current.leaseUntil || current.leaseUntil <= now))
     if (!canClaim) return Promise.resolve(null)
-    const next: CheckRecord = { ...current, status: 'running', updatedAt: now, leaseOwner: owner, leaseUntil }
+    const next: CheckRecord<TResult> = {
+      ...current,
+      status: 'running',
+      updatedAt: now,
+      leaseOwner: owner,
+      leaseUntil,
+    }
     this.checks.set(id, next)
     return Promise.resolve(clone(next))
   }
 
-  finalizeJob(
-    id: string,
-    owner: string,
-    patch: Partial<Pick<CheckRecord, 'status' | 'updatedAt' | 'expiresAt' | 'result' | 'errorCode' | 'errorMessage'>>,
-  ): Promise<CheckRecord | null> {
+  finalizeJob(id: string, owner: string, patch: CheckRecordPatch<TResult>): Promise<CheckRecord<TResult> | null> {
     const current = this.checks.get(id)
     if (!current || current.leaseOwner !== owner) return Promise.resolve(null)
-    const next: CheckRecord = { ...current, ...clone(patch), leaseOwner: null, leaseUntil: null }
+    const next: CheckRecord<TResult> = { ...current, ...clone(patch), leaseOwner: null, leaseUntil: null }
     this.checks.set(id, next)
     return Promise.resolve(clone(next))
   }
 
-  requeueJob(id: string, owner: string, now: string): Promise<CheckRecord | null> {
+  requeueJob(id: string, owner: string, now: string): Promise<CheckRecord<TResult> | null> {
     const current = this.checks.get(id)
     if (!current || current.leaseOwner !== owner) return Promise.resolve(null)
-    const next: CheckRecord = { ...current, status: 'queued', updatedAt: now, leaseOwner: null, leaseUntil: null }
+    const next: CheckRecord<TResult> = {
+      ...current,
+      status: 'queued',
+      updatedAt: now,
+      leaseOwner: null,
+      leaseUntil: null,
+    }
     this.checks.set(id, next)
     return Promise.resolve(clone(next))
   }
@@ -171,7 +182,7 @@ export class MemoryCheckStore implements CheckStore {
     return Promise.resolve(true)
   }
 
-  private findStaleRunning(fingerprint: string, now: string): CheckRecord | null {
+  private findStaleRunning(fingerprint: string, now: string): CheckRecord<TResult> | null {
     const candidate = [...this.checks.values()]
       .filter((check) =>
         check.fingerprint === fingerprint && check.status === 'running' &&

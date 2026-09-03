@@ -20,6 +20,7 @@ import {
 } from 'npm:@canonry/val-kit@0.1.0/security'
 import { PublicQuotaError } from '../jobs/public-check.ts'
 import { createMcpHandler } from '../mcp/server.ts'
+import { CHECK_FINGERPRINT_NAMESPACE, type CheckResult } from '../runtime/check-result.ts'
 
 const MAX_BODY_BYTES = 4_096
 const CHECK_ID = /^[0-9a-f-]{36}$/i
@@ -34,11 +35,11 @@ export interface PageAssets {
 }
 
 export interface ValTownAppDependencies {
-  store: CheckStore
+  store: CheckStore<CheckResult>
   config: ValTownConfig
   dispatcher: JobDispatcher
   /** The UI is injected so this host stays independent from the renderer implementation. */
-  renderPage: (record: CheckRecord | null) => string
+  renderPage: (record: CheckRecord<CheckResult> | null) => string
   assets: PageAssets
   now?: () => Date
 }
@@ -216,7 +217,7 @@ interface SubmitInput {
 async function submitCheck(
   deps: ValTownAppDependencies,
   input: SubmitInput,
-): Promise<{ record: CheckRecord; reused: boolean; dispatch: 'completed' | 'busy' | 'ignored' }> {
+): Promise<{ record: CheckRecord<CheckResult>; reused: boolean; dispatch: 'completed' | 'busy' | 'ignored' }> {
   if (!deps.config.publicChecksEnabled) {
     throw new PublicCheckUnavailableError(
       deps.config.publicChecksUnavailableMessage ?? 'Public checks are temporarily unavailable.',
@@ -229,7 +230,7 @@ async function submitCheck(
   // The questions join the reuse key. They change what the check measures, so
   // a second caller asking different questions about the same domain must not
   // be handed the first caller's answers.
-  const fingerprint = checkFingerprint(target.domain, userQueries)
+  const fingerprint = checkFingerprint(CHECK_FINGERPRINT_NAMESPACE, target.domain, userQueries)
   const timestamp = input.now.toISOString()
 
   // Cached and already-active work is useful without consuming the one global
@@ -264,7 +265,7 @@ async function submitCheck(
 
   try {
     const admission = await deps.store.admit({
-      candidate: newCheckRecord({
+      candidate: newCheckRecord<CheckResult>({
         id: crypto.randomUUID(),
         fingerprint,
         domain: target.domain,
@@ -307,8 +308,8 @@ async function submitCheck(
 
 async function dispatchExistingCheck(
   deps: ValTownAppDependencies,
-  record: CheckRecord,
-): Promise<{ record: CheckRecord; reused: true; dispatch: 'completed' | 'busy' | 'ignored' }> {
+  record: CheckRecord<CheckResult>,
+): Promise<{ record: CheckRecord<CheckResult>; reused: true; dispatch: 'completed' | 'busy' | 'ignored' }> {
   const dispatch = record.status === 'queued' ? await deps.dispatcher.dispatch(record.id) : 'ignored'
   return {
     record: (await deps.store.get(record.id)) ?? record,
@@ -317,7 +318,9 @@ async function dispatchExistingCheck(
   }
 }
 
-function publicCheckRecord(record: CheckRecord): Omit<CheckRecord, 'fingerprint' | 'leaseOwner' | 'leaseUntil'> {
+function publicCheckRecord(
+  record: CheckRecord<CheckResult>,
+): Omit<CheckRecord<CheckResult>, 'fingerprint' | 'leaseOwner' | 'leaseUntil'> {
   const { fingerprint: _fingerprint, leaseOwner: _leaseOwner, leaseUntil: _leaseUntil, ...safe } = record
   return safe
 }
@@ -432,7 +435,7 @@ function contentSecurityPolicy(turnstileAllowed: boolean): string {
   ].join('; ')
 }
 
-function formFailureRecord(domain: unknown, now: Date, error: unknown): CheckRecord {
+function formFailureRecord(domain: unknown, now: Date, error: unknown): CheckRecord<CheckResult> {
   const displayDomain = typeof domain === 'string' ? domain.trim().slice(0, 253) : ''
   const timestamp = now.toISOString()
   return {

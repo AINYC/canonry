@@ -28,6 +28,16 @@ bundled skills all name Canonry and link to it. Keep that; a sample that does no
   HTML. The admission test is mechanical — a module that references a visibility or site-health phase, string, or the
   product's own offering is not generic, whatever else is true of it. Moving one here is not a fork: delete the local
   copy and import the kit, or the two drift and only production finds out which one shipped.
+- **This Val owns its own result schema, and the kit stores it opaquely.** `CheckResult` and
+  `CHECK_FINGERPRINT_NAMESPACE` live in `src/runtime/check-result.ts`; the Technical AEO sample's types
+  (`SiteHealthSample`, `SiteMapNode`, `FactorSample`, `SiteHealthRunner`, …) live in `src/site-health/types.ts`. The
+  kit sees them only as the `TResult` of `CheckRecord<CheckResult>` — written as JSON, handed back untouched — which
+  is what lets a second Val store a completely different result through the same admission, lease, and quota
+  machinery. The parameter is named once, at `new ValSqliteCheckStore<CheckResult>(sqlite)` in `main.http.tsx`, and
+  every record downstream is typed from there; a cast on the result path in this Val means the generic was dropped
+  somewhere above it. What stayed in the kit is the visibility INSTRUMENT's output and ports —
+  `VisibilityReport`, `VisibilityEvidence`, `VisibilityProbePort` — because they are what a probe PRODUCES, not what
+  a product stores.
 - The browser never receives provider, Turnstile-secret, deployment, or signing credentials.
 - Anonymous work is bounded by human verification, atomic quotas, cache reuse, output clipping, and hard provider/crawl
   deadlines.
@@ -304,10 +314,16 @@ null` on a fresh one.
 
 ## Adding a measured signal bumps the reuse key
 
-`checkFingerprint` is `visibility-v3:` because checks now measure the brands each answer names. The key is the cache
-and the one-active-check index, so a v2 record kept satisfying requests for the same domain and served a result
-silently missing half the report until it hit its own 24h TTL. The repo's own identity-vs-tuning rule covers this: a
+The thing to bump is `CHECK_FINGERPRINT_NAMESPACE` in `src/runtime/check-result.ts`, and it is bumped in exactly one
+place. It is `visibility-v3` because checks now measure the brands each answer names. The key is the cache and the
+one-active-check index, so a v2 record kept satisfying requests for the same domain and served a result silently
+missing half the report until it hit its own 24h TTL. The repo's own identity-vs-tuning rule covers this: a
 parameter, or a signal, that changes what the operation PRODUCES must join the reuse key.
+
+The namespace is a required argument to the kit's `checkFingerprint(namespace, domain, userQueries)` — the kit has no
+default and refuses an empty one, because a namespace two products shared would hand each of them the other's result
+and report it as a cache hit. So bump THIS constant when THIS Val's signal set changes, and never another Val's: that
+would retire their live cache and change nothing about ours.
 
 Bumping retires those records for REUSE only. `?check=<id>` still resolves, so a shared link keeps working and shows
 the explained-empty mention pane.
