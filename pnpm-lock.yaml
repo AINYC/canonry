@@ -656,6 +656,16 @@ importers:
         specifier: ^6.0.0
         version: 6.27.0(ws@8.21.0)(zod@4.3.6)
 
+  packages/val-kit:
+    dependencies:
+      '@google/genai':
+        specifier: 1.46.0
+        version: 1.46.0(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(jiti@2.6.1)(postcss@8.5.15)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.2)
+
   packages/wordpress-traffic-logger-plugin: {}
 
 packages:
@@ -6738,6 +6748,7 @@ snapshots:
   '@types/node@25.9.1':
     dependencies:
       undici-types: 7.24.6
+    optional: true
 
   '@types/react-dom@19.2.3(@types/react@19.2.14)':
     dependencies:
@@ -8861,7 +8872,7 @@ snapshots:
       '@protobufjs/path': 1.1.2
       '@protobufjs/pool': 1.1.0
       '@protobufjs/utf8': 1.1.1
-      '@types/node': 25.9.1
+      '@types/node': 24.12.0
       long: 5.3.2
 
   proxy-addr@2.0.7:
@@ -9478,7 +9489,8 @@ snapshots:
 
   undici-types@7.16.0: {}
 
-  undici-types@7.24.6: {}
+  undici-types@7.24.6:
+    optional: true
 
   undici@7.24.4: {}
 

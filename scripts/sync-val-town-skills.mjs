@@ -1,15 +1,18 @@
 /**
- * Mirror `skills/<name>/` into the Val Town val as TypeScript modules.
+ * Mirror `skills/<name>/` into `@canonry/val-kit` as TypeScript modules.
  *
- * The val serves both bundled skills as MCP resources, so an agent that
- * connects to it gets the analyst playbook alongside the data. It cannot read
- * them from `skills/` at runtime: a val is a flat file set rooted at
- * `apps/vals/ai-visibility-check/`, nothing outside that directory is pushed,
- * and Val Town caps a single file at 80,000 characters.
- * `skills/canonry/references/canonry-cli.md` is 101,329, so a straight copy is
- * not an option either.
+ * A val serves both bundled skills as MCP resources, so an agent that connects
+ * to one gets the analyst playbook alongside the data. It cannot read them from
+ * `skills/` at runtime: a val is a flat file set rooted at its own directory,
+ * nothing outside that directory is pushed, and Val Town caps a single file at
+ * 80,000 characters. `skills/canonry/references/canonry-cli.md` is 101,329, so
+ * a straight copy was never an option either.
  *
- * Hence generated modules, chunked so that no emitted file approaches the cap.
+ * They now live in the shared kit rather than in one val, because every val
+ * serves the same two skills. The chunking stays: it costs nothing in an npm
+ * package, and it is the reason the modules fit a val at all if one is ever
+ * inlined again.
+ *
  * Content is written with `JSON.stringify` rather than a template literal
  * because the source is markdown: it is full of backticks and `${`, and every
  * one of them would need escaping by hand.
@@ -24,11 +27,12 @@ import { fileURLToPath } from 'node:url'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const skillsRoot = path.join(repoRoot, 'skills')
-const outputRoot = path.join(repoRoot, 'apps', 'vals', 'ai-visibility-check', 'src', 'mcp', 'skills')
+const outputRoot = path.join(repoRoot, 'packages', 'val-kit', 'src', 'mcp', 'skills')
 const managedSkills = ['aero', 'canonry']
 
 /**
- * Val Town's hard per-file limit. Chunks are sized against the ESCAPED length,
+ * Val Town's hard per-file limit, kept as the ceiling even though the modules
+ * now ship in an npm package. Chunks are sized against the ESCAPED length,
  * because that is what lands in the file — a 50,000-character slice of markdown
  * is slightly longer once `JSON.stringify` escapes its newlines.
  */
@@ -144,7 +148,7 @@ function renderCatalogModule(documents) {
   for (const document of documents) {
     const identifiers = document.parts.map((_, index) => {
       const identifier = `${document.slug.replace(/-([a-z0-9])/g, (_m, c) => c.toUpperCase())}Part${index}`
-      imports.push(`import { part as ${identifier} } from './${document.slug}.${index}.ts'`)
+      imports.push(`import { part as ${identifier} } from './${document.slug}.${index}.js'`)
       return identifier
     })
     const content = identifiers.length === 1 ? identifiers[0] : `[${identifiers.join(', ')}].join('')`
@@ -166,7 +170,7 @@ function renderCatalogModule(documents) {
 
   return [
     GENERATED_BANNER,
-    "import type { SkillDocument } from '../skill-types.ts'",
+    "import type { SkillDocument } from '../skill-types.js'",
     '',
     imports.join('\n'),
     '',

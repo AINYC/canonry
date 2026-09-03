@@ -54,6 +54,7 @@ const NODE_PACKAGES = [
   'provider-local',
   'provider-openai',
   'provider-perplexity',
+  'val-kit',
 ] as const
 
 const NODE_APPS = ['api', 'worker'] as const

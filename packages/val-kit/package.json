@@ -1,0 +1,67 @@
+{
+  "name": "@canonry/val-kit",
+  "version": "0.1.0",
+  "description": "Host-agnostic core shared by Canonry's Val Town sample vals: the AI-visibility engine, the public-check admission machinery, storage, MCP framing, and the design tokens.",
+  "license": "FSL-1.1-ALv2",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./visibility": {
+      "types": "./dist/visibility.d.ts",
+      "default": "./dist/visibility.js"
+    },
+    "./security": {
+      "types": "./dist/security.d.ts",
+      "default": "./dist/security.js"
+    },
+    "./storage": {
+      "types": "./dist/storage.d.ts",
+      "default": "./dist/storage.js"
+    },
+    "./jobs": {
+      "types": "./dist/jobs.d.ts",
+      "default": "./dist/jobs.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp.d.ts",
+      "default": "./dist/mcp.js"
+    },
+    "./ui": {
+      "types": "./dist/ui.d.ts",
+      "default": "./dist/ui.js"
+    },
+    "./config": {
+      "types": "./dist/config.d.ts",
+      "default": "./dist/config.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist/",
+    "README.md",
+    "package.json"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "prepublishOnly": "pnpm run build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --config ../../vitest.package.config.ts",
+    "lint": "eslint src/ test/"
+  },
+  "dependencies": {
+    "@google/genai": "1.46.0"
+  },
+  "devDependencies": {
+    "tsup": "^8.5.1"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
