@@ -137,6 +137,7 @@ import {
   trackEvent,
 } from "./telemetry.js";
 import { checkLatestVersionForServer } from "./update-check.js";
+import { resolveBuildCommit, resolveInstanceIdentity } from "./instance-identity.js";
 import { JobRunner } from "./job-runner.js";
 import { maybeShowActivationNotice } from './activation-notice.js'
 import { executeGscSync } from "./gsc-sync.js";
@@ -3440,12 +3441,20 @@ export async function createServer(opts: {
   // /health responds in microseconds and never exceeds k8s probe budgets.
   // Opt-out via CANONRY_DISABLE_UPDATE_CHECK=1, DO_NOT_TRACK=1, CI, or
   // updateCheck: false in config.
+  // `commit` (build-time stamp, else CANONRY_COMMIT) and `instance`
+  // (CANONRY_INSTANCE / CANONRY_INSTANCE_ROLE) make a running engine
+  // self-identifying to fleet tooling. Both are fixed for the process lifetime,
+  // so resolve them once here; each is omitted, not nulled, when unknown.
+  const buildCommit = resolveBuildCommit();
+  const instance = resolveInstanceIdentity();
   const healthHandler = () => {
     const update = checkLatestVersionForServer();
     return {
       status: "ok",
       service: "canonry",
       version: PKG_VERSION,
+      ...(buildCommit ? { commit: buildCommit } : {}),
+      ...(instance ? { instance } : {}),
       ...(basePath ? { basePath: basePath.replace(/\/$/, "") } : {}),
       ...(update ? { updateAvailable: update } : {}),
     };
