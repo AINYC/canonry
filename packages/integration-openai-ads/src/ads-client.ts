@@ -485,6 +485,25 @@ export async function pauseCampaign(apiKey: string, campaignId: string): Promise
   return adsFetch<OpenAiAdsCampaign>(apiKey, `campaigns/${encodeURIComponent(campaignId)}/pause`, [], 'POST')
 }
 
+/**
+ * Archive is IRREVERSIBLE upstream. The `{entity}/{id}/archive` path and the
+ * `archived` status it returns were VERIFIED LIVE on 2026-09-02 against a
+ * Canonry-owned test advertiser account: `POST campaigns/{id}/archive`
+ * answered with `status: "archived"`, both for an entity paused earlier and
+ * for one paused immediately before the call.
+ *
+ * That run also established that the provider's LIST endpoints are eventually
+ * consistent: a campaign the direct `campaigns/{id}` read already reported as
+ * `archived` was still reported as `paused` by the campaigns list. An archive
+ * must therefore only ever be confirmed by a single-entity read; see the
+ * archive routes and reconciler in @ainyc/canonry-api-routes.
+ */
+export async function archiveCampaign(apiKey: string, campaignId: string): Promise<OpenAiAdsCampaign> {
+  validateApiKey(apiKey)
+  validateId(campaignId, 'Campaign id')
+  return adsFetch<OpenAiAdsCampaign>(apiKey, `campaigns/${encodeURIComponent(campaignId)}/archive`, [], 'POST')
+}
+
 export async function listAdGroups(apiKey: string, campaignId: string): Promise<OpenAiAdsAdGroup[]> {
   validateApiKey(apiKey)
   validateId(campaignId, 'Campaign id')
@@ -531,6 +550,13 @@ export async function pauseAdGroup(apiKey: string, adGroupId: string): Promise<O
   return adsFetch<OpenAiAdsAdGroup>(apiKey, `ad_groups/${encodeURIComponent(adGroupId)}/pause`, [], 'POST')
 }
 
+/** Irreversible upstream; the `/archive` path was verified live on 2026-09-02 (see archiveCampaign). */
+export async function archiveAdGroup(apiKey: string, adGroupId: string): Promise<OpenAiAdsAdGroup> {
+  validateApiKey(apiKey)
+  validateId(adGroupId, 'Ad group id')
+  return adsFetch<OpenAiAdsAdGroup>(apiKey, `ad_groups/${encodeURIComponent(adGroupId)}/archive`, [], 'POST')
+}
+
 export async function listAds(apiKey: string, adGroupId: string): Promise<OpenAiAdsAd[]> {
   validateApiKey(apiKey)
   validateId(adGroupId, 'Ad group id')
@@ -572,6 +598,13 @@ export async function pauseAd(apiKey: string, adId: string): Promise<OpenAiAdsAd
   validateApiKey(apiKey)
   validateId(adId, 'Ad id')
   return adsFetch<OpenAiAdsAd>(apiKey, `ads/${encodeURIComponent(adId)}/pause`, [], 'POST')
+}
+
+/** Irreversible upstream; the `/archive` path was verified live on 2026-09-02 (see archiveCampaign). */
+export async function archiveAd(apiKey: string, adId: string): Promise<OpenAiAdsAd> {
+  validateApiKey(apiKey)
+  validateId(adId, 'Ad id')
+  return adsFetch<OpenAiAdsAd>(apiKey, `ads/${encodeURIComponent(adId)}/archive`, [], 'POST')
 }
 
 export async function uploadImageFromUrl(apiKey: string, imageUrl: string): Promise<OpenAiAdsUploadImageResponse> {

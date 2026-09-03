@@ -162,6 +162,9 @@ import {
   activateAd,
   activateAdGroup,
   activateCampaign,
+  archiveAd,
+  archiveAdGroup,
+  archiveCampaign,
   createAd,
   createAdGroup,
   createCampaign,
@@ -1403,6 +1406,8 @@ export async function createServer(opts: {
     activateCampaign: async (apiKey: string, id: string) =>
       adsCampaignEntityResult(await activateCampaign(apiKey, id)),
     pauseCampaign: async (apiKey: string, id: string) => adsCampaignEntityResult(await pauseCampaign(apiKey, id)),
+    archiveCampaign: async (apiKey: string, id: string) =>
+      adsCampaignEntityResult(await archiveCampaign(apiKey, id)),
     getAdGroup: async (apiKey: string, id: string) => adsAdGroupEntityResult(await getAdGroup(apiKey, id)),
     listAdGroups: async (apiKey: string, campaignId: string) =>
       (await listAdGroups(apiKey, campaignId)).map((entity) => adsAdGroupEntityResult(entity, campaignId)),
@@ -1451,6 +1456,8 @@ export async function createServer(opts: {
     activateAdGroup: async (apiKey: string, id: string) =>
       adsAdGroupEntityResult(await activateAdGroup(apiKey, id)),
     pauseAdGroup: async (apiKey: string, id: string) => adsAdGroupEntityResult(await pauseAdGroup(apiKey, id)),
+    archiveAdGroup: async (apiKey: string, id: string) =>
+      adsAdGroupEntityResult(await archiveAdGroup(apiKey, id)),
     getAd: async (apiKey: string, id: string) => adsAdEntityResult(await getAd(apiKey, id)),
     listAds: async (apiKey: string, adGroupId: string) =>
       (await listAds(apiKey, adGroupId)).map((entity) => adsAdEntityResult(entity, adGroupId)),
@@ -1487,6 +1494,7 @@ export async function createServer(opts: {
     })),
     activateAd: async (apiKey: string, id: string) => adsAdEntityResult(await activateAd(apiKey, id)),
     pauseAd: async (apiKey: string, id: string) => adsAdEntityResult(await pauseAd(apiKey, id)),
+    archiveAd: async (apiKey: string, id: string) => adsAdEntityResult(await archiveAd(apiKey, id)),
   };
 
   const adsLiveEntity = (entity: {

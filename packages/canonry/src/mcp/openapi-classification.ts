@@ -224,13 +224,18 @@ export const MCP_OPENAPI_OPERATION_CLASSIFICATIONS = {
   'POST /api/v1/projects/{name}/ads/campaigns': 'included',
   'POST /api/v1/projects/{name}/ads/campaigns/{id}': 'included',
   'POST /api/v1/projects/{name}/ads/campaigns/{id}/pause': 'included',
+  // Archive is irreversible. It stays a human API surface until it has been
+  // exercised against a test advertiser account; agents get pause instead.
+  'POST /api/v1/projects/{name}/ads/campaigns/{id}/archive': 'deferred',
   'POST /api/v1/projects/{name}/ads/campaigns/{id}/activate-tree': 'included',
   'POST /api/v1/projects/{name}/ads/ad-groups': 'included',
   'POST /api/v1/projects/{name}/ads/ad-groups/{id}': 'included',
   'POST /api/v1/projects/{name}/ads/ad-groups/{id}/pause': 'included',
+  'POST /api/v1/projects/{name}/ads/ad-groups/{id}/archive': 'deferred',
   'POST /api/v1/projects/{name}/ads/ads': 'included',
   'POST /api/v1/projects/{name}/ads/ads/{id}': 'included',
   'POST /api/v1/projects/{name}/ads/ads/{id}/pause': 'included',
+  'POST /api/v1/projects/{name}/ads/ads/{id}/archive': 'deferred',
   'POST /api/v1/projects/{name}/ads/sync': 'included',
   'GET /api/v1/projects/{name}/ads/campaigns': 'included',
   'GET /api/v1/projects/{name}/ads/insights': 'included',

@@ -56,6 +56,14 @@ describe('public package API', () => {
     })
   })
 
+  it('exposes the irreversible archive primitives', () => {
+    expect(publicApi).toMatchObject({
+      archiveCampaign: expect.any(Function),
+      archiveAdGroup: expect.any(Function),
+      archiveAd: expect.any(Function),
+    })
+  })
+
   it('rejects lifecycle status smuggled into public updates before fetch', async () => {
     const calls = installFetchTrap()
 

@@ -210,6 +210,21 @@ canonry ads campaign activate-tree <project> <campaign-id> --input <json-file|->
 # substituting a cap nobody chose on a paid-mutation path is worse than refusing). Stored
 # receipts are never re-capped: replay, resume-activation, and reconciliation of an existing
 # operation ignore the operational cap.
+# Campaign-tree lifecycle writes are API routes (POST .../ads/campaigns|ad-groups|ads[/{id}[/pause|/archive]]),
+# all gated on `ads.write`. Creates are always paused, status is never accepted on update, and an update
+# requires the entity to be paused plus an expectedUpdatedAt that matches the live upstream revision.
+# ARCHIVE (POST .../ads/campaigns/{id}/archive, .../ad-groups/{id}/archive, .../ads/{id}/archive) is
+# supported and IRREVERSIBLE, so it carries every guard pause carries and three more: the entity must
+# already be paused (an active one is refused and told to pause first), the caller MUST pin the reviewed
+# revision with expectedUpdatedAt (a stale value is refused), and there is deliberately NO status
+# remediation — an unconfirmed archived state leaves the receipt `unknown` with
+# `ADS_ARCHIVED_POSTCONDITION_FAILED` for reconciliation instead of a second irreversible write. Archive
+# is intentionally NOT exposed as an MCP tool (classified `deferred`): it stays a human API surface.
+# The upstream `/archive` path and its `archived` status transition were VERIFIED LIVE on 2026-09-02
+# against a Canonry-owned test advertiser account. That run also proved the provider's LIST endpoints are
+# eventually consistent: a campaign the direct single-entity read already reported `archived` was still
+# reported `paused` by the campaigns list. An archive is therefore confirmed only by the archive response
+# itself and, on reconciliation, by a direct GET by id — never by a list read.
 canonry ads sync <project>                            # trigger an ads-sync run
 canonry ads campaigns <project> [--format json|jsonl] # snapshots incl. context hints
 canonry ads insights <project> [--level campaign|ad_group] [--entity <id>] [--from <d>] [--to <d>] [--format json|jsonl]

@@ -401,8 +401,11 @@ export const adsDeliveryDiagnosticsDtoSchema = z.object({
 export type AdsDeliveryDiagnosticsDto = z.infer<typeof adsDeliveryDiagnosticsDtoSchema>
 
 // Campaign lifecycle writes are intentionally narrower than the upstream API:
-// creates are always paused, status is never accepted on update, and archive is
-// omitted because it is irreversible. The route layer injects the safe status.
+// creates are always paused and status is never accepted on update. The route
+// layer injects the safe status. Archive IS supported, deliberately and behind
+// more guards than pause: the entity must already be paused, the caller must
+// pin the exact version it reviewed via expectedUpdatedAt, and the archived
+// postcondition is never remediated because the write cannot be undone.
 const adsOperationKeySchema = z
   .string()
   .min(8)
@@ -427,13 +430,16 @@ export const adsOperationKindSchema = z.enum([
   'campaign_create',
   'campaign_update',
   'campaign_pause',
+  'campaign_archive',
   'campaign_tree_activate',
   'ad_group_create',
   'ad_group_update',
   'ad_group_pause',
+  'ad_group_archive',
   'ad_create',
   'ad_update',
   'ad_pause',
+  'ad_archive',
 ])
 export type AdsOperationKind = z.infer<typeof adsOperationKindSchema>
 export const AdsOperationKinds = adsOperationKindSchema.enum
@@ -755,6 +761,17 @@ export const adsPauseRequestSchema = z.object({
   operationKey: adsOperationKeySchema,
 })
 export type AdsPauseRequest = z.infer<typeof adsPauseRequestSchema>
+
+/**
+ * Archive is irreversible, so unlike pause it must pin the version: the caller
+ * archives the exact entity revision it looked at. A stale expectedUpdatedAt is
+ * refused rather than applied to whatever the entity has since become.
+ */
+export const adsArchiveRequestSchema = z.object({
+  operationKey: adsOperationKeySchema,
+  expectedUpdatedAt: z.number().int().nonnegative(),
+})
+export type AdsArchiveRequest = z.infer<typeof adsArchiveRequestSchema>
 
 export const adsOperationDtoSchema = z.object({
   id: z.string(),

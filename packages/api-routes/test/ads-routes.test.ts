@@ -51,6 +51,7 @@ function buildApp(overrides: {
   mutationStatus?: string
   pauseStatus?: string
   pauseShouldFail?: boolean
+  archiveStatus?: string
   currentEntity?: Partial<AdsOperatorEntityResult>
   campaignCandidates?: AdsOperatorEntityResult[]
   adGroupCandidates?: AdsOperatorEntityResult[]
@@ -131,7 +132,9 @@ function buildApp(overrides: {
       ? overrides.currentStatus ?? 'paused'
       : method.startsWith('pause')
         ? overrides.pauseStatus ?? 'paused'
-        : overrides.mutationStatus ?? 'paused'
+        : method.startsWith('archive')
+          ? overrides.archiveStatus ?? 'archived'
+          : overrides.mutationStatus ?? 'paused'
     return entity(method, id, status)
   }
   const adsOperator: AdsOperator = {
@@ -153,6 +156,7 @@ function buildApp(overrides: {
     },
     updateCampaign: async (_apiKey, id, input) => call('updateCampaign', id, input),
     pauseCampaign: async (_apiKey, id) => call('pauseCampaign', id),
+    archiveCampaign: async (_apiKey, id) => call('archiveCampaign', id),
     getAdGroup: async (_apiKey, id) => call('getAdGroup', id),
     listAdGroups: async (_apiKey, campaignId) => {
       operatorCalls.push({ method: 'listAdGroups', input: campaignId })
@@ -161,6 +165,7 @@ function buildApp(overrides: {
     createAdGroup: async (_apiKey, input) => call('createAdGroup', 'adgrp_new', input),
     updateAdGroup: async (_apiKey, id, input) => call('updateAdGroup', id, input),
     pauseAdGroup: async (_apiKey, id) => call('pauseAdGroup', id),
+    archiveAdGroup: async (_apiKey, id) => call('archiveAdGroup', id),
     getAd: async (_apiKey, id) => call('getAd', id),
     listAds: async (_apiKey, adGroupId) => {
       operatorCalls.push({ method: 'listAds', input: adGroupId })
@@ -169,6 +174,7 @@ function buildApp(overrides: {
     createAd: async (_apiKey, input) => call('createAd', 'ad_new', input),
     updateAd: async (_apiKey, id, input) => call('updateAd', id, input),
     pauseAd: async (_apiKey, id) => call('pauseAd', id),
+    archiveAd: async (_apiKey, id) => call('archiveAd', id),
   }
   const adsReader: AdsReader = {
     getAccount: async (apiKey) => {
@@ -1219,6 +1225,257 @@ describe('ads routes', () => {
       expect(res.statusCode).toBe(200)
       expect(ctx.operatorCalls.some((entry) => entry.method === method)).toBe(true)
     }
+  })
+
+  it('archives a paused campaign, ad group, and ad, recording the archive operation kind', async () => {
+    const projectId = ctx.seedProject()
+    ctx.seedConnection(projectId)
+
+    for (const [url, readMethod, archiveMethod, key, kind, entityType, entityId] of [
+      [
+        '/projects/acme/ads/campaigns/cmpn_old/archive',
+        'getCampaign', 'archiveCampaign', 'retire:campaign:1',
+        AdsOperationKinds.campaign_archive, 'campaign', 'cmpn_old',
+      ],
+      [
+        '/projects/acme/ads/ad-groups/adgrp_old/archive',
+        'getAdGroup', 'archiveAdGroup', 'retire:group:1',
+        AdsOperationKinds.ad_group_archive, 'ad_group', 'adgrp_old',
+      ],
+      [
+        '/projects/acme/ads/ads/ad_old/archive',
+        'getAd', 'archiveAd', 'retire:ad:1',
+        AdsOperationKinds.ad_archive, 'ad', 'ad_old',
+      ],
+    ] as const) {
+      const before = ctx.operatorCalls.length
+      const res = await ctx.app.inject({
+        method: 'POST', url, payload: { operationKey: key, expectedUpdatedAt: 123 },
+      })
+
+      expect(res.statusCode).toBe(200)
+      expect(res.json()).toMatchObject({ replayed: false, operation: { kind, state: 'succeeded' } })
+      // The live read comes first: archive never touches an entity it has not
+      // just checked is paused and at the reviewed revision.
+      expect(ctx.operatorCalls.slice(before).map((entry) => entry.method)).toEqual([readMethod, archiveMethod])
+
+      const receipt = ctx.db.select().from(adsOperations)
+        .where(eq(adsOperations.operationKey, key)).get()
+      expect(receipt).toMatchObject({
+        kind,
+        state: AdsOperationStates.succeeded,
+        entityType,
+        entityId,
+        reconcileStrategy: 'known_entity',
+      })
+      expect(receipt?.reconcileFields).toEqual({ status: 'archived' })
+    }
+  })
+
+  it('refuses to archive an active entity and tells the caller to pause it first', async () => {
+    await ctx.app.close()
+    fs.rmSync(ctx.tmpDir, { recursive: true, force: true })
+    ctx = buildApp({ currentStatus: 'active' })
+    await ctx.app.ready()
+    const projectId = ctx.seedProject()
+    ctx.seedConnection(projectId)
+
+    const res = await ctx.app.inject({
+      method: 'POST', url: '/projects/acme/ads/campaigns/cmpn_live/archive', payload: {
+        operationKey: 'retire:campaign:active',
+        expectedUpdatedAt: 123,
+      },
+    })
+
+    expect(res.statusCode).toBe(400)
+    expect(res.body).toContain('Pause the upstream ad entity before archiving it')
+    expect(ctx.operatorCalls.map((entry) => entry.method)).toEqual(['getCampaign'])
+    const receipt = ctx.db.select().from(adsOperations)
+      .where(eq(adsOperations.operationKey, 'retire:campaign:active')).get()
+    expect(receipt).toMatchObject({ state: 'failed', errorCode: 'VALIDATION_ERROR' })
+  })
+
+  it('refuses to archive against a stale expectedUpdatedAt', async () => {
+    const projectId = ctx.seedProject()
+    ctx.seedConnection(projectId)
+
+    const res = await ctx.app.inject({
+      method: 'POST', url: '/projects/acme/ads/ad-groups/adgrp_moved/archive', payload: {
+        operationKey: 'retire:group:stale',
+        expectedUpdatedAt: 122,
+      },
+    })
+
+    expect(res.statusCode).toBe(400)
+    expect(res.body).toContain('The upstream ad entity changed since it was reviewed')
+    expect(ctx.operatorCalls.map((entry) => entry.method)).toEqual(['getAdGroup'])
+    const receipt = ctx.db.select().from(adsOperations)
+      .where(eq(adsOperations.operationKey, 'retire:group:stale')).get()
+    expect(receipt).toMatchObject({ state: 'failed', errorCode: 'VALIDATION_ERROR' })
+  })
+
+  it('requires expectedUpdatedAt on an archive request', async () => {
+    const projectId = ctx.seedProject()
+    ctx.seedConnection(projectId)
+
+    const res = await ctx.app.inject({
+      method: 'POST', url: '/projects/acme/ads/ads/ad_old/archive', payload: {
+        operationKey: 'retire:ad:unpinned',
+      },
+    })
+
+    expect(res.statusCode).toBe(400)
+    expect(ctx.operatorCalls).toEqual([])
+  })
+
+  it('replays an archive by operation key instead of re-issuing the irreversible write', async () => {
+    const projectId = ctx.seedProject()
+    ctx.seedConnection(projectId)
+    const payload = { operationKey: 'retire:campaign:replay', expectedUpdatedAt: 123 }
+
+    const first = await ctx.app.inject({
+      method: 'POST', url: '/projects/acme/ads/campaigns/cmpn_old/archive', payload,
+    })
+    expect(first.statusCode).toBe(200)
+    const firstBody = JSON.parse(first.body) as { operation: { id: string }; replayed: boolean }
+    expect(firstBody.replayed).toBe(false)
+    expect(ctx.operatorCalls.map((entry) => entry.method)).toEqual(['getCampaign', 'archiveCampaign'])
+
+    const replay = await ctx.app.inject({
+      method: 'POST', url: '/projects/acme/ads/campaigns/cmpn_old/archive', payload,
+    })
+
+    expect(replay.statusCode).toBe(200)
+    expect(replay.json()).toMatchObject({ replayed: true, operation: { state: 'succeeded' } })
+    const replayBody = JSON.parse(replay.body) as { operation: { id: string } }
+    expect(replayBody.operation.id).toBe(firstBody.operation.id)
+    // No second upstream call: the recorded receipt is returned as-is.
+    expect(ctx.operatorCalls.map((entry) => entry.method)).toEqual(['getCampaign', 'archiveCampaign'])
+  })
+
+  it('fails loudly when the provider does not confirm the archived state, without remediating', async () => {
+    await ctx.app.close()
+    fs.rmSync(ctx.tmpDir, { recursive: true, force: true })
+    ctx = buildApp({ archiveStatus: 'paused' })
+    await ctx.app.ready()
+    const projectId = ctx.seedProject()
+    ctx.seedConnection(projectId)
+
+    const res = await ctx.app.inject({
+      method: 'POST', url: '/projects/acme/ads/campaigns/cmpn_old/archive', payload: {
+        operationKey: 'retire:campaign:unconfirmed',
+        expectedUpdatedAt: 123,
+      },
+    })
+
+    expect(res.statusCode).toBe(502)
+    // Archive has no remediateStatus, so the mismatch is not retried upstream.
+    expect(ctx.operatorCalls.map((entry) => entry.method)).toEqual(['getCampaign', 'archiveCampaign'])
+    const receipt = ctx.db.select().from(adsOperations)
+      .where(eq(adsOperations.operationKey, 'retire:campaign:unconfirmed')).get()
+    expect(receipt).toMatchObject({
+      state: 'unknown',
+      entityId: 'cmpn_old',
+      errorCode: 'ADS_ARCHIVED_POSTCONDITION_FAILED',
+    })
+  })
+
+  // The provider's LIST endpoints are eventually consistent. A live archive on
+  // 2026-09-02 against a Canonry-owned test advertiser account came back
+  // `archived` from the by-id read while the campaigns list still reported the
+  // same campaign as `paused`. These two tests pin the invariant that follows:
+  // an archive is confirmed by the write's own response and by GET-by-id, and
+  // NEVER by a list read, which would turn a landed irreversible archive into a
+  // bogus 502 and then quarantine the receipt.
+  it('confirms an archive without reading the eventually consistent list', async () => {
+    await ctx.app.close()
+    fs.rmSync(ctx.tmpDir, { recursive: true, force: true })
+    // The list lags the write and still calls the campaign paused.
+    ctx = buildApp({ campaignCandidates: [{ id: 'cmpn_old', status: 'paused', updatedAt: 123 }] })
+    await ctx.app.ready()
+    const projectId = ctx.seedProject()
+    ctx.seedConnection(projectId)
+
+    const res = await ctx.app.inject({
+      method: 'POST', url: '/projects/acme/ads/campaigns/cmpn_old/archive', payload: {
+        operationKey: 'retire:campaign:stale-list',
+        expectedUpdatedAt: 123,
+      },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toMatchObject({
+      replayed: false,
+      operation: { kind: AdsOperationKinds.campaign_archive, state: 'succeeded' },
+    })
+    expect(ctx.operatorCalls.map((entry) => entry.method)).toEqual(['getCampaign', 'archiveCampaign'])
+    expect(ctx.operatorCalls.some((entry) => entry.method.startsWith('list'))).toBe(false)
+  })
+
+  it('reconciles an archive receipt by direct read while the list still reports paused', async () => {
+    await ctx.app.close()
+    fs.rmSync(ctx.tmpDir, { recursive: true, force: true })
+    ctx = buildApp({
+      currentStatus: 'archived',
+      campaignCandidates: [{ id: 'cmpn_old', status: 'paused', updatedAt: 123 }],
+    })
+    await ctx.app.ready()
+    const projectId = ctx.seedProject()
+    ctx.seedConnection(projectId)
+
+    // The archive landed upstream but its response was lost, so the receipt is
+    // unknown with the provider id already checkpointed — exactly the state the
+    // reconciler has to resolve.
+    const operationKey = 'retire:campaign:reconcile-stale-list'
+    ctx.db.insert(adsOperations).values({
+      id: 'op_archive_stale_list',
+      projectId,
+      adAccountId: 'adacct_aaa',
+      operationKey,
+      requestHash: 'b'.repeat(64),
+      kind: AdsOperationKinds.campaign_archive,
+      state: AdsOperationStates.unknown,
+      entityType: 'campaign',
+      entityId: 'cmpn_old',
+      errorCode: 'ADS_ARCHIVED_POSTCONDITION_FAILED',
+      reconcileStrategy: 'known_entity',
+      reconcileFields: { status: 'archived' },
+      createdAt: NOW,
+      updatedAt: NOW,
+    }).run()
+
+    const response = await ctx.app.inject({
+      method: 'POST',
+      url: `/projects/acme/ads/operations/${encodeURIComponent(operationKey)}/reconcile`,
+      payload: {},
+    })
+
+    expect(JSON.parse(response.body)).toMatchObject({
+      resolved: true,
+      operation: { state: 'succeeded', entityId: 'cmpn_old' },
+    })
+    // A list walk would have matched the stale `paused` row against the desired
+    // `archived` state and quarantined a successful archive as a mismatch.
+    expect(ctx.operatorCalls).toEqual([{ method: 'getCampaign', input: undefined }])
+  })
+
+  it('refuses an archive without the ads.write scope', async () => {
+    await ctx.app.close()
+    fs.rmSync(ctx.tmpDir, { recursive: true, force: true })
+    ctx = buildApp({ scopes: ['read'] })
+    await ctx.app.ready()
+    const projectId = ctx.seedProject()
+    ctx.seedConnection(projectId)
+
+    const res = await ctx.app.inject({
+      method: 'POST', url: '/projects/acme/ads/campaigns/cmpn_old/archive', payload: {
+        operationKey: 'retire:campaign:scope',
+        expectedUpdatedAt: 123,
+      },
+    })
+
+    expect(res.statusCode).toBe(403)
+    expect(ctx.operatorCalls).toEqual([])
   })
 
   it('rejects an ad-group billing event that does not match the live parent campaign before create', async () => {

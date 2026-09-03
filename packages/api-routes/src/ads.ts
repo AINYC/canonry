@@ -18,6 +18,7 @@ import {
   AdsReconcileStrategies,
   AppError,
   adsAdCreateRequestSchema,
+  adsArchiveRequestSchema,
   adsAdGroupBillingEventTypeSchema,
   adsAdGroupCreateRequestSchema,
   adsAdGroupUpdateRequestSchema,
@@ -297,6 +298,8 @@ export interface AdsOperator {
     locationIds?: string[]
   }): Promise<AdsOperatorEntityResult>
   pauseCampaign(apiKey: string, id: string): Promise<AdsOperatorEntityResult>
+  /** Irreversible. The route archives only an already-paused, version-pinned entity. */
+  archiveCampaign(apiKey: string, id: string): Promise<AdsOperatorEntityResult>
   activateCampaign?(apiKey: string, id: string): Promise<AdsOperatorEntityResult>
   getAdGroup(apiKey: string, id: string): Promise<AdsOperatorEntityResult>
   listAdGroups(apiKey: string, campaignId: string): Promise<AdsOperatorEntityResult[]>
@@ -316,6 +319,8 @@ export interface AdsOperator {
     billingEventType?: AdsAdGroupBillingEventType
   }): Promise<AdsOperatorEntityResult>
   pauseAdGroup(apiKey: string, id: string): Promise<AdsOperatorEntityResult>
+  /** Irreversible. The route archives only an already-paused, version-pinned entity. */
+  archiveAdGroup(apiKey: string, id: string): Promise<AdsOperatorEntityResult>
   activateAdGroup?(apiKey: string, id: string): Promise<AdsOperatorEntityResult>
   getAd(apiKey: string, id: string): Promise<AdsOperatorEntityResult>
   listAds(apiKey: string, adGroupId: string): Promise<AdsOperatorEntityResult[]>
@@ -329,6 +334,8 @@ export interface AdsOperator {
     creative?: { title: string; body: string; targetUrl: string; fileId: string }
   }): Promise<AdsOperatorEntityResult>
   pauseAd(apiKey: string, id: string): Promise<AdsOperatorEntityResult>
+  /** Irreversible. The route archives only an already-paused, version-pinned entity. */
+  archiveAd(apiKey: string, id: string): Promise<AdsOperatorEntityResult>
   activateAd?(apiKey: string, id: string): Promise<AdsOperatorEntityResult>
 }
 
@@ -615,13 +622,20 @@ interface ReconcileAuditContext {
   actor: 'api' | 'system'
 }
 
-class AdsPausedPostconditionError extends Error {
-  readonly code = 'ADS_PAUSED_POSTCONDITION_FAILED'
+/**
+ * The provider did not confirm the status the route required after a mutation.
+ * 502 keeps the receipt UNKNOWN rather than failed: the write may have landed,
+ * so it must be reconciled, never silently retried. Archive relies on this —
+ * with no remediation callback, a mismatch can only surface here.
+ */
+class AdsStatusPostconditionError extends Error {
+  readonly code: string
   readonly status = 502
 
-  constructor(readonly entityId: string) {
-    super('OpenAI Ads API did not confirm the required paused state')
-    this.name = 'AdsPausedPostconditionError'
+  constructor(readonly entityId: string, expectedStatus: AdsEntityStatus) {
+    super(`OpenAI Ads API did not confirm the required ${expectedStatus} state`)
+    this.code = `ADS_${expectedStatus.toUpperCase()}_POSTCONDITION_FAILED`
+    this.name = 'AdsStatusPostconditionError'
   }
 }
 
@@ -1318,10 +1332,23 @@ async function executeAdsOperation(
       eq(adsOperations.state, AdsOperationStates.pending),
       isNull(adsOperations.leaseOwner),
     )).run()
+    // A postcondition mismatch is remediated only when the caller supplied a
+    // remediation, and the check below runs either way: an operation with no
+    // remediateStatus (archive) therefore fails loudly on a mismatch rather
+    // than passing silently.
+    //
+    // The status compared here is the one the mutation's OWN response carried,
+    // never a follow-up read. That matters for archive: the provider's list
+    // endpoints are eventually consistent and were observed on 2026-09-02 still
+    // reporting a freshly archived campaign as `paused` while the direct
+    // single-entity read already reported `archived`. Verifying this
+    // postcondition with a list read would turn a landed archive into a bogus
+    // 502 and an unknown receipt, so it must stay a write-response check (and
+    // any read added here must be a GET by id).
     if (input.expectedStatus !== undefined && result.status !== input.expectedStatus) {
       if (input.remediateStatus) result = await input.remediateStatus(result)
       if (result.status !== input.expectedStatus) {
-        throw new AdsPausedPostconditionError(result.id)
+        throw new AdsStatusPostconditionError(result.id, input.expectedStatus)
       }
     }
     const succeededResult = result
@@ -1468,6 +1495,17 @@ function claimOperationForReconciliation(
   return app.db.select().from(adsOperations).where(eq(adsOperations.id, row.id)).get()
 }
 
+/**
+ * Re-read one entity by id to decide a recorded operation's real outcome.
+ *
+ * Every branch is a DIRECT single-entity read. It must stay that way: the
+ * provider's list endpoints are eventually consistent, and a live archive on
+ * 2026-09-02 came back `archived` from the by-id read while the campaigns list
+ * still said `paused`. Resolving a `*_archive` receipt from a lagging list
+ * would score the archive `ADS_RECONCILIATION_MISMATCH`, burn a reconcile
+ * attempt, and eventually quarantine an operation that in fact succeeded.
+ * Never swap these for a list walk plus a find-by-id.
+ */
 async function getEntityForReconciliation(
   operator: AdsOperator,
   apiKey: string,
@@ -2022,9 +2060,17 @@ function assertExpectedUpdatedAt(entity: AdsOperatorEntityResult, expected: numb
   }
 }
 
-function assertPausedForUpdate(entity: AdsOperatorEntityResult): void {
+/**
+ * A lifecycle write may only touch an entity that is already paused, so no
+ * mutation can land on a serving entity. Archive reuses this exact guard: an
+ * active entity is refused and told to pause first.
+ */
+function assertPausedForWrite(
+  entity: AdsOperatorEntityResult,
+  action: 'updating' | 'archiving' = 'updating',
+): void {
   if (entity.status !== AdsEntityStatuses.paused) {
-    throw validationError('Pause the upstream ad entity before updating it', {
+    throw validationError(`Pause the upstream ad entity before ${action} it`, {
       actualStatus: entity.status,
     })
   }
@@ -2607,7 +2653,7 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
         run: async () => {
           const current = await operator.getCampaign(apiKey, request.params.id)
           assertExpectedUpdatedAt(current, expectedUpdatedAt)
-          assertPausedForUpdate(current)
+          assertPausedForWrite(current)
           return operator.updateCampaign(apiKey, request.params.id, update)
         },
       })
@@ -2639,7 +2685,7 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
         run: async () => {
           const current = await operator.getAdGroup(apiKey, request.params.id)
           assertExpectedUpdatedAt(current, expectedUpdatedAt)
-          assertPausedForUpdate(current)
+          assertPausedForWrite(current)
           if (update.maxBidMicros === undefined) {
             return operator.updateAdGroup(apiKey, request.params.id, update)
           }
@@ -2682,7 +2728,7 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
         run: async () => {
           const current = await operator.getAd(apiKey, request.params.id)
           assertExpectedUpdatedAt(current, expectedUpdatedAt)
-          assertPausedForUpdate(current)
+          assertPausedForWrite(current)
           return operator.updateAd(apiKey, request.params.id, update)
         },
       })
@@ -2763,6 +2809,117 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
         expectedStatus: AdsEntityStatuses.paused,
         remediateStatus: (result) => operator.pauseAd(apiKey, result.id),
         run: async () => operator.pauseAd(apiKey, request.params.id),
+      })
+    },
+  )
+
+  /**
+   * Archive is IRREVERSIBLE, so it carries every guard pause carries and three
+   * more:
+   *  - the entity must already be paused (assertPausedForWrite), so an active,
+   *    serving entity is refused and told to pause first;
+   *  - the caller must pin the exact revision it reviewed (expectedUpdatedAt),
+   *    checked with the same assertion updates use;
+   *  - there is deliberately NO remediateStatus. executeAdsOperation only calls
+   *    a remediation when one is supplied, then re-checks expectedStatus and
+   *    throws when it still does not match, so omitting it makes a postcondition
+   *    mismatch surface as a loud unknown/failed receipt instead of a silent
+   *    pass or a second irreversible write.
+   *
+   * Both reads on this path are single-entity reads by id: the precondition
+   * uses operator.getCampaign/getAdGroup/getAd, and the archived postcondition
+   * is read off the archive call's own response. The provider's LIST endpoints
+   * are eventually consistent — on 2026-09-02 a campaign confirmed `archived`
+   * by the by-id read was still returned as `paused` by the campaigns list — so
+   * a list read must never be introduced here or in the reconciler. A lagging
+   * list would make a landed, irreversible archive look like a failure.
+   */
+  app.post<{ Params: { name: string; id: string } }>(
+    '/projects/:name/ads/campaigns/:id/archive',
+    async (request) => {
+      requireScope(request, ADS_WRITE_SCOPE)
+      const project = resolveProject(app.db, request.params.name)
+      const body = parseBody(adsArchiveRequestSchema, request.body)
+      const { apiKey, adAccountId, operator } = await resolveOperatorForProject(project)
+      return executeAdsOperation(app, request, {
+        projectId: project.id,
+        adAccountId,
+        operationKey: body.operationKey,
+        kind: AdsOperationKinds.campaign_archive,
+        entityType: AdsEntityTypes.campaign,
+        payload: { id: request.params.id, expectedUpdatedAt: body.expectedUpdatedAt },
+        knownEntityId: request.params.id,
+        reconciliation: {
+          strategy: AdsReconcileStrategies.known_entity,
+          fields: { status: AdsEntityStatuses.archived },
+        },
+        expectedStatus: AdsEntityStatuses.archived,
+        run: async () => {
+          const current = await operator.getCampaign(apiKey, request.params.id)
+          assertExpectedUpdatedAt(current, body.expectedUpdatedAt)
+          assertPausedForWrite(current, 'archiving')
+          return operator.archiveCampaign(apiKey, request.params.id)
+        },
+      })
+    },
+  )
+
+  app.post<{ Params: { name: string; id: string } }>(
+    '/projects/:name/ads/ad-groups/:id/archive',
+    async (request) => {
+      requireScope(request, ADS_WRITE_SCOPE)
+      const project = resolveProject(app.db, request.params.name)
+      const body = parseBody(adsArchiveRequestSchema, request.body)
+      const { apiKey, adAccountId, operator } = await resolveOperatorForProject(project)
+      return executeAdsOperation(app, request, {
+        projectId: project.id,
+        adAccountId,
+        operationKey: body.operationKey,
+        kind: AdsOperationKinds.ad_group_archive,
+        entityType: AdsEntityTypes.ad_group,
+        payload: { id: request.params.id, expectedUpdatedAt: body.expectedUpdatedAt },
+        knownEntityId: request.params.id,
+        reconciliation: {
+          strategy: AdsReconcileStrategies.known_entity,
+          fields: { status: AdsEntityStatuses.archived },
+        },
+        expectedStatus: AdsEntityStatuses.archived,
+        run: async () => {
+          const current = await operator.getAdGroup(apiKey, request.params.id)
+          assertExpectedUpdatedAt(current, body.expectedUpdatedAt)
+          assertPausedForWrite(current, 'archiving')
+          return operator.archiveAdGroup(apiKey, request.params.id)
+        },
+      })
+    },
+  )
+
+  app.post<{ Params: { name: string; id: string } }>(
+    '/projects/:name/ads/ads/:id/archive',
+    async (request) => {
+      requireScope(request, ADS_WRITE_SCOPE)
+      const project = resolveProject(app.db, request.params.name)
+      const body = parseBody(adsArchiveRequestSchema, request.body)
+      const { apiKey, adAccountId, operator } = await resolveOperatorForProject(project)
+      return executeAdsOperation(app, request, {
+        projectId: project.id,
+        adAccountId,
+        operationKey: body.operationKey,
+        kind: AdsOperationKinds.ad_archive,
+        entityType: AdsEntityTypes.ad,
+        payload: { id: request.params.id, expectedUpdatedAt: body.expectedUpdatedAt },
+        knownEntityId: request.params.id,
+        reconciliation: {
+          strategy: AdsReconcileStrategies.known_entity,
+          fields: { status: AdsEntityStatuses.archived },
+        },
+        expectedStatus: AdsEntityStatuses.archived,
+        run: async () => {
+          const current = await operator.getAd(apiKey, request.params.id)
+          assertExpectedUpdatedAt(current, body.expectedUpdatedAt)
+          assertPausedForWrite(current, 'archiving')
+          return operator.archiveAd(apiKey, request.params.id)
+        },
       })
     },
   )
