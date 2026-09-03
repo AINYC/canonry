@@ -991,12 +991,17 @@ activates ads first, ad groups second, and the campaign last. Each step is
 durably checkpointed. A failure rolls back the campaign before its children,
 and an ambiguous outcome fails closed for manual remediation.
 
-For a conversion-optimized campaign, set `biddingType` to `clicks` and pass at
-least one exact `conversionEventSettingIds` value returned by `ads conversions
-event-settings`. Each child ad group must set `billingEventType` to `click`.
-Canonry rejects missing or duplicate conversion IDs and rejects any ad-group
-billing mode that does not match its live parent campaign before writing to the
-provider. Omit these fields to preserve the legacy impressions/impression mode.
+`biddingType` and `conversionEventSettingIds` are separate decisions.
+`biddingType` is what the account is BILLED for (`clicks`, or the legacy
+`impressions` default) and the provider makes it immutable after creation. Each
+child ad group must then set `billingEventType` to `click` under a `clicks`
+campaign, and Canonry rejects any ad-group billing mode that does not match its
+live parent campaign before writing to the provider.
+`conversionEventSettingIds` is what delivery OPTIMIZES toward: pass exact values
+returned by `ads conversions event-settings` to get a conversion-optimized
+campaign. A `clicks` campaign may omit them: click billing without conversion
+tracking is a supported configuration. Canonry rejects duplicate conversion IDs.
+Omit both fields to preserve the legacy impressions/impression mode.
 
 Campaign updates may omit `locationIds` to preserve current geo targeting or
 pass a non-empty list to replace it. The guarded operator cannot pass `null` or

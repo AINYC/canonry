@@ -1028,6 +1028,39 @@ describe('ads routes', () => {
     ])
   })
 
+  it('creates a click-billed campaign that carries no conversion event settings', async () => {
+    // biddingType is what the account pays for; conversion event settings are
+    // what delivery optimizes toward. Click billing without conversion tracking
+    // is a supported configuration, and biddingType is immutable after create.
+    const projectId = ctx.seedProject()
+    ctx.seedConnection(projectId)
+
+    const response = await ctx.app.inject({
+      method: 'POST',
+      url: '/projects/acme/ads/campaigns',
+      payload: {
+        operationKey: 'weekend:campaign:clicks-no-events',
+        name: 'AEO Audit Click Leads',
+        lifetimeSpendLimitMicros: 25_000_000,
+        locationIds: ['1000232'],
+        biddingType: 'clicks',
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(ctx.operatorCalls).toEqual([
+      {
+        method: 'createCampaign',
+        input: {
+          name: 'AEO Audit Click Leads',
+          lifetimeSpendLimitMicros: 25_000_000,
+          locationIds: ['1000232'],
+          biddingType: 'clicks',
+        },
+      },
+    ])
+  })
+
   it('emergency-pauses a create when the provider does not return the required paused state', async () => {
     await ctx.app.close()
     fs.rmSync(ctx.tmpDir, { recursive: true, force: true })

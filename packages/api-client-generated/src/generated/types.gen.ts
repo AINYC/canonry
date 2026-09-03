@@ -19165,7 +19165,7 @@ export type PostApiV1ProjectsByNameAdsCampaignsData = {
         locationIds: Array<string>;
         biddingType?: 'impressions' | 'clicks';
         /**
-         * Required and non-empty when biddingType is clicks.
+         * Optional conversion events to optimize delivery toward. Independent of biddingType: a clicks campaign may omit these.
          */
         conversionEventSettingIds?: Array<string>;
     };

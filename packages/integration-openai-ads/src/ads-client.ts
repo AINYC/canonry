@@ -180,15 +180,10 @@ function validateCampaignBidding(request: OpenAiAdsCreateCampaignRequest): void 
     }
   }
 
-  if (
-    biddingType === OpenAiAdsBiddingTypes.clicks &&
-    (!Array.isArray(conversionIds) || conversionIds.length === 0)
-  ) {
-    throw new OpenAiAdsApiError(
-      'Click campaigns require at least one conversion_event_setting_id',
-      400,
-    )
-  }
+  // bidding_type and conversion_event_setting_ids are independent: the first is
+  // what the account is billed for, the second is what delivery optimizes
+  // toward. The provider accepts bidding_type=clicks with no conversion event
+  // settings (verified live), so no cross-field requirement is enforced here.
 }
 
 function validateBiddingConfig(value: unknown): void {

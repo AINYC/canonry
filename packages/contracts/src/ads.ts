@@ -669,22 +669,17 @@ export const adsCampaignCreateRequestSchema = z
     endTime: adsTimestampSchema.optional(),
     lifetimeSpendLimitMicros: adsMicrosSchema.min(1_000_000),
     locationIds: z.array(adsEntityIdSchema).min(1).max(100),
+    // biddingType is BILLING (what the account pays for) and is immutable once
+    // the provider creates the campaign. conversionEventSettingIds is
+    // OPTIMIZATION (what delivery is steered toward). The two are independent,
+    // and the provider accepts a clicks campaign carrying no conversion event
+    // settings, so neither field is conditioned on the other here.
     biddingType: adsCampaignBiddingTypeSchema.optional(),
     conversionEventSettingIds: adsConversionEventSettingIdsSchema.optional(),
   })
   .superRefine((value, ctx) => {
     if (value.startTime !== undefined && value.endTime !== undefined && value.endTime <= value.startTime) {
       ctx.addIssue({ code: 'custom', path: ['endTime'], message: 'endTime must be after startTime' })
-    }
-    if (
-      value.biddingType === AdsCampaignBiddingTypes.clicks &&
-      (value.conversionEventSettingIds === undefined || value.conversionEventSettingIds.length === 0)
-    ) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['conversionEventSettingIds'],
-        message: 'conversionEventSettingIds must be non-empty when biddingType is clicks',
-      })
     }
   })
 export type AdsCampaignCreateRequest = z.infer<typeof adsCampaignCreateRequestSchema>

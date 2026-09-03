@@ -3481,7 +3481,7 @@ export const canonryMcpTools = [
     name: 'canonry_ads_campaign_create',
     title: 'Create a paused ads campaign',
     description:
-      'Create an OpenAI Ads campaign PAUSED with an explicit lifetime spend limit and location allowlist. Set biddingType=clicks with one or more provider-issued conversionEventSettingIds for conversion-optimized delivery; omit both for legacy impressions bidding. The server ignores any status concept and always sends paused. Inspect the receipt, then create matching paused ad groups and ads. A human must separately approve the exact tree before this operator can activate it.',
+      'Create an OpenAI Ads campaign PAUSED with an explicit lifetime spend limit and location allowlist. biddingType is what the account is BILLED for (clicks or the legacy impressions default) and is immutable after creation; conversionEventSettingIds are what delivery OPTIMIZES toward and are independent, so a clicks campaign may omit them; adding provider-issued IDs makes it conversion-optimized. The server ignores any status concept and always sends paused. Inspect the receipt, then create matching paused ad groups and ads. A human must separately approve the exact tree before this operator can activate it.',
     access: 'write',
     tier: 'ads',
     inputSchema: adsCampaignCreateInputSchema,
