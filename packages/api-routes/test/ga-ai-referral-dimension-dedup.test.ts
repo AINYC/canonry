@@ -75,3 +75,37 @@ describe('AI referral attribution dedup', () => {
     expect(s.deduped.sessions).toBe(5)
   })
 })
+
+/**
+ * The report builder carries its own copy of this collapse. Nothing tested it,
+ * so reverting report.ts alone left CI green while every AI figure in a client
+ * report doubled. These assert the primitive the builder must agree with.
+ */
+describe('report-surface dedup agreement', () => {
+  it('a manual-UTM lens with no medium does not add a second visit', () => {
+    // Exactly the row shape that produced 308 sessions where the truth was 155.
+    const totals = summarizeAiReferralCounts(ONE_VISIT_THREE_LENSES)
+    expect(totals.deduped.sessions).toBe(1)
+    // Keying on medium, the pre-fix behaviour, groups '(not set)' apart from
+    // 'ai-assistant' and yields 2.
+    const byMediumKey = new Map<string, number>()
+    for (const r of ONE_VISIT_THREE_LENSES) {
+      const key = `${r.date}\u0000${r.source}\u0000${r.medium}`
+      byMediumKey.set(key, Math.max(byMediumKey.get(key) ?? 0, r.sessions))
+    }
+    expect([...byMediumKey.values()].reduce((a, b) => a + b, 0)).toBe(2)
+  })
+
+  it('keeps both rows when one lens legitimately emits organic and paid for a source', () => {
+    // The "keep every row of the winning lens" semantic. A per-key MAX would
+    // drop one of these and silently lose the paid or organic split.
+    const rows = [
+      { date: '2026-08-15', source: 'chatgpt.com', medium: 'referral', sourceDimension: 'session', channelGroup: 'AI Assistant', trafficClass: 'organic', sessions: 15 },
+      { date: '2026-08-15', source: 'chatgpt.com', medium: 'cpc', sourceDimension: 'session', channelGroup: 'AI Assistant', trafficClass: 'paid', sessions: 8 },
+    ]
+    const s = summarizeAiReferralCounts(rows)
+    expect(s.organicDeduped.sessions).toBe(15)
+    expect(s.paidDeduped.sessions).toBe(8)
+    expect(s.deduped.sessions).toBe(23)
+  })
+})
