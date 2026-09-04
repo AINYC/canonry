@@ -2084,6 +2084,20 @@ describe('GA4 routes', () => {
         totalUsers: 150,
         syncedAt: now,
       }).run()
+      // A social row, so the per-row assertion below is not vacuous. The
+      // stored users column is deliberately populated: the point is that the
+      // ROUTE must not publish it, not that the column is empty.
+      db.insert(gaSocialReferrals).values({
+        id: crypto.randomUUID(),
+        projectId: withdrawnProjectId,
+        date: '2026-05-01',
+        source: 'meta.ai',
+        medium: 'social',
+        channelGroup: 'Organic Social',
+        sessions: 15,
+        users: 12,
+        syncedAt: now,
+      }).run()
       db.insert(gaAiReferrals).values(seeded.map((row) => ({
         id: row.id,
         projectId: withdrawnProjectId,
@@ -2124,6 +2138,11 @@ describe('GA4 routes', () => {
       // withdrew the AI-referral user counts in 4.135.0.
       expect(body).not.toHaveProperty('socialUsers')
       for (const row of body.socialReferrals) expect(row).not.toHaveProperty('users')
+      // The loop above is vacuous when socialReferrals is empty, which is how an
+      // incomplete withdrawal shipped once: the API stopped emitting the field
+      // while the dashboard still called .toLocaleString() on it and the CLI
+      // printed "undefined". Assert there is a row to check.
+      expect(body.socialReferrals.length).toBeGreaterThan(0)
 
       // ── The session numbers are unchanged by the withdrawal. ────────────
       // Deduped folds the winner set: (05-01, referral) session lens 6+4=10
