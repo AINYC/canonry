@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { aggregateGscByQuery } from '../src/content-data.js'
+import { aggregateGscByQuery, windowEndingOn } from '../src/content-data.js'
 
 /**
  * gsc_search_data is keyed (date, query, page, country, device), so a query
@@ -47,5 +47,32 @@ describe('aggregateGscByQuery', () => {
       { query: 'boutique hotel', impressions: 250, clicks: 25, position: 4 },
     ])
     expect(out.get('boutique hotel')!.ctr).toBeCloseTo(0.1)
+  })
+})
+
+/**
+ * The window half of the fix. Before it, the read had no date bound at all and
+ * reported lifetime demand under the report's window heading: on a live
+ * property one query showed 151,571 impressions where its 30-day figure was
+ * 1,519.
+ */
+describe('resolveContentGscWindow', () => {
+  it('spans exactly windowDays days, inclusive of both ends', () => {
+    // Exported for this test; the arithmetic is where an off-by-one would hide.
+    const w = windowEndingOn('2026-09-02', 30)
+    expect(w).toEqual({ startDate: '2026-08-04', endDate: '2026-09-02' })
+  })
+
+  it('anchors on the newest published day, not the wall clock', () => {
+    // Google finalises a day two to three days late, so a clock-anchored window
+    // ends in a partial or empty span.
+    const w = windowEndingOn('2026-08-15', 7)
+    expect(w.endDate).toBe('2026-08-15')
+    expect(w.startDate).toBe('2026-08-09')
+  })
+
+  it('never collapses to a zero-day span', () => {
+    expect(windowEndingOn('2026-09-02', 1)).toEqual({ startDate: '2026-09-02', endDate: '2026-09-02' })
+    expect(windowEndingOn('2026-09-02', 0)).toEqual({ startDate: '2026-09-02', endDate: '2026-09-02' })
   })
 })

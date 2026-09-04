@@ -479,16 +479,19 @@ export const DEFAULT_CONTENT_GSC_WINDOW_DAYS = 30
  * late, so a clock-anchored window silently ends in a partial or empty span.
  * Returns null when the project has no GSC data at all.
  */
+export function windowEndingOn(endDate: string, windowDays: number): { startDate: string, endDate: string } {
+  const end = new Date(`${endDate}T00:00:00Z`)
+  end.setUTCDate(end.getUTCDate() - (Math.max(1, windowDays) - 1))
+  return { startDate: end.toISOString().slice(0, 10), endDate }
+}
+
 function resolveContentGscWindow(
   db: DatabaseClient,
   projectId: string,
   windowDays: number,
 ): { startDate: string, endDate: string } | null {
   const endDate = readLatestGscDataDate(db, projectId)
-  if (!endDate) return null
-  const end = new Date(`${endDate}T00:00:00Z`)
-  end.setUTCDate(end.getUTCDate() - (Math.max(1, windowDays) - 1))
-  return { startDate: end.toISOString().slice(0, 10), endDate }
+  return endDate ? windowEndingOn(endDate, windowDays) : null
 }
 
 /**
