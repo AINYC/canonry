@@ -41,7 +41,8 @@ interface SeededRegression {
 function seedRegressionScenario(
   db: ReturnType<typeof createClient>,
   opts: { gscImpressions?: number
-  gscDate?: string; priorRegressions?: number } = {},
+  gscDate?: string
+  skipAccurateGsc?: boolean; priorRegressions?: number } = {},
 ): SeededRegression {
   const now = new Date()
   const projectId = crypto.randomUUID()
@@ -114,7 +115,7 @@ function seedRegressionScenario(
     // once per ranking page. The date is inside the severity window, which is
     // anchored on the newest published GSC day.
     const gscDate = opts.gscDate ?? '2026-04-01'
-    db.insert(gscQueryDailyTotals).values({
+    if (!opts.skipAccurateGsc) db.insert(gscQueryDailyTotals).values({
       id: crypto.randomUUID(),
       projectId,
       syncRunId: currentRunId,
@@ -214,6 +215,24 @@ describe('IntelligenceService — regression severity tiering', () => {
     new IntelligenceService(db).analyzeAndPersist(currentRunId, projectId)
 
     expect(persistedSeverity(db, currentRunId)).toBe('medium')
+  })
+
+  it('falls back to page-summed impressions when the accurate table has no row for that day', () => {
+    // readLatestGscDataDate anchors on the watermark, the property table or the
+    // dimensioned table, never on gsc_query_daily_totals, so a project can look
+    // connected while the accurate table lags the window. An empty fallback
+    // would report zero impressions for every query and tier every regression
+    // DOWN, which is the direction the fixed 100/10 thresholds are least able
+    // to survive. 500 page-summed impressions must still reach "high".
+    const db = createTempDb('intel-sev-')
+    const { projectId, currentRunId } = seedRegressionScenario(db, {
+      gscImpressions: 500,
+      skipAccurateGsc: true,
+    })
+
+    new IntelligenceService(db).analyzeAndPersist(currentRunId, projectId)
+
+    expect(persistedSeverity(db, currentRunId)).toBe('high')
   })
 
   it('persists "low" when neither traffic nor recurrence qualify', () => {
