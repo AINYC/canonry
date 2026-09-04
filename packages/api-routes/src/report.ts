@@ -74,6 +74,7 @@ import { loadDismissedTargetRefs } from './content.js'
 import { mergeGscDailyTotalsWithFallback, mergeGscQueryTotalsWithFallback, readGscDailyTotals, readGscQueryDailyRows } from './gsc-totals.js'
 import { notProbeRun, resolveProject } from './helpers.js'
 import { renderReportHtml } from './report-renderer.js'
+import { pickWinningAttributionDimension } from './ga-ai-referral-aggregation.js'
 import {
   extractGroundingSources,
   loadOrchestratorInput,
@@ -668,17 +669,21 @@ function buildAiReferrals(
   if (rows.length === 0) return null
 
   // Dedupe overlapping attribution dimensions ('session', 'first_user',
-  // 'manual_utm') the same way GET /projects/:name/ga/traffic in ga.ts does:
-  // they're alternate lenses on the same visit, not disjoint events. For each
-  // (date, source, medium) tuple, pick the dimension whose total sessions are
-  // largest and keep only rows from that winning dimension. Traffic class is
-  // deliberately NOT part of the key: keying on it would let a visit counted
-  // paid under one lens and organic under another survive twice and inflate
-  // the total. The surviving winning-dimension rows are disjoint by class, so
-  // the paid/organic split below still partitions the deduped total cleanly.
+  // 'manual_utm'): they're alternate lenses on the same visit, not disjoint
+  // events. For each (date, source) tuple, pick the dimension whose total
+  // sessions are largest and keep only rows from that winning dimension.
+  //
+  // Neither traffic class nor MEDIUM belongs in the key. Both are labels the
+  // lens assigns rather than properties of the visit, so keying on either lets
+  // one visit land in two groups and survive twice. Medium is the case that bit
+  // us: GA4 reports the manual-UTM lens with medium '(not set)' while the
+  // session lens reports 'ai-assistant', so a single ChatGPT visit produced two
+  // rows and every AI total on this report came out roughly double.
+  // `pickWinningAttributionDimension` breaks ties toward the session lens so the
+  // result does not depend on row order.
   const dimSessionsByTuple = new Map<string, Map<string, number>>()
   for (const r of rows) {
-    const tupleKey = `${r.date}::${r.source}::${r.medium}`
+    const tupleKey = `${r.date}::${r.source}`
     let dimMap = dimSessionsByTuple.get(tupleKey)
     if (!dimMap) {
       dimMap = new Map<string, number>()
@@ -688,18 +693,11 @@ function buildAiReferrals(
   }
   const winningDimension = new Map<string, string>()
   for (const [tupleKey, dimMap] of dimSessionsByTuple) {
-    let bestDim: string | undefined
-    let bestSessions = -1
-    for (const [dim, sessions] of dimMap) {
-      if (sessions > bestSessions) {
-        bestSessions = sessions
-        bestDim = dim
-      }
-    }
+    const bestDim = pickWinningAttributionDimension(dimMap)
     if (bestDim) winningDimension.set(tupleKey, bestDim)
   }
   const dedupedRows = rows.filter(r =>
-    winningDimension.get(`${r.date}::${r.source}::${r.medium}`) === r.sourceDimension,
+    winningDimension.get(`${r.date}::${r.source}`) === r.sourceDimension,
   )
 
   let total = 0
