@@ -2255,7 +2255,9 @@ function buildProjectReport(db: DatabaseClient, projectName: string, periodDays:
   const citationsTrend = buildCitationsTrend(db, project.id, queryLookup, latestRunLocation)
   const insightList = buildInsightList(db, project.id, latestRunLocation)
 
-  const orchestratorInput = loadOrchestratorInput(db, project, latestRunLocation)
+  // Same window as the rest of the report, so a content opportunity's demand
+  // figure covers the period the page is headed with.
+  const orchestratorInput = loadOrchestratorInput(db, project, latestRunLocation, periodDays)
   // Filter persistently-dismissed recommendations so SPA report, HTML report,
   // and `/content/targets` all consume the same filtered set. Dismissals
   // persist in `content_target_dismissals` keyed by `(projectId, targetRef)`
