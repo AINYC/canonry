@@ -18,6 +18,7 @@ import {
   queries,
   querySnapshots,
   insights,
+  gscQueryDailyTotals,
   gscSearchData,
 } from '@ainyc/canonry-db'
 import { IntelligenceService } from '../src/intelligence-service.js'
@@ -39,7 +40,8 @@ interface SeededRegression {
 
 function seedRegressionScenario(
   db: ReturnType<typeof createClient>,
-  opts: { gscImpressions?: number; priorRegressions?: number } = {},
+  opts: { gscImpressions?: number
+  gscDate?: string; priorRegressions?: number } = {},
 ): SeededRegression {
   const now = new Date()
   const projectId = crypto.randomUUID()
@@ -107,11 +109,31 @@ function seedRegressionScenario(
   }).run()
 
   if (opts.gscImpressions !== undefined) {
+    // Severity reads gsc_query_daily_totals, not gsc_search_data. The latter is
+    // keyed by page as well as query, so summing it counts one SERP impression
+    // once per ranking page. The date is inside the severity window, which is
+    // anchored on the newest published GSC day.
+    const gscDate = opts.gscDate ?? '2026-04-01'
+    db.insert(gscQueryDailyTotals).values({
+      id: crypto.randomUUID(),
+      projectId,
+      syncRunId: currentRunId,
+      date: gscDate,
+      query: 'foo query',
+      impressions: opts.gscImpressions,
+      clicks: 0,
+      position: '10',
+      syncedAt: now.toISOString(),
+      createdAt: now.toISOString(),
+    }).run()
+    // A page-fanned row for the same query on the same day. If severity ever
+    // reverts to gsc_search_data this doubles the impressions and the tier
+    // assertions below fail, which is the point of seeding it.
     db.insert(gscSearchData).values({
       id: crypto.randomUUID(),
       projectId,
       syncRunId: currentRunId,
-      date: '2026-04-01',
+      date: gscDate,
       query: 'foo query',
       page: '/foo',
       impressions: opts.gscImpressions,

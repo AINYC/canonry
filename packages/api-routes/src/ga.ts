@@ -1336,8 +1336,12 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
         source: gaSocialReferrals.source,
         medium: gaSocialReferrals.medium,
         channelGroup: gaSocialReferrals.channelGroup,
+        // No `users`. ga_social_referrals is keyed
+        // (project, date, source, medium, channel_group) and its users column
+        // is GA's COUNT DISTINCT at that grain, so summing over the window's
+        // dates counts a returning visitor once per day they returned. Same
+        // conclusion the AI-referral surfaces reached in 4.135.0.
         sessions: sql<number>`SUM(${gaSocialReferrals.sessions})`,
-        users: sql<number>`SUM(${gaSocialReferrals.users})`,
       })
       .from(gaSocialReferrals)
       .where(and(...socialConditions))
@@ -1350,7 +1354,6 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
     const socialTotals = app.db
       .select({
         sessions: sql<number>`SUM(${gaSocialReferrals.sessions})`,
-        users: sql<number>`SUM(${gaSocialReferrals.users})`,
       })
       .from(gaSocialReferrals)
       .where(and(...socialConditions))
@@ -1432,10 +1435,8 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
         medium: r.medium,
         channelGroup: r.channelGroup,
         sessions: r.sessions ?? 0,
-        users: r.users ?? 0,
       })),
       socialSessions,
-      socialUsers: socialTotals?.users ?? 0,
       channelBreakdown,
       organicSharePct: total > 0 ? Math.round((totalOrganicSessions / total) * 100) : 0,
       aiSharePct: total > 0 ? Math.round((aiSummary.deduped.sessions / total) * 100) : 0,
@@ -1499,8 +1500,11 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
         trafficClass: gaAiReferrals.trafficClass,
         landingPage: sql<string>`COALESCE(${gaAiReferrals.landingPageNormalized}, ${gaAiReferrals.landingPage})`,
         sourceDimension: gaAiReferrals.sourceDimension,
+        // No `users`: ga-ai-referral-aggregation states the rule for this
+        // table, that there is no grain at which the stored users column may be
+        // added up. ga4AiReferralDtoSchema.users was deprecated for this in
+        // 4.135.0; the history endpoint kept emitting one.
         sessions: sql<number>`SUM(${gaAiReferrals.sessions})`,
-        users: sql<number>`SUM(${gaAiReferrals.users})`,
       })
       .from(gaAiReferrals)
       .where(and(...conditions))

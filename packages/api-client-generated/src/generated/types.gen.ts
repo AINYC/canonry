@@ -8129,7 +8129,7 @@ export type ProjectReportDto = {
         topLandingPages: Array<{
             page: string;
             sessions: number;
-            users: number;
+            users?: number;
             organicSessions: number;
         }>;
         channelBreakdown: Array<{
@@ -8232,6 +8232,7 @@ export type ProjectReportDto = {
         topCrawledPaths: Array<{
             path: string;
             verifiedHits: number;
+            unverifiedHits: number;
             distinctOperators: number;
         }>;
         referralProducts: Array<{
@@ -8242,6 +8243,7 @@ export type ProjectReportDto = {
         dailyTrend: Array<{
             date: string;
             verifiedCrawlerHits: number;
+            unverifiedCrawlerHits: number;
             userFetchHits: number;
             referralArrivals: number;
         }>;

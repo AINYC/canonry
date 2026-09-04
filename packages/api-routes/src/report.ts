@@ -236,7 +236,6 @@ function buildGscSection(
   // breakdowns are correct from `gsc_search_data`. The grand totals and daily
   // trend prefer property-level rows per date, falling back to dimensioned rows
   // for dates not yet covered by the new table.
-  let dimensionedClicks = 0
   // Legacy per-(date, query) fallback. Kept at DAY grain, not folded to one row
   // per query, because the merge below has to decide source per day: a
   // partially-backfilled query has accurate rows for only part of the window.
@@ -244,7 +243,6 @@ function buildGscSection(
   const dimensionedTrendAgg = new Map<string, { clicks: number; impressions: number; weightedPositionSum: number }>()
 
   for (const r of rows) {
-    dimensionedClicks += r.clicks
     const dayKey = `${r.date} ${r.query}`
     const q = queryDayAgg.get(dayKey) ?? { date: r.date, query: r.query, clicks: 0, impressions: 0, weightedPositionSum: 0 }
     q.clicks += r.clicks
@@ -324,14 +322,20 @@ function buildGscSection(
     bucket.impressions += agg.impressions
     categoryAgg.set(cat, bucket)
   }
-  // Share is computed against the dimensioned click sum (the same source the
-  // per-category clicks come from) so the category shares stay internally
-  // consistent — the property total above is a different denominator.
+  // Share divides by the sum of the SAME array the numerator comes from.
+  // categoryAgg is built from queryTotals, which is the merged per-query set,
+  // while dimensionedClicks is still the raw gsc_search_data sum. Those stopped
+  // being one source when the per-query aggregation moved to the merge helper,
+  // so the shares no longer summed to 100 and drifted with an unrelated table's
+  // sync state. Worse, the two tables are written by separate fetches in one
+  // sync: a window where the dimensioned fetch returned nothing rendered every
+  // category at 0%.
+  const categoryTotalClicks = queryTotals.reduce((sum, q) => sum + q.clicks, 0)
   const categoryBreakdown = [...categoryAgg.entries()].map(([category, agg]) => ({
     category,
     clicks: agg.clicks,
     impressions: agg.impressions,
-    sharePct: dimensionedClicks > 0 ? Math.round((agg.clicks / dimensionedClicks) * 100) : 0,
+    sharePct: categoryTotalClicks > 0 ? Math.round((agg.clicks / categoryTotalClicks) * 100) : 0,
   })).sort((a, b) => b.clicks - a.clicks)
 
   const periodStart = trend[0]?.date ?? ''
@@ -469,11 +473,16 @@ function buildGaSection(db: DatabaseClient, projectId: string, windowDays: numbe
     if (!windowSummary && r.directSessions != null) directSessions += r.directSessions
   }
 
+  // No `users` here. GA reports users as a COUNT DISTINCT evaluated at the
+  // grain asked for, and ga_traffic_snapshots is keyed (date, landing_page):
+  // one visitor who returns on three days, or reads three pages, contributes a
+  // users value to every row, so adding them counts that person repeatedly.
+  // There is no grain at which the stored column may be summed, which is the
+  // same conclusion the AI-referral surfaces reached in 4.135.0.
   const topLandingPages = [...pageAgg.entries()]
     .map(([page, data]) => ({
       page,
       sessions: data.sessions,
-      users: data.users,
       organicSessions: data.organic,
     }))
     .sort((a, b) => b.sessions - a.sessions)
@@ -551,11 +560,29 @@ function buildGaSection(db: DatabaseClient, projectId: string, windowDays: numbe
   }
 }
 
-function buildSocialReferrals(db: DatabaseClient, projectId: string): SocialReferralSection | null {
+/**
+ * Social referral traffic over the report window.
+ *
+ * ga_social_referrals is a per-date table retained across syncs, so an
+ * unbounded read reports the project's whole history under the report's window
+ * heading. This was the only section builder that did not take windowDays; it
+ * now shares resolveAiReferralWindow with the AI referral and GA sections so
+ * all three cover the identical span.
+ */
+function buildSocialReferrals(
+  db: DatabaseClient,
+  projectId: string,
+  windowDays: number,
+): SocialReferralSection | null {
+  const window = resolveAiReferralWindow(db, projectId, windowDays)
   const rows = db
     .select()
     .from(gaSocialReferrals)
-    .where(eq(gaSocialReferrals.projectId, projectId))
+    .where(and(
+      eq(gaSocialReferrals.projectId, projectId),
+      gte(gaSocialReferrals.date, window.start),
+      lte(gaSocialReferrals.date, window.end),
+    ))
     .all()
   if (rows.length === 0) return null
 
@@ -942,6 +969,10 @@ function buildServerActivity(db: DatabaseClient, projectId: string, windowDays: 
     .groupBy(crawlerEventsHourly.operator, crawlerEventsHourly.verificationStatus)
     .all()
 
+  // Prior window covers BOTH verification tiers, because the current-window
+  // aggregate it is compared against does. Filtering only one side made the
+  // delta compare a verified-only present to a verified-only past and then
+  // print it on a row whose other cells are combined.
   const crawlerByOperatorPriorRows = db
     .select({
       operator: crawlerEventsHourly.operator,
@@ -951,7 +982,6 @@ function buildServerActivity(db: DatabaseClient, projectId: string, windowDays: 
     .where(
       and(
         eq(crawlerEventsHourly.projectId, projectId),
-        eq(crawlerEventsHourly.verificationStatus, VerificationStatuses.verified),
         gte(crawlerEventsHourly.tsHour, priorStart),
         lt(crawlerEventsHourly.tsHour, headlineStart),
       ),
@@ -1025,7 +1055,7 @@ function buildServerActivity(db: DatabaseClient, projectId: string, windowDays: 
       unverifiedHits: v.unverified,
       userFetchHits: v.userFetch,
       referralArrivals: v.referrals,
-      deltaPct: deltaPercent(v.verified, v.prior),
+      deltaPct: deltaPercent(v.verified + v.unverified, v.prior),
     }))
     // Sort by total signal: verified hits first, then user-fetch, then unverified and referrals.
     .sort((a, b) =>
@@ -1035,18 +1065,22 @@ function buildServerActivity(db: DatabaseClient, projectId: string, windowDays: 
       b.referralArrivals - a.referralArrivals,
     )
 
-  // 4. Top crawled paths (verified only).
+  // 4. Top crawled paths, both verification tiers. Verification needs a client
+  // IP to match against the operator's published ranges, and some log sources
+  // never carry one (Vercel request logs), so a verified-only table renders
+  // empty for those projects while the headline tile above shows thousands of
+  // hits. The split is a display attribute, not a filter.
   const topPathsRows = db
     .select({
       path: crawlerEventsHourly.pathNormalized,
-      hits: sql<number>`COALESCE(SUM(${crawlerEventsHourly.hits}), 0)`,
+      verifiedHits: sql<number>`COALESCE(SUM(CASE WHEN ${crawlerEventsHourly.verificationStatus} = ${VerificationStatuses.verified} THEN ${crawlerEventsHourly.hits} ELSE 0 END), 0)`,
+      unverifiedHits: sql<number>`COALESCE(SUM(CASE WHEN ${crawlerEventsHourly.verificationStatus} <> ${VerificationStatuses.verified} THEN ${crawlerEventsHourly.hits} ELSE 0 END), 0)`,
       operators: sql<number>`COUNT(DISTINCT ${crawlerEventsHourly.operator})`,
     })
     .from(crawlerEventsHourly)
     .where(
       and(
         eq(crawlerEventsHourly.projectId, projectId),
-        eq(crawlerEventsHourly.verificationStatus, VerificationStatuses.verified),
         gte(crawlerEventsHourly.tsHour, headlineStart),
         lte(crawlerEventsHourly.tsHour, headlineEnd),
       ),
@@ -1057,7 +1091,8 @@ function buildServerActivity(db: DatabaseClient, projectId: string, windowDays: 
     .all()
   const topCrawledPaths = topPathsRows.map(r => ({
     path: r.path,
-    verifiedHits: Number(r.hits),
+    verifiedHits: Number(r.verifiedHits),
+    unverifiedHits: Number(r.unverifiedHits),
     distinctOperators: Number(r.operators),
   }))
 
@@ -1113,16 +1148,20 @@ function buildServerActivity(db: DatabaseClient, projectId: string, windowDays: 
   }))
 
   // 7. Daily trend (spans the selected window) — bucket tsHour to YYYY-MM-DD via SQLite SUBSTR.
+  // Both tiers, for the same reason as the top-paths table: this is the only
+  // crawler series in the report, so on a source that cannot verify (Vercel
+  // logs carry no client IP) a verified-only chart drew a flat zero line next
+  // to a headline tile reporting thousands of hits.
   const crawlerTrendRows = db
     .select({
       date: sql<string>`SUBSTR(${crawlerEventsHourly.tsHour}, 1, 10)`,
-      hits: sql<number>`COALESCE(SUM(${crawlerEventsHourly.hits}), 0)`,
+      verifiedHits: sql<number>`COALESCE(SUM(CASE WHEN ${crawlerEventsHourly.verificationStatus} = ${VerificationStatuses.verified} THEN ${crawlerEventsHourly.hits} ELSE 0 END), 0)`,
+      unverifiedHits: sql<number>`COALESCE(SUM(CASE WHEN ${crawlerEventsHourly.verificationStatus} <> ${VerificationStatuses.verified} THEN ${crawlerEventsHourly.hits} ELSE 0 END), 0)`,
     })
     .from(crawlerEventsHourly)
     .where(
       and(
         eq(crawlerEventsHourly.projectId, projectId),
-        eq(crawlerEventsHourly.verificationStatus, VerificationStatuses.verified),
         gte(crawlerEventsHourly.tsHour, trendStart),
         lte(crawlerEventsHourly.tsHour, headlineEnd),
       ),
@@ -1162,11 +1201,12 @@ function buildServerActivity(db: DatabaseClient, projectId: string, windowDays: 
     .groupBy(sql`SUBSTR(${aiUserFetchEventsHourly.tsHour}, 1, 10)`)
     .all()
 
-  const emptyTrendEntry = () => ({ verifiedCrawlerHits: 0, userFetchHits: 0, referralArrivals: 0 })
+  const emptyTrendEntry = () => ({ verifiedCrawlerHits: 0, unverifiedCrawlerHits: 0, userFetchHits: 0, referralArrivals: 0 })
   const dailyTrendMap = new Map<string, ReturnType<typeof emptyTrendEntry>>()
   for (const r of crawlerTrendRows) {
     const e = dailyTrendMap.get(r.date) ?? emptyTrendEntry()
-    e.verifiedCrawlerHits += Number(r.hits)
+    e.verifiedCrawlerHits += Number(r.verifiedHits)
+    e.unverifiedCrawlerHits += Number(r.unverifiedHits)
     dailyTrendMap.set(r.date, e)
   }
   for (const r of userFetchTrendRows) {
@@ -2248,7 +2288,7 @@ function buildProjectReport(db: DatabaseClient, projectName: string, periodDays:
     periodDays,
   )
   const gaSection = buildGaSection(db, project.id, periodDays)
-  const socialSection = buildSocialReferrals(db, project.id)
+  const socialSection = buildSocialReferrals(db, project.id, periodDays)
   const aiReferralsSection = buildAiReferrals(db, project.id, periodDays)
   const serverActivitySection = buildServerActivity(db, project.id, periodDays)
   const indexingHealthSection = buildIndexingHealth(db, project.id)
