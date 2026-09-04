@@ -9,7 +9,13 @@
  * `add-schema` action is supported in types but never fires until that lands.
  */
 
-import { and, eq, desc, inArray } from 'drizzle-orm'
+import { and, eq, desc, gte, inArray, lte } from 'drizzle-orm'
+import {
+  mergeGscQueryTotalsWithFallback,
+  readGscQueryDailyRows,
+  readLatestGscDataDate,
+  type GscQueryDayRow,
+} from './gsc-totals.js'
 import {
   filterTrackedSnapshots,
   queries,
@@ -70,6 +76,7 @@ export function loadOrchestratorInput(
   db: DatabaseClient,
   project: ProjectRow,
   locationFilter: LocationScope = undefined,
+  gscWindowDays: number = DEFAULT_CONTENT_GSC_WINDOW_DAYS,
 ): OrchestratorInput {
   const projectId = project.id
   const ownDomain = hostOf(project.canonicalDomain) ?? ''
@@ -98,6 +105,7 @@ export function loadOrchestratorInput(
     latestRunId,
     ourDomains,
     competitorSet,
+    gscWindowDays,
   })
 
   const inventory = buildInventory({
@@ -351,6 +359,8 @@ interface BuildCandidateQueriesOpts {
   latestRunId: string
   ourDomains: Set<string>
   competitorSet: Set<string>
+  /** Days of GSC history to score demand over. See resolveContentGscWindow. */
+  gscWindowDays: number
 }
 
 function buildCandidateQueries(opts: BuildCandidateQueriesOpts): CandidateQuery[] {
@@ -385,12 +395,41 @@ function buildCandidateQueries(opts: BuildCandidateQueriesOpts): CandidateQuery[
     snapshotsByQuery.set(row.queryId, list)
   }
 
-  const gscRows = opts.db
-    .select()
-    .from(gscSearchData)
-    .where(eq(gscSearchData.projectId, opts.projectId))
-    .all()
-  const gscByQuery = aggregateGscByQuery(gscRows)
+  // Two separate reads, because the two tables answer different questions.
+  //
+  // Impressions, clicks, CTR and position come from gsc_query_daily_totals,
+  // which is keyed (date, query). gsc_search_data is keyed
+  // (date, query, page, country, device), so one SERP impression fans out into
+  // a row per ranking page and summing it over-counts badly: on a live property
+  // the query "gjelina hotel" summed to 151,571 impressions where the real
+  // all-time figure is 26,477 and the reported 30-day window is 1,519. Both
+  // errors were compounding, since this read also had no date bound at all and
+  // presented lifetime demand under the report's window heading.
+  //
+  // gsc_search_data is still the right source for `bestPage`: attributing a
+  // query to a landing page genuinely needs the page dimension. It is now
+  // windowed to match.
+  const gscWindow = resolveContentGscWindow(opts.db, opts.projectId, opts.gscWindowDays)
+  const pageRows = gscWindow
+    ? opts.db
+        .select()
+        .from(gscSearchData)
+        .where(and(
+          eq(gscSearchData.projectId, opts.projectId),
+          gte(gscSearchData.date, gscWindow.startDate),
+          lte(gscSearchData.date, gscWindow.endDate),
+        ))
+        .all()
+    : []
+  const gscByQuery = aggregateGscByQuery(
+    pageRows,
+    gscWindow
+      ? mergeGscQueryTotalsWithFallback(
+          readGscQueryDailyRows(opts.db, opts.projectId, gscWindow.startDate, gscWindow.endDate),
+          pageDayFallback(pageRows),
+        )
+      : [],
+  )
 
   return opts.candidateQueryStrings.map((query) => {
     const queryId = queryIdByText.get(query)
@@ -427,6 +466,59 @@ interface QueryAccumulator {
   weightedPositionSum: number
 }
 
+/**
+ * Days of GSC history the content engine scores demand over when the caller
+ * does not say. Matches the report's default period so an opportunity's
+ * "impressions" means the same span as the rest of the page it is printed on.
+ */
+export const DEFAULT_CONTENT_GSC_WINDOW_DAYS = 30
+
+/**
+ * Anchor the window on the newest day GSC has actually published for this
+ * project, not on the wall clock. Google finalises a day two to three days
+ * late, so a clock-anchored window silently ends in a partial or empty span.
+ * Returns null when the project has no GSC data at all.
+ */
+function resolveContentGscWindow(
+  db: DatabaseClient,
+  projectId: string,
+  windowDays: number,
+): { startDate: string, endDate: string } | null {
+  const endDate = readLatestGscDataDate(db, projectId)
+  if (!endDate) return null
+  const end = new Date(`${endDate}T00:00:00Z`)
+  end.setUTCDate(end.getUTCDate() - (Math.max(1, windowDays) - 1))
+  return { startDate: end.toISOString().slice(0, 10), endDate }
+}
+
+/**
+ * Collapse page rows to one row per (date, query) so they can stand in for
+ * gsc_query_daily_totals on days that table has not been backfilled. Clicks are
+ * additive across pages; impressions are not, so this remains an over-count and
+ * is only ever a fallback for days with no accurate row.
+ */
+function pageDayFallback(
+  rows: Array<{ date: string, query: string, impressions: number, clicks: number, position: string }>,
+): GscQueryDayRow[] {
+  const byDay = new Map<string, { date: string, query: string, clicks: number, impressions: number, weighted: number }>()
+  for (const r of rows) {
+    if (!r.query) continue
+    const key = `${r.date}\u0000${r.query}`
+    const acc = byDay.get(key) ?? { date: r.date, query: r.query, clicks: 0, impressions: 0, weighted: 0 }
+    acc.clicks += r.clicks
+    acc.impressions += r.impressions
+    acc.weighted += (Number(r.position) || 0) * r.impressions
+    byDay.set(key, acc)
+  }
+  return [...byDay.values()].map(a => ({
+    date: a.date,
+    query: a.query,
+    clicks: a.clicks,
+    impressions: a.impressions,
+    position: a.impressions > 0 ? a.weighted / a.impressions : 0,
+  }))
+}
+
 export function aggregateGscByQuery(
   rows: Array<{
     query: string
@@ -436,7 +528,16 @@ export function aggregateGscByQuery(
     ctr: string
     position: string
   }>,
+  /**
+   * Per-query totals from gsc_query_daily_totals. When a query appears here its
+   * impressions, clicks, CTR and position are taken from this aggregate; the
+   * page rows only choose `bestPage`. Pass an empty array to fall back to the
+   * page-summed figures, which is the legacy behaviour and is wrong for any
+   * query that ranks on more than one page.
+   */
+  queryTotals: readonly { query: string, impressions: number, clicks: number, position: number }[] = [],
 ): Map<string, AggregateGscEntry> {
+  const accurateByQuery = new Map(queryTotals.map(t => [t.query, t]))
   const accumulators = new Map<string, QueryAccumulator>()
   for (const r of rows) {
     const page = extractPath(r.page)
@@ -469,12 +570,18 @@ export function aggregateGscByQuery(
     // ctr=1.0 while the bulk of impressions sit on separate ctr=0 rows. The
     // old "pick the row with the most impressions" logic almost always
     // selected a row with no clicks, so per-query CTR rendered as 0%.
+    const accurate = accurateByQuery.get(query)
+    const impressions = accurate ? accurate.impressions : acc.totalImpressions
+    const clicks = accurate ? accurate.clicks : acc.totalClicks
+    const position = accurate
+      ? accurate.position
+      : (acc.totalImpressions > 0 ? acc.weightedPositionSum / acc.totalImpressions : 0)
     byQuery.set(query, {
       page: acc.bestPage,
-      position: acc.totalImpressions > 0 ? acc.weightedPositionSum / acc.totalImpressions : 0,
-      impressions: acc.totalImpressions,
-      clicks: acc.totalClicks,
-      ctr: acc.totalImpressions > 0 ? acc.totalClicks / acc.totalImpressions : 0,
+      position,
+      impressions,
+      clicks,
+      ctr: impressions > 0 ? clicks / impressions : 0,
     })
   }
   return byQuery

@@ -123,7 +123,7 @@ export const ga4TrafficSummaryDtoSchema = z.object({
   })),
   aiReferrals: z.array(ga4AiReferralDtoSchema),
   aiReferralLandingPages: z.array(ga4AiReferralLandingPageDtoSchema),
-  /** Deduped AI session total: MAX(sessions) per date+source+medium across attribution dimensions, then summed. Cross-cutting: can overlap with Direct/Organic/Social via firstUserSource. */
+  /** Deduped AI session total: MAX(sessions) per date+source across attribution dimensions, then summed. Cross-cutting: can overlap with Direct/Organic/Social via firstUserSource. */
   aiSessionsDeduped: z.number(),
   /** @deprecated See `GA4AiReferralDto.users`. Never emitted since 4.135.0. */
   aiUsersDeduped: z.number().optional(),
@@ -330,7 +330,7 @@ export interface GaTrafficResponse {
   aiReferrals: Array<{ source: string; medium: string; trafficClass: AiReferralTrafficClass; sessions: number; users?: number; sourceDimension: GA4SourceDimension }>
   /** Deduped to the winning attribution dimension (highest sessions) per (source, medium, landingPage). `users` is deprecated — see `GA4AiReferralDto.users`; never emitted since 4.135.0. */
   aiReferralLandingPages: Array<{ source: string; medium: string; trafficClass: AiReferralTrafficClass; sourceDimension: GA4SourceDimension; landingPage: string; sessions: number; users?: number }>
-  /** Deduped AI session total: MAX(sessions) per date+source+medium across attribution dimensions, then summed. Cross-cutting: can overlap with Direct/Organic/Social via firstUserSource. */
+  /** Deduped AI session total: MAX(sessions) per date+source across attribution dimensions, then summed. Cross-cutting: can overlap with Direct/Organic/Social via firstUserSource. */
   aiSessionsDeduped: number
   /** @deprecated See `GA4AiReferralDto.users`. Never emitted since 4.135.0. */
   aiUsersDeduped?: number
