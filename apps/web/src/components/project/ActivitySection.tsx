@@ -256,11 +256,11 @@ export function ActivitySection({ projectName }: { projectName: string }) {
           label="Traffic time period"
         />
       </div>
+      <ClickThroughActivity projectName={projectName} window={trafficWindow} />
       <AiTrafficHistoryPanel
         projectName={projectName}
         sinceMinutes={TRAFFIC_WINDOW_MINUTES[trafficWindow]}
       />
-      <ClickThroughActivity projectName={projectName} window={trafficWindow} />
     </div>
   )
 }

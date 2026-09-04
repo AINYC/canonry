@@ -62,7 +62,7 @@ function renderActivitySection() {
 
 import { mockFetch, jsonResponse } from './mock-fetch.js'
 
-test('loads connected GA4 data without changing hook order', async () => {
+test('loads connected GA4 data without changing hook order and keeps it above AI traffic', async () => {
   const restoreFetch = mockFetch((url) => {
     const urlPath = url.split('?')[0]!
     if (urlPath.endsWith('/projects/test-project/ga/status')) {
@@ -147,6 +147,40 @@ test('loads connected GA4 data without changing hook order', async () => {
     if (urlPath.endsWith('/projects/test-project/ga/social-referral-history')) {
       return jsonResponse([])
     }
+    if (urlPath.endsWith('/projects/test-project/traffic/sources')) {
+      return jsonResponse({ sources: [] })
+    }
+    if (urlPath.endsWith('/projects/test-project/traffic/events')) {
+      return jsonResponse({
+        events: [],
+        eventRows: { total: 0, returned: 0, truncated: false },
+        totals: {
+          crawlerHits: 1,
+          crawlerContentHits: 1,
+          aiUserFetchHits: 1,
+          aiReferralHits: 1,
+          aiReferralLandedHits: 1,
+        },
+        series: {
+          granularity: 'day',
+          coverageStart: '2026-03-31T00:00:00.000Z',
+          trends: {
+            crawlerContentHits: null,
+            aiUserFetchHits: null,
+            aiReferralLandedHits: null,
+          },
+          points: [{
+            bucket: '2026-03-31',
+            measured: true,
+            crawlerHits: 1,
+            crawlerContentHits: 1,
+            aiUserFetchHits: 1,
+            aiReferralHits: 1,
+            aiReferralLandedHits: 1,
+          }],
+        },
+      })
+    }
     throw new Error(`Unexpected fetch: ${url}`)
   })
   onTestFinished(restoreFetch)
@@ -162,6 +196,12 @@ test('loads connected GA4 data without changing hook order', async () => {
 
   const trafficPeriod = screen.getByRole('group', { name: 'Traffic time period' })
   expect(within(trafficPeriod).getByRole('button', { name: '30d' }).getAttribute('aria-pressed')).toBe('true')
+
+  const siteTraffic = screen.getByText('Site Traffic')
+  const machineTraffic = await screen.findByRole('heading', { name: 'Machines reading your site' })
+  const visitorTraffic = screen.getByRole('heading', { name: 'People arriving from AI' })
+  expect(siteTraffic.compareDocumentPosition(machineTraffic) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+  expect(siteTraffic.compareDocumentPosition(visitorTraffic) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
 
   expect(screen.getByText(/Top AI referrer:/)).toBeTruthy()
   expect(
