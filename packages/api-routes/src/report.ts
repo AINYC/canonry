@@ -2253,9 +2253,14 @@ function buildProjectReport(db: DatabaseClient, projectName: string, periodDays:
   const citationsTrend = buildCitationsTrend(db, project.id, queryLookup, latestRunLocation)
   const insightList = buildInsightList(db, project.id, latestRunLocation)
 
-  // Same window as the rest of the report, so a content opportunity's demand
-  // figure covers the period the page is headed with.
-  const orchestratorInput = loadOrchestratorInput(db, project, latestRunLocation, periodDays)
+  // Deliberately NOT periodDays. A recommendation's targetRef is computed from
+  // (projectId, query, action), and `action` is derived from the windowed
+  // impressions and position, so varying the window varies the ref. The report
+  // would then mint refs at 90 days that GET /content/targets never produces at
+  // its own window, and analyze/dismiss on those refs would 404. Every content
+  // surface therefore shares one fixed window until the ref carries the window
+  // it was minted under.
+  const orchestratorInput = loadOrchestratorInput(db, project, latestRunLocation)
   // Filter persistently-dismissed recommendations so SPA report, HTML report,
   // and `/content/targets` all consume the same filtered set. Dismissals
   // persist in `content_target_dismissals` keyed by `(projectId, targetRef)`
