@@ -110,7 +110,10 @@ type PageSortKey = 'landingPage' | 'sessions' | 'organicSessions'
 // No 'users' on the two AI-referral tables: /ga/traffic stopped emitting a
 // per-row user count in 4.135.0 (GA counts users distinct per grain).
 type ReferralSortKey = 'source' | 'medium' | 'sessions'
-type SocialSortKey = 'source' | 'medium' | 'sessions' | 'users'
+// No 'users' here either, for the same reason as the AI tables above:
+// ga_social_referrals stores users at (date, source, medium, channel group),
+// so summing it over a window counts a returning visitor once per day.
+type SocialSortKey = 'source' | 'medium' | 'sessions'
 type AiLandingPageSortKey = 'landingPage' | 'source' | 'sessions'
 type SortDir = 'asc' | 'desc'
 
@@ -1171,7 +1174,6 @@ export function ClickThroughActivity({ projectName, window: windowProp }: {
                             <th className="py-1 font-medium text-left">Channel</th>
                             <SortHeader label="Sessions" sortKey="sessions" current={socialSortKey} dir={socialSortDir} onSort={handleSocialSort} align="right" />
                             <th className="py-1 font-medium text-right">Share</th>
-                            <SortHeader label="Users" sortKey="users" current={socialSortKey} dir={socialSortDir} onSort={handleSocialSort} align="right" />
                           </tr>
                         </thead>
                         <tbody>
@@ -1650,9 +1652,6 @@ function SocialReferralRow({
       </td>
       <td className="py-1.5 text-right text-secondary tabular-nums">
         {share}%
-      </td>
-      <td className="py-1.5 text-right text-strong tabular-nums">
-        {referral.users.toLocaleString()}
       </td>
     </tr>
   )
