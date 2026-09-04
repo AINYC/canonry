@@ -115,8 +115,9 @@ export function loadOrchestratorInput(
     wpPosts: [],
   })
 
-  const gaTrafficByPage = buildGaTrafficByPage(db, projectId)
-  const totalAiReferralSessions = sumAiReferralSessions(db, projectId)
+  const gaWindow = resolveContentGaWindow(db, projectId, gscWindowDays)
+  const gaTrafficByPage = buildGaTrafficByPage(db, projectId, gaWindow)
+  const totalAiReferralSessions = sumAiReferralSessions(db, projectId, gaWindow)
   const domainClasses = loadDomainClasses(db, projectId)
 
   return {
@@ -301,23 +302,65 @@ function listGa4LandingPagesForProject(db: DatabaseClient, projectId: string): s
   return rows.map((r) => r.landingPage)
 }
 
-function buildGaTrafficByPage(db: DatabaseClient, projectId: string): Map<string, number> {
+/**
+ * Organic sessions per landing page, over the analytics window.
+ *
+ * Two things this must not do. It must not read every retained row: the figure
+ * is printed as `ourBestPage.organicSessions` under the report's window
+ * heading, and unbounded it summed a project's whole history (one property:
+ * 142 days into a number labelled 30). And it must sum `organicSessions`, not
+ * `sessions`, because the field it feeds is the organic one; summing total
+ * sessions produced a per-page figure larger than the property's own total.
+ */
+function buildGaTrafficByPage(
+  db: DatabaseClient,
+  projectId: string,
+  window: { startDate: string, endDate: string } | null,
+): Map<string, number> {
+  if (!window) return new Map()
   const rows = db
     .select({
       landingPage: gaTrafficSnapshots.landingPage,
-      sessions: gaTrafficSnapshots.sessions,
+      organicSessions: gaTrafficSnapshots.organicSessions,
     })
     .from(gaTrafficSnapshots)
-    .where(eq(gaTrafficSnapshots.projectId, projectId))
+    .where(and(
+      eq(gaTrafficSnapshots.projectId, projectId),
+      gte(gaTrafficSnapshots.date, window.startDate),
+      lte(gaTrafficSnapshots.date, window.endDate),
+    ))
     .all()
 
   const map = new Map<string, number>()
   for (const row of rows) {
     const path = extractPath(row.landingPage)
     if (!path) continue
-    map.set(path, (map.get(path) ?? 0) + (row.sessions ?? 0))
+    map.set(path, (map.get(path) ?? 0) + (row.organicSessions ?? 0))
   }
   return map
+}
+
+/**
+ * Analytics window for the content engine, anchored on the newest day GA has
+ * data for rather than the wall clock, so a sync that is a day or two behind
+ * does not silently shorten the span. Null when the project has no GA data.
+ */
+function resolveContentGaWindow(
+  db: DatabaseClient,
+  projectId: string,
+  windowDays: number,
+): { startDate: string, endDate: string } | null {
+  const latest = db
+    .select({ date: gaTrafficSnapshots.date })
+    .from(gaTrafficSnapshots)
+    .where(eq(gaTrafficSnapshots.projectId, projectId))
+    .orderBy(desc(gaTrafficSnapshots.date))
+    .limit(1)
+    .get()
+  if (!latest?.date) return null
+  const end = new Date(`${latest.date}T00:00:00Z`)
+  end.setUTCDate(end.getUTCDate() - (Math.max(1, windowDays) - 1))
+  return { startDate: end.toISOString().slice(0, 10), endDate: latest.date }
 }
 
 /**
@@ -335,7 +378,12 @@ function buildGaTrafficByPage(db: DatabaseClient, projectId: string): Map<string
  * the same lens here keeps the content engine's denominator consistent with the
  * report's numerator.
  */
-function sumAiReferralSessions(db: DatabaseClient, projectId: string): number {
+function sumAiReferralSessions(
+  db: DatabaseClient,
+  projectId: string,
+  window: { startDate: string, endDate: string } | null,
+): number {
+  if (!window) return 0
   const rows = db
     .select({ sessions: gaAiReferrals.sessions })
     .from(gaAiReferrals)
@@ -343,6 +391,11 @@ function sumAiReferralSessions(db: DatabaseClient, projectId: string): number {
       and(
         eq(gaAiReferrals.projectId, projectId),
         eq(gaAiReferrals.sourceDimension, 'session'),
+        // Bounded for the same reason the per-page read is: this scales every
+        // opportunity score, so a lifetime total quietly weights the ranking
+        // toward whatever was true months ago.
+        gte(gaAiReferrals.date, window.startDate),
+        lte(gaAiReferrals.date, window.endDate),
       ),
     )
     .all()

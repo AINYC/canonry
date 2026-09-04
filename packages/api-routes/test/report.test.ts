@@ -2229,7 +2229,7 @@ describe('serverActivity (AI visibility — server-side)', () => {
     expect(sa.verifiedCrawlerHits.deltaPct).toBeNull()
   })
 
-  test('top crawled paths sorted descending by hits, verified only', async () => {
+  test('top crawled paths cover both verification tiers, split per row', async () => {
     const projectId = insertProject(ctx.db, 'top-paths')
     const sourceId = insertTrafficSource(projectId)
     insertCrawler(projectId, sourceId, { pathNormalized: '/a', hits: 5 })
@@ -2239,9 +2239,17 @@ describe('serverActivity (AI visibility — server-side)', () => {
     await ctx.app.ready()
     const res = await ctx.app.inject({ method: 'GET', url: '/api/v1/projects/top-paths/report' })
     const sa = (JSON.parse(res.body) as ProjectReportDto).serverActivity!
-    // Verified only — /d (unverified) excluded
-    expect(sa.topCrawledPaths.map(p => p.path)).toEqual(['/b', '/c', '/a'])
-    expect(sa.topCrawledPaths[0]!.verifiedHits).toBe(20)
+    // Both tiers. Verification needs a client IP to match against the
+    // operator's published ranges and some log sources never carry one, so a
+    // verified-only table rendered empty for those projects while the headline
+    // tile above it reported thousands of hits. The split is reported per row
+    // instead of filtering, so /d leads on 999 unverified hits.
+    expect(sa.topCrawledPaths.map(p => p.path)).toEqual(['/d', '/b', '/c', '/a'])
+    expect(sa.topCrawledPaths[0]!.unverifiedHits).toBe(999)
+    expect(sa.topCrawledPaths[0]!.verifiedHits).toBe(0)
+    const b = sa.topCrawledPaths.find(p => p.path === '/b')!
+    expect(b.verifiedHits).toBe(20)
+    expect(b.unverifiedHits).toBe(0)
   })
 
   test('referral products aggregated and counted with distinct landing paths', async () => {

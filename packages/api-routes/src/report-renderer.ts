@@ -1780,7 +1780,6 @@ function renderGa(report: ProjectReportDto): string {
     <tr>
       <td class="page-cell">${formatLandingPageHtml(p.page)}</td>
       <td class="numeric">${formatNumber(p.sessions)}</td>
-      <td class="numeric">${formatNumber(p.users)}</td>
       <td class="numeric">${formatNumber(p.organicSessions)}</td>
     </tr>`).join('')
 
@@ -1804,7 +1803,7 @@ function renderGa(report: ProjectReportDto): string {
     </div>
     <div class="chart-card"><h3>Top landing pages</h3>
       <table class="report-table">
-        <thead><tr><th>Page</th><th class="numeric">Sessions</th><th class="numeric">Users</th><th class="numeric">Organic</th></tr></thead>
+        <thead><tr><th>Page</th><th class="numeric">Sessions</th><th class="numeric">Organic</th></tr></thead>
         <tbody>${pageRows}</tbody>
       </table>
     </div>
