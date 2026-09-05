@@ -298,7 +298,7 @@ test('adds the caller recovery path when integrated page health cannot be read',
         projectId={projectId}
         runId="audit_partial"
         integrated
-        footer={<p>Continue after successful Page health</p>}
+        afterSummary={<p>Continue after successful Page health</p>}
         unavailableFooter={<p>Continue setup without Page health</p>}
       />
     </QueryClientProvider>,
@@ -382,7 +382,7 @@ test('distills the integrated view to a score and its actionable findings', asyn
         projectName={projectName}
         projectId={projectId}
         integrated
-        footer={<p>Continue onboarding after reviewing fixes</p>}
+        afterSummary={<p>Continue after the Page health summary</p>}
         unavailableFooter={<p>Recover unavailable Page health</p>}
       />
     </QueryClientProvider>,
@@ -395,9 +395,10 @@ test('distills the integrated view to a score and its actionable findings', asyn
   expect(findingsHeading).not.toBeNull()
   expect(screen.getByText('Select a check to see affected pages and recommended fixes.')).not.toBeNull()
   expect(screen.getByText('Pages affected')).not.toBeNull()
-  const onboardingFooter = screen.getByText('Continue onboarding after reviewing fixes')
-  expect(onboardingFooter).not.toBeNull()
-  expect(Boolean(findingsHeading.compareDocumentPosition(onboardingFooter) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true)
+  const nextAction = screen.getByText('Continue after the Page health summary')
+  const scoreSummary = screen.getByLabelText('Site score 52 out of 100')
+  expect(Boolean(scoreSummary.compareDocumentPosition(nextAction) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true)
+  expect(Boolean(nextAction.compareDocumentPosition(findingsHeading) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true)
   expect(screen.queryByText('Recover unavailable Page health')).toBeNull()
 
   const failingFactor = screen.getByRole('button', { name: 'AI Crawler Access' })
@@ -442,6 +443,12 @@ test('uses compact findings copy only when the onboarding parent requests it', (
   expect(screen.getByRole('heading', { name: 'Checks' })).not.toBeNull()
   expect(screen.getByText('Open a check to see affected pages and recommended fixes.')).not.toBeNull()
   expect(screen.queryByRole('heading', { name: 'Technical findings' })).toBeNull()
+  const check = screen.getByRole('button', { name: 'AI Crawler Access' })
+  expect(check.getAttribute('aria-expanded')).toBe('false')
+  expect(screen.queryByText('Allow GPTBot in robots.txt')).toBeNull()
+  fireEvent.click(check)
+  expect(check.getAttribute('aria-expanded')).toBe('true')
+  expect(screen.getByText('Allow GPTBot in robots.txt')).not.toBeNull()
 })
 
 test('shows one exact page finding in onboarding when aggregate recommendations are unavailable', async () => {
@@ -501,7 +508,7 @@ test('shows one exact page finding in onboarding when aggregate recommendations 
 
   expect(screen.getByText('Page-level evidence for the first page to fix appears below.', { exact: false })).not.toBeNull()
   expect(screen.getByRole('heading', { name: 'First page to fix' })).not.toBeNull()
-  expect(screen.getAllByRole('link', { name: 'https://citypoint.example/services' })).toHaveLength(2)
+  expect(screen.getAllByRole('link', { name: 'https://citypoint.example/services' })).toHaveLength(1)
   expect(screen.getByRole('heading', { name: 'Findings and fixes' })).not.toBeNull()
   expect(await screen.findByText('Content depth')).not.toBeNull()
   expect(screen.getByText('42/100')).not.toBeNull()

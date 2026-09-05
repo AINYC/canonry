@@ -2179,8 +2179,8 @@ export function SiteHealthSection({
             runId={resolvedRunId}
             integrated
             compactCopy={explicitOnboarding}
-            footer={explicitOnboarding && siteAuditReady ? (
-              <section aria-labelledby="ai-visibility-next-heading" className="mt-5 flex flex-col gap-3 border-t border-default pt-5 sm:flex-row sm:items-center sm:justify-between">
+            afterSummary={explicitOnboarding && siteAuditReady ? (
+              <section aria-labelledby="ai-visibility-next-heading" className="flex flex-col gap-3 border-b border-default py-5 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <h2 id="ai-visibility-next-heading" className="text-base font-semibold text-heading">Next: Set up AI Visibility</h2>
                   <p className="mt-1 text-sm text-secondary">

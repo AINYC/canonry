@@ -97,7 +97,7 @@ export function TechnicalAeoSection({
   runId,
   integrated = false,
   compactCopy = false,
-  footer,
+  afterSummary,
   unavailableFooter,
 }: {
   projectName: string
@@ -108,8 +108,8 @@ export function TechnicalAeoSection({
   integrated?: boolean
   /** Use concise findings copy in the explicit onboarding flow. */
   compactCopy?: boolean
-  /** Rendered only after persisted Page health evidence has loaded successfully. */
-  footer?: ReactNode
+  /** Next action below the loaded score summary, before the detailed checks. */
+  afterSummary?: ReactNode
   /** Rendered after an unavailable/error state so a parent flow can recover. */
   unavailableFooter?: ReactNode
 }) {
@@ -275,8 +275,9 @@ export function TechnicalAeoSection({
 
   useEffect(() => {
     setErrorsOnly(false)
-    setExpandedFactor(integrated ? primaryFactorId : null)
-  }, [effectiveRunId, integrated, primaryFactorId])
+    // Onboarding uses the same closed-by-default disclosures as page findings.
+    setExpandedFactor(integrated && !compactCopy ? primaryFactorId : null)
+  }, [compactCopy, effectiveRunId, integrated, primaryFactorId])
 
   if (scoreQuery.isLoading) {
     return (
@@ -494,6 +495,8 @@ export function TechnicalAeoSection({
         </div>
       </section>
       )}
+
+      {afterSummary}
 
       {/* Trend */}
       {!integrated && trendRows.length >= 2 ? (
@@ -893,7 +896,6 @@ export function TechnicalAeoSection({
         )}
       </section>
       ) : null}
-      {footer}
     </div>
   )
 }

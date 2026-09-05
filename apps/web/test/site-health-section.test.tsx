@@ -74,18 +74,18 @@ vi.mock('../src/components/project/TechnicalAeoSection.js', () => ({
     runId,
     integrated,
     compactCopy,
-    footer,
+    afterSummary,
     unavailableFooter,
   }: {
     runId?: string | null
     integrated?: boolean
     compactCopy?: boolean
-    footer?: React.ReactNode
+    afterSummary?: React.ReactNode
     unavailableFooter?: React.ReactNode
   }) => (
     <div data-integrated={integrated ? 'true' : 'false'} data-compact-copy={compactCopy ? 'true' : 'false'}>
       Page health for {runId ?? 'latest'}
-      {technicalAeoMock.state === 'success' ? footer : unavailableFooter}
+      {technicalAeoMock.state === 'success' ? afterSummary : unavailableFooter}
     </div>
   ),
 }))

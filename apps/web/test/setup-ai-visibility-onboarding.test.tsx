@@ -18,7 +18,7 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
   return {
     ...actual,
     useNavigate: () => navigate,
-    Link: ({ children }: { children: ReactNode }) => <a href="/projects">{children}</a>,
+    Link: ({ children, to, target, rel }: { children: ReactNode; to: string; target?: string; rel?: string }) => <a href={to} target={target} rel={rel}>{children}</a>,
   }
 })
 
@@ -34,8 +34,11 @@ function renderProjectSetup(options: {
   projectProviders?: string[]
   readyProviderNames?: string[]
   cdpStatus?: { connected?: boolean; browserVersion?: string }
+  cdpResponse?: () => Response | Promise<Response>
   apiKey?: ApiKeyAccess
   queryResponse?: () => Response | Promise<Response>
+  providerResponse?: () => Response | Promise<Response>
+  includeLocalProvider?: boolean
 }) {
   const fixture = createDashboardFixture()
   const project = structuredClone(fixture.dashboard.projects[0]!)
@@ -50,7 +53,7 @@ function renderProjectSetup(options: {
     project.competitors = []
   }
   if (options.providerReady === false) {
-    fixture.dashboard.settings.providerStatuses = []
+    fixture.dashboard.settings.providerStatuses = fixture.dashboard.settings.providerStatuses.map(provider => ({ ...provider, state: 'needs-config' }))
   } else if (options.readyProviderNames) {
     const ready = new Set(options.readyProviderNames.map(name => name.toLowerCase()))
     fixture.dashboard.settings.providerStatuses = fixture.dashboard.settings.providerStatuses.map(provider => ({
@@ -58,9 +61,17 @@ function renderProjectSetup(options: {
       state: ready.has(provider.name.toLowerCase()) ? 'ready' as const : 'needs-config' as const,
     }))
   }
+  if (options.includeLocalProvider) {
+    fixture.dashboard.settings.providerStatuses.push({ name: 'local', state: 'needs-config', detail: 'Base URL is missing.' })
+  }
 
-  const restore = mockFetch((url) => {
-    if (pathOf(url) === '/api/v1/cdp/status') return jsonResponse(options.cdpStatus ?? {})
+  const requests: Array<{ path: string; method?: string; body?: RequestInit['body'] }> = []
+  const restore = mockFetch((url, init) => {
+    requests.push({ path: pathOf(url), method: init?.method, body: init?.body })
+    if (pathOf(url) === '/api/v1/projects' || pathOf(url).split('?')[0] === '/api/v1/runs') return jsonResponse([])
+    if (pathOf(url) === '/api/v1/settings') return jsonResponse({ providers: [] })
+    if (pathOf(url) === '/api/v1/cdp/status') return options.cdpResponse?.() ?? jsonResponse(options.cdpStatus ?? {})
+    if (pathOf(url).startsWith('/api/v1/settings/providers/')) return options.providerResponse?.() ?? jsonResponse({ name: 'gemini', configured: true })
     if (pathOf(url).endsWith('/queries')) {
       if (options.queryResponse) return options.queryResponse()
       return jsonResponse(options.complete ? [{ id: 'query-1', query: 'best local dentist' }] : [])
@@ -70,7 +81,7 @@ function renderProjectSetup(options: {
   onTestFinished(restore)
 
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  render(
+  const content = () => (
     <QueryClientProvider client={queryClient}>
       <AccountProvider account={null} apiKey={options.apiKey}>
         <DashboardProvider value={fixture}>
@@ -80,13 +91,22 @@ function renderProjectSetup(options: {
           />
         </DashboardProvider>
       </AccountProvider>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   )
+  const rendered = render(content())
 
   return {
     projectId: project.project.id,
     projectName: project.project.name,
+    domain: project.project.canonicalDomain,
     queryClient,
+    requests,
+    markProviderReady: (name: string) => {
+      fixture.dashboard.settings.providerStatuses = fixture.dashboard.settings.providerStatuses.map(provider => (
+        provider.name.toLowerCase() === name.toLowerCase() ? { ...provider, state: 'ready' } : provider
+      ))
+      rendered.rerender(content())
+    },
   }
 }
 
@@ -127,6 +147,10 @@ test('allows a project-scoped write key to configure its exact project', async (
   expect(await screen.findByRole('heading', { name: 'Set up AI Visibility' })).toBeTruthy()
   expect(screen.getByRole('heading', { name: 'Add queries' })).toBeTruthy()
   expect(screen.queryByText(/for administrators/i)).toBeNull()
+  expect(screen.getByText(/Provider settings are managed by an administrator/)).toBeTruthy()
+  expect(screen.queryByText('Not connected')).toBeNull()
+  expect(screen.queryByLabelText('Provider to connect')).toBeNull()
+  expect(screen.queryByRole('link', { name: 'Open provider settings' })).toBeNull()
 })
 
 test('keeps a stale project-list handoff scoped to the exact onboarding project', async () => {
@@ -181,6 +205,20 @@ test('keeps the existing project-scoped setup destination outside Site Health on
   })
 })
 
+test('lets an existing query list be refined with researched queries before continuing', async () => {
+  const { projectName, requests } = renderProjectSetup({ onboarding: true, complete: true })
+  expect(await screen.findByText('best local dentist')).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Edit queries' }))
+  const input = screen.getByLabelText('Queries (one per line)') as HTMLTextAreaElement
+  expect(input.value).toBe('best local dentist')
+  fireEvent.change(input, { target: { value: 'best local dentist\nresearched dental query' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save 2 queries' }))
+  expect(await screen.findByText('Step 2 of 2')).toBeTruthy()
+  expect(requests.find(request => request.method === 'PUT' && request.path === `/api/v1/projects/${encodeURIComponent(projectName)}/queries`)).toMatchObject({
+    body: JSON.stringify({ queries: ['best local dentist', 'researched dental query'] }),
+  })
+})
+
 test('lets a project save queries before a provider is configured', async () => {
   renderProjectSetup({ onboarding: true, providerReady: false })
 
@@ -189,8 +227,128 @@ test('lets a project save queries before a provider is configured', async () => 
   fireEvent.click(screen.getByRole('button', { name: 'Save 1 query' }))
 
   expect(await screen.findByText('Step 2 of 2')).toBeTruthy()
-  expect(screen.getByRole('link', { name: 'Configure a provider' })).toBeTruthy()
+  expect(screen.getByRole('heading', { name: 'Connect a provider' })).toBeTruthy()
+  expect((screen.getByRole('button', { name: 'Launch visibility sweep' }) as HTMLButtonElement).disabled).toBe(true)
   expect(screen.queryByRole('heading', { name: 'System check' })).toBeNull()
+})
+
+test('offers provider setup before queries and keeps the draft after saving and refreshing readiness', async () => {
+  const { requests, markProviderReady } = renderProjectSetup({ onboarding: true, providerReady: false })
+  const providerHeading = await screen.findByRole('heading', { name: 'Connect a provider' })
+  const queryHeading = screen.getByRole('heading', { name: 'Add queries' })
+  expect(providerHeading.compareDocumentPosition(queryHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true)
+  expect(screen.getByText('Advanced provider settings').closest('details')?.open).toBe(false)
+  // This is a provider secret, not the dashboard login password.
+  const apiKeyField = screen.getByLabelText('API key')
+  expect(apiKeyField.getAttribute('autocomplete')).toBe('new-password')
+  expect(apiKeyField.getAttribute('autocapitalize')).toBe('none')
+  expect(apiKeyField.getAttribute('spellcheck')).toBe('false')
+
+  fireEvent.change(await screen.findByLabelText('Queries (one per line)'), { target: { value: 'unsubmitted customer question' } })
+  fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'synthetic-test-key' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+  expect(await screen.findByText('Provider updated.')).toBeTruthy()
+  expect(requests.find(request => request.path === '/api/v1/settings/providers/gemini')).toMatchObject({
+    method: 'PUT', body: JSON.stringify({ apiKey: 'synthetic-test-key' }),
+  })
+  expect((screen.getByLabelText('API key') as HTMLInputElement).value).toBe('')
+  expect((screen.getByLabelText('Queries (one per line)') as HTMLTextAreaElement).value).toBe('unsubmitted customer question')
+  expect(requests.some(request => request.path === '/api/v1/settings')).toBe(true)
+  expect(screen.getByRole('heading', { name: 'Connect a provider' })).toBeTruthy()
+
+  // Readiness comes from refreshed settings, not an optimistic key-save result.
+  markProviderReady('gemini')
+  expect(await screen.findByText('Configured')).toBeTruthy()
+  expect(screen.queryByLabelText('API key')).toBeNull()
+  expect((screen.getByLabelText('Queries (one per line)') as HTMLTextAreaElement).value).toBe('unsubmitted customer question')
+  expect(navigate).not.toHaveBeenCalled()
+  expect(requests.filter(request => request.method === 'POST' && /\/(?:runs|generate)$/.test(request.path))).toEqual([])
+})
+
+test('keeps failed provider setup retryable without losing queries', async () => {
+  let attempt = 0
+  renderProjectSetup({
+    onboarding: true,
+    providerReady: false,
+    providerResponse: () => ++attempt === 1
+      ? jsonResponse({ error: { message: 'Key could not be saved', code: 'VALIDATION_ERROR' } }, 400)
+      : jsonResponse({ name: 'gemini', configured: true }),
+  })
+  fireEvent.change(await screen.findByLabelText('Queries (one per line)'), { target: { value: 'keep this query' } })
+  const keyInput = await screen.findByLabelText('API key')
+  fireEvent.change(keyInput, { target: { value: 'synthetic-test-key' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+  expect(await screen.findByText('Key could not be saved')).toBeTruthy()
+  expect((screen.getByLabelText('Queries (one per line)') as HTMLTextAreaElement).value).toBe('keep this query')
+  expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(false)
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+  expect(await screen.findByText('Provider updated.')).toBeTruthy()
+})
+
+test('requires the local endpoint, not an API key, when Local is selected', async () => {
+  const { requests } = renderProjectSetup({ onboarding: true, providerReady: false, projectProviders: ['local'], includeLocalProvider: true })
+  const baseUrl = await screen.findByLabelText('Base URL')
+  expect(screen.getByLabelText('API key (optional)')).toBeTruthy()
+  expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true)
+  fireEvent.change(baseUrl, { target: { value: 'http://localhost:11434/v1' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+  expect(await screen.findByText('Provider updated.')).toBeTruthy()
+  expect(requests.find(request => request.path === '/api/v1/settings/providers/local')).toMatchObject({
+    method: 'PUT', body: JSON.stringify({ baseUrl: 'http://localhost:11434/v1' }),
+  })
+})
+
+test('keeps unknown browser readiness distinct from missing configuration', async () => {
+  let resolveCdp: ((response: Response) => void) | undefined
+  renderProjectSetup({
+    onboarding: true, providerReady: false,
+    cdpResponse: () => new Promise<Response>(resolve => { resolveCdp = resolve }),
+  })
+  expect(await screen.findByText('Checking available providers. You can choose queries while this finishes.')).toBeTruthy()
+  expect(screen.queryByRole('heading', { name: 'Connect a provider' })).toBeNull()
+  expect(screen.queryByText('Not connected')).toBeNull()
+  await waitFor(() => expect(resolveCdp).toBeTypeOf('function'))
+  resolveCdp?.(jsonResponse({}))
+  expect(await screen.findByRole('heading', { name: 'Connect a provider' })).toBeTruthy()
+})
+
+test('copies a project-specific Research request without starting provider work or changing tracking', async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined)
+  const descriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+  onTestFinished(() => {
+    if (descriptor) Object.defineProperty(navigator, 'clipboard', descriptor)
+    else Reflect.deleteProperty(navigator, 'clipboard')
+  })
+  const { projectName, domain, requests } = renderProjectSetup({ onboarding: true, providerReady: false })
+  fireEvent.click(await screen.findByRole('button', { name: 'Copy research prompt' }))
+  expect(await screen.findByRole('button', { name: 'Research prompt copied' })).toBeTruthy()
+  const prompt = writeText.mock.calls[0]?.[0] as string
+  expect(prompt).toContain(projectName)
+  expect(prompt).toContain(domain)
+  expect(prompt).toContain("Canonry's Research flow")
+  expect(prompt).toContain('saved answers and sources')
+  expect(prompt).toContain('Research does not add queries to tracking')
+  expect(prompt).toContain('configured API provider')
+  expect(prompt).toContain('preserve existing queries')
+  expect(prompt).toContain('Do not change tracked queries or launch a visibility sweep')
+  expect(prompt).toContain('for me to paste into setup')
+  expect(requests.filter(request => request.method === 'POST' && /\/(?:runs|queries|generate)$/.test(request.path))).toEqual([])
+})
+
+test('offers a selectable research prompt if clipboard access fails', async () => {
+  const descriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn().mockRejectedValue(new Error('denied')) } })
+  onTestFinished(() => {
+    if (descriptor) Object.defineProperty(navigator, 'clipboard', descriptor)
+    else Reflect.deleteProperty(navigator, 'clipboard')
+  })
+  renderProjectSetup({ onboarding: true })
+  fireEvent.click(screen.getByRole('button', { name: 'Copy research prompt' }))
+  expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'Could not copy. Select and copy the prompt above.')
+  expect(screen.getByLabelText('Agent query research prompt').closest('details')?.open).toBe(true)
 })
 
 test('blocks launch when the ready provider is outside the project allowlist', async () => {
@@ -207,8 +365,9 @@ test('blocks launch when the ready provider is outside the project allowlist', a
 
   expect(await screen.findByText('Step 2 of 2')).toBeTruthy()
   expect(screen.getByText(/provider allowed by this project/i)).toBeTruthy()
-  expect(screen.getByRole('link', { name: 'Configure a provider' })).toBeTruthy()
-  expect(screen.queryByRole('button', { name: 'Launch visibility sweep' })).toBeNull()
+  expect((screen.getByLabelText('Provider to connect') as HTMLSelectElement).value).toBe('Claude')
+  expect(within(screen.getByLabelText('Provider to connect')).queryByRole('option', { name: 'Gemini' })).toBeNull()
+  expect((screen.getByRole('button', { name: 'Launch visibility sweep' }) as HTMLButtonElement).disabled).toBe(true)
 })
 
 test('treats a registered project-selected CDP provider as runnable', async () => {

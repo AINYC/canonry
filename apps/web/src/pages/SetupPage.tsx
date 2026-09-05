@@ -13,6 +13,7 @@ import { Card } from '../components/ui/card.js'
 import { AdminOnly } from '../components/shared/AccessControls.js'
 import { OnboardingProgress } from '../components/shared/OnboardingProgress.js'
 import { ToneBadge } from '../components/shared/ToneBadge.js'
+import { ProviderConfigForm } from '../components/settings/ProviderConfigForm.js'
 import { addToast } from '../lib/toast-store.js'
 import {
   createProject,
@@ -277,6 +278,7 @@ function ReadySetupPage({
   siteHealthOnboarding?: boolean
 }) {
   const settings = safeDashboard.settings
+  const { isAdmin } = useAccount()
 
   const healthQuery = useHealth(enableLiveStatus, initialHealth)
   const healthSnapshot = healthQuery.data ?? initialHealth ?? { apiStatus: { label: 'API', state: 'checking', detail: 'Checking service health' }, workerStatus: { label: 'Worker', state: 'checking', detail: 'Checking service health' } }
@@ -415,6 +417,30 @@ function ReadySetupPage({
   const [generateCount, setGenerateCount] = useState(5)
   const [generatingQueries, setGeneratingQueries] = useState(false)
   const [generateError, setGenerateError] = useState<string | null>(null)
+  const [configuringProvider, setConfiguringProvider] = useState('')
+  const [showProviderConfig, setShowProviderConfig] = useState(false)
+  const [researchPromptCopied, setResearchPromptCopied] = useState(false)
+  const [researchCopyError, setResearchCopyError] = useState(false)
+  const configurableProviders = settings.providerStatuses.filter(provider => (
+    normalizeProviderName(provider.name) !== CDP_PROVIDER_NAME
+    && (projectProviders.length === 0 || projectProviders.includes(normalizeProviderName(provider.name)))
+  ))
+  const providerToConfigure = configurableProviders.find(provider => provider.name === configuringProvider)
+    ?? configurableProviders.find(provider => provider.state !== 'ready')
+    ?? configurableProviders.at(0)
+  const researchPrompt = `Help me choose AI Visibility queries for Canonry project ${JSON.stringify(createdProjectName ?? projectName)} (${domain}).
+1. Read the project, its existing tracked queries, and Site Health findings. Ask about my customers, services, and locations if needed, then propose relevant customer queries.
+2. Use Canonry's Research flow to test a small approved batch against a configured API provider. Retrieve the saved answers and sources, and compare brand mentions and site citations separately. Research does not add queries to tracking. If more candidates are needed, propose ICP Discovery separately.
+3. Recommend a short list with reasons. Ask before provider usage. Once I approve, preserve existing queries and return the combined list, one query per line, for me to paste into setup. Do not change tracked queries or launch a visibility sweep.`
+  const copyResearchPrompt = async () => {
+    setResearchCopyError(false)
+    try {
+      await navigator.clipboard.writeText(researchPrompt)
+      setResearchPromptCopied(true)
+    } catch {
+      setResearchCopyError(true)
+    }
+  }
 
   const [competitorsText, setCompetitorsText] = useState(durableCompetitors.join('\n'))
   const [competitorsSaved, setCompetitorsSaved] = useState(durableCompetitors.length > 0)
@@ -921,6 +947,91 @@ function ReadySetupPage({
     setStep(4)
   }
 
+  const providerSetup = isProjectScoped && (step === 2 || step === 4) ? (
+    !isAdmin ? (
+      <section aria-labelledby="setup-provider-heading" className="space-y-2 border-b border-default pb-6 mb-6">
+        <h2 id="setup-provider-heading" className="text-lg font-semibold text-heading">Answer engine provider</h2>
+        <p className="max-w-prose text-sm text-secondary">
+          Provider settings are managed by an administrator. Ask them to check or connect an answer engine for this project. You can save queries now.
+        </p>
+      </section>
+    ) : (
+    <section aria-labelledby="setup-provider-heading" className="space-y-3 border-b border-default pb-6 mb-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 id="setup-provider-heading" className="text-lg font-semibold text-heading">
+          {providerReadiness === false ? 'Connect a provider' : 'Answer engine provider'}
+        </h2>
+        <ToneBadge tone={providerReadiness === true ? 'positive' : 'neutral'}>
+          {providerReadiness === true ? 'Configured' : providerReadiness === false ? 'Not connected' : 'Checking'}
+        </ToneBadge>
+      </div>
+      <p className="max-w-prose text-sm text-secondary">
+        {providerReadiness === true
+          ? runnableApiProviders.length > 0
+            ? `${runnableApiProviders.map(provider => provider.displayName ?? provider.name).join(', ')} available for this project. Research and sweeps use your provider account.`
+            : 'ChatGPT in Chrome is configured for sweeps. Query Research needs an API provider.'
+          : providerReadiness === false
+            ? 'Connect an answer engine for AI Visibility sweeps and query research. You can also save queries now and connect later.'
+            : 'Checking available providers. You can choose queries while this finishes.'}
+      </p>
+      {providerReadiness === false || showProviderConfig ? (
+        providerToConfigure ? (
+          <div className="max-w-xl">
+            <label className="setup-label" htmlFor="setup-provider">Provider to connect</label>
+            <select
+              id="setup-provider"
+              className="setup-input"
+              value={providerToConfigure.name}
+              onChange={event => setConfiguringProvider(event.target.value)}
+            >
+              {configurableProviders.map(provider => (
+                <option key={provider.name} value={provider.name}>{provider.displayName ?? provider.name}</option>
+              ))}
+            </select>
+            <ProviderConfigForm
+              key={providerToConfigure.name}
+              compact
+              providerName={providerToConfigure.name}
+              keyUrl={providerToConfigure.keyUrl}
+              modelHint={providerToConfigure.modelHint}
+              onSaved={() => {
+                setShowProviderConfig(false)
+                void refetch()
+              }}
+            />
+          </div>
+        ) : (
+          <p className="max-w-prose text-sm text-secondary">
+            {projectProviders.length > 0
+              ? `This project's provider selection is ${projectProviders.join(', ')}. Configure an allowed provider in Settings, or change the selection in project Settings.`
+              : 'Provider configuration is unavailable here. Open Settings to connect an answer engine, then check again.'}
+          </p>
+        )
+      ) : null}
+      <div className="flex flex-wrap items-center gap-2">
+        {providerReadiness === true && !showProviderConfig && providerToConfigure ? (
+          <Button type="button" variant="outline" size="sm" onClick={() => setShowProviderConfig(true)}>
+            Configure a provider
+          </Button>
+        ) : null}
+        {!providerToConfigure || cdpConfigured === true ? (
+          <Button type="button" variant="outline" size="sm" asChild>
+            <Link to="/settings" target="_blank" rel="noopener noreferrer">Open provider settings</Link>
+          </Button>
+        ) : null}
+        {providerReadiness !== true || cdpConfigured === true ? (
+          <Button type="button" variant="ghost" size="sm" onClick={() => {
+            void refetch()
+            if (selectionCanUseCdp) void cdpStatusQuery.refetch()
+          }}>
+            Check again
+          </Button>
+        ) : null}
+      </div>
+    </section>
+    )
+  ) : null
+
   const stepContent = (() => {
     switch (step) {
       case 0:
@@ -1120,10 +1231,22 @@ function ReadySetupPage({
               )}
             </div>
             <p className="supporting-copy">
-              Enter the queries you want to track, one per line. A rough first list is
-              fine: you can edit them, research more, and add to them at any time from the
-              project.
+              Add the queries your customers use, one per line. You can refine your list later.
             </p>
+            <div className="space-y-2 border-y border-default py-4 my-4">
+              <h3 className="text-base font-medium text-heading">Research queries with your agent</h3>
+              <p className="max-w-prose text-sm text-secondary">
+                Ask your own agent to use Canonry Research, compare answers and sources, and recommend queries to track. Research needs an API provider and does not change your tracked queries.
+              </p>
+              <Button type="button" variant="outline" size="sm" onClick={asyncHandler(copyResearchPrompt)}>
+                {researchPromptCopied ? 'Research prompt copied' : 'Copy research prompt'}
+              </Button>
+              <details open={researchCopyError || undefined} className="text-sm text-secondary">
+                <summary className="cursor-pointer py-3 text-link">View agent prompt</summary>
+                <textarea aria-label="Agent query research prompt" readOnly className="setup-textarea mt-2" rows={8} value={researchPrompt} />
+              </details>
+              {researchCopyError ? <p role="alert" className="text-sm text-negative">Could not copy. Select and copy the prompt above.</p> : null}
+            </div>
             {queriesHydrating ? (
               <div className="rounded-md border border-default bg-bg-elevated/40 p-4 text-sm text-secondary" role="status">
                 Loading saved queries…
@@ -1147,6 +1270,7 @@ function ReadySetupPage({
                 </ul>
                 <div className="setup-nav">
                   <Button type="button" variant="outline" onClick={isProjectScoped ? openProjectDashboard : goBack}>Back</Button>
+                  <Button type="button" variant="outline" onClick={() => setQueriesSaved(false)}>Edit queries</Button>
                   <Button type="button" onClick={() => completeExistingStep('queries', isProjectScoped ? 4 : 3, parsedQueries.length)}>Continue</Button>
                 </div>
               </div>
@@ -1339,7 +1463,7 @@ function ReadySetupPage({
             ) : !runTriggered ? (
               <div className="compact-stack">
                 <p className="supporting-copy">
-                  Setup is done. You can run a first sweep now to get a baseline for{' '}
+                  Your queries are saved. Run a first sweep to get a baseline for{' '}
                   <span className="text-heading font-medium">{createdProjectName}</span>, or
                   finish and run it later from the project. A sweep calls the answer
                   engines, so it costs provider usage.
@@ -1359,7 +1483,7 @@ function ReadySetupPage({
                   >
                     Finish without running
                   </Button>
-                  {systemBlockReason === 'no_provider' ? (
+                  {systemBlockReason === 'no_provider' && !isProjectScoped ? (
                     <Button type="button" asChild>
                       <Link to="/settings">Configure a provider</Link>
                     </Button>
@@ -1472,7 +1596,7 @@ function ReadySetupPage({
           </h1>
           <p className="page-subtitle">
             {visibilityProjectName
-              ? 'Choose what to track. Connect a provider only when you are ready to run.'
+              ? 'Connect an answer engine, choose queries, then decide when to run your first sweep.'
               : 'Create a project and run its first visibility check.'}
           </p>
         </div>
@@ -1491,6 +1615,7 @@ function ReadySetupPage({
       />
 
       <section className="setup-wizard">
+        {providerSetup}
         {stepContent}
       </section>
     </div>
