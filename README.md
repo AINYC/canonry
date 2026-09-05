@@ -18,7 +18,7 @@ Run Canonry on your infrastructure with your own provider keys. Use the dashboar
 
 > Find a weak page using our site audit and search data. Propose a content update for review. After I approve it, publish through WordPress, submit the sitemap, and rerun the checks.
 
-Your agent coordinates the steps using Canonry's tools and returns the results for review. Activating ChatGPT Ads requires explicit approval of the prepared campaign tree.
+Your agent coordinates the steps using Canonry's tools and returns the results for review.
 
 ### Built-in integrations and workflows
 
