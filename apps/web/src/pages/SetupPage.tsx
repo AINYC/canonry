@@ -430,7 +430,7 @@ function ReadySetupPage({
     ?? configurableProviders.at(0)
   const researchPrompt = `Help me choose AI Visibility queries for Canonry project ${JSON.stringify(createdProjectName ?? projectName)} (${domain}).
 1. Read the project, its existing tracked queries, and Site Health findings. Ask about my customers, services, and locations if needed, then propose relevant customer queries.
-2. Use Canonry's Research flow to test a small approved batch against a configured API provider. Retrieve the saved answers and sources, and compare brand mentions and site citations separately. Research does not add queries to tracking. If more candidates are needed, propose ICP Discovery separately.
+2. Check the configured connection's capabilities, then use Canonry's Research flow to test a small approved batch. Retrieve saved answers and any available sources. Compare brand mentions separately from site citations; unavailable citation evidence is not a "not cited" result. Text-only routes can inform query research but cannot establish an AI Visibility baseline. Research does not add queries to tracking. If more candidates are needed, propose ICP Discovery separately.
 3. Recommend a short list with reasons. Ask before provider usage. Once I approve, preserve existing queries and return the combined list, one query per line, for me to paste into setup. Do not change tracked queries or launch a visibility sweep.`
   const copyResearchPrompt = async () => {
     setResearchCopyError(false)
@@ -947,6 +947,16 @@ function ReadySetupPage({
     setStep(4)
   }
 
+  const StepSurface = isProjectScoped ? 'section' : Card
+  const providerRefreshAction = providerReadiness !== true || cdpConfigured === true ? (
+    <Button type="button" variant="ghost" size="sm" className="min-h-11" onClick={() => {
+      void refetch()
+      if (selectionCanUseCdp) void cdpStatusQuery.refetch()
+    }}>
+      Check again
+    </Button>
+  ) : null
+  const providerFormVisible = (providerReadiness === false || showProviderConfig) && !!providerToConfigure
   const providerSetup = isProjectScoped && (step === 2 || step === 4) ? (
     !isAdmin ? (
       <section aria-labelledby="setup-provider-heading" className="space-y-2 border-b border-default pb-6 mb-6">
@@ -957,7 +967,7 @@ function ReadySetupPage({
       </section>
     ) : (
     <section aria-labelledby="setup-provider-heading" className="space-y-3 border-b border-default pb-6 mb-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <h2 id="setup-provider-heading" className="text-lg font-semibold text-heading">
           {providerReadiness === false ? 'Connect a provider' : 'Answer engine provider'}
         </h2>
@@ -971,26 +981,31 @@ function ReadySetupPage({
             ? `${runnableApiProviders.map(provider => provider.displayName ?? provider.name).join(', ')} available for this project. Research and sweeps use your provider account.`
             : 'ChatGPT in Chrome is configured for sweeps. Query Research needs an API provider.'
           : providerReadiness === false
-            ? 'Connect an answer engine for AI Visibility sweeps and query research. You can also save queries now and connect later.'
+            ? 'An answer engine is required for visibility sweeps. You can save queries now and connect later.'
             : 'Checking available providers. You can choose queries while this finishes.'}
       </p>
       {providerReadiness === false || showProviderConfig ? (
         providerToConfigure ? (
-          <div className="max-w-xl">
-            <label className="setup-label" htmlFor="setup-provider">Provider to connect</label>
-            <select
-              id="setup-provider"
-              className="setup-input"
-              value={providerToConfigure.name}
-              onChange={event => setConfiguringProvider(event.target.value)}
-            >
-              {configurableProviders.map(provider => (
-                <option key={provider.name} value={provider.name}>{provider.displayName ?? provider.name}</option>
-              ))}
-            </select>
+          <div>
             <ProviderConfigForm
               key={providerToConfigure.name}
               compact
+              leadingField={(
+                <div className="min-w-0 space-y-1.5">
+                  <label className="block text-sm font-medium text-secondary" htmlFor="setup-provider">Provider to connect</label>
+                  <select
+                    id="setup-provider"
+                    className="setup-input"
+                    value={providerToConfigure.name}
+                    onChange={event => setConfiguringProvider(event.target.value)}
+                  >
+                    {configurableProviders.map(provider => (
+                      <option key={provider.name} value={provider.name}>{provider.displayName ?? provider.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              secondaryActions={providerRefreshAction}
               providerName={providerToConfigure.name}
               keyUrl={providerToConfigure.keyUrl}
               modelHint={providerToConfigure.modelHint}
@@ -1019,14 +1034,7 @@ function ReadySetupPage({
             <Link to="/settings" target="_blank" rel="noopener noreferrer">Open provider settings</Link>
           </Button>
         ) : null}
-        {providerReadiness !== true || cdpConfigured === true ? (
-          <Button type="button" variant="ghost" size="sm" onClick={() => {
-            void refetch()
-            if (selectionCanUseCdp) void cdpStatusQuery.refetch()
-          }}>
-            Check again
-          </Button>
-        ) : null}
+        {!providerFormVisible ? providerRefreshAction : null}
       </div>
     </section>
     )
@@ -1214,11 +1222,11 @@ function ReadySetupPage({
 
       case 2:
         return (
-          <Card className="surface-card step-card">
+          <StepSurface className={isProjectScoped ? 'visibility-setup-section step-card' : 'surface-card step-card'} aria-labelledby="setup-queries-heading">
             <div className="section-head">
               <div>
                 <p className="eyebrow eyebrow-soft">{isProjectScoped ? 'Step 1 of 2' : 'Step 3 of 5'}</p>
-                <h2>Add queries</h2>
+                <h2 id="setup-queries-heading">Add queries</h2>
               </div>
               {queriesHydrating ? (
                 <ToneBadge tone="neutral">Loading</ToneBadge>
@@ -1233,17 +1241,21 @@ function ReadySetupPage({
             <p className="supporting-copy">
               Add the queries your customers use, one per line. You can refine your list later.
             </p>
-            <div className="space-y-2 border-y border-default py-4 my-4">
-              <h3 className="text-base font-medium text-heading">Research queries with your agent</h3>
-              <p className="max-w-prose text-sm text-secondary">
-                Ask your own agent to use Canonry Research, compare answers and sources, and recommend queries to track. Research needs an API provider and does not change your tracked queries.
-              </p>
-              <Button type="button" variant="outline" size="sm" onClick={asyncHandler(copyResearchPrompt)}>
-                {researchPromptCopied ? 'Research prompt copied' : 'Copy research prompt'}
-              </Button>
+            <div className="space-y-2 border-b border-default pb-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0 space-y-1">
+                  <h3 className="text-sm font-semibold text-heading">Research queries with your agent</h3>
+                  <p className="max-w-prose text-sm text-secondary">
+                    Ask your agent to compare answers and available sources with Canonry Research, then recommend queries. Research does not change your tracked queries.
+                  </p>
+                </div>
+                <Button type="button" variant="outline" size="sm" className="min-h-11 shrink-0 self-start" onClick={asyncHandler(copyResearchPrompt)}>
+                  {researchPromptCopied ? 'Research prompt copied' : 'Copy research prompt'}
+                </Button>
+              </div>
               <details open={researchCopyError || undefined} className="text-sm text-secondary">
-                <summary className="cursor-pointer py-3 text-link">View agent prompt</summary>
-                <textarea aria-label="Agent query research prompt" readOnly className="setup-textarea mt-2" rows={8} value={researchPrompt} />
+                <summary className="min-h-11 cursor-pointer py-3 text-link">View agent prompt</summary>
+                <textarea aria-label="Agent query research prompt" readOnly className="setup-textarea mt-2 w-full" rows={8} value={researchPrompt} />
               </details>
               {researchCopyError ? <p role="alert" className="text-sm text-negative">Could not copy. Select and copy the prompt above.</p> : null}
             </div>
@@ -1322,11 +1334,11 @@ function ReadySetupPage({
                     {generateError ? <p className="text-negative-400 text-sm">{generateError}</p> : null}
                   </div>
                 ) : null}
-                <div className="flex items-center gap-2 text-muted text-xs uppercase tracking-wide">
+                {!isProjectScoped ? <div className="flex items-center gap-2 text-muted text-xs uppercase tracking-wide">
                   <span className="flex-1 border-t border-base" />
                   or type manually
                   <span className="flex-1 border-t border-base" />
-                </div>
+                </div> : null}
                 <div className="setup-field">
                   <label className="setup-label" htmlFor="queries">Queries (one per line)</label>
                   <textarea
@@ -1350,7 +1362,7 @@ function ReadySetupPage({
                 </div>
               </div>
             )}
-          </Card>
+          </StepSurface>
         )
 
       case 3:
@@ -1583,7 +1595,7 @@ function ReadySetupPage({
   })()
 
   return (
-    <div className="page-container">
+    <div className={isProjectScoped ? 'page-container visibility-setup' : 'page-container'}>
       {siteHealthOnboarding ? <OnboardingProgress current="visibility" /> : null}
       <div className="page-header">
         <div className="page-header-left">
@@ -1596,23 +1608,23 @@ function ReadySetupPage({
           </h1>
           <p className="page-subtitle">
             {visibilityProjectName
-              ? 'Connect an answer engine, choose queries, then decide when to run your first sweep.'
+              ? 'Connect an answer engine, then choose queries for your first sweep.'
               : 'Create a project and run its first visibility check.'}
           </p>
         </div>
         {siteHealthOnboarding ? (
           <div className="page-header-right">
-            <Button type="button" variant="outline" onClick={openProjectDashboard}>
+            <Button type="button" variant="outline" className="min-h-11" onClick={openProjectDashboard}>
               Skip AI Visibility
             </Button>
           </div>
         ) : null}
       </div>
 
-      <SetupStepIndicator
+      {!siteHealthOnboarding ? <SetupStepIndicator
         current={isProjectScoped ? (step === 4 ? 1 : 0) : step}
         labels={isProjectScoped ? PROJECT_VISIBILITY_STEPS : SETUP_STEPS}
-      />
+      /> : null}
 
       <section className="setup-wizard">
         {providerSetup}

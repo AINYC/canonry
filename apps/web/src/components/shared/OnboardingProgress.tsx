@@ -26,7 +26,7 @@ export function OnboardingProgress({ current }: { current: OnboardingStage }) {
           <li
             key={stage.id}
             aria-current={active ? 'step' : undefined}
-            className="flex min-h-12 items-center gap-3 px-3 py-2 first:pl-0 last:pr-0"
+            className="flex min-h-12 items-center gap-3 py-2 sm:px-3 sm:first:pl-0 sm:last:pr-0"
           >
             <span
               aria-hidden="true"

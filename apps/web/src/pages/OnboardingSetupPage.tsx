@@ -649,10 +649,13 @@ function PlatformSetupPageBody({
   const [createConflict, setCreateConflict] = useState(false)
   const [dispatchError, setDispatchError] = useState<string | null>(null)
   const [agentRequestCopied, setAgentRequestCopied] = useState(false)
-  const telemetryStatus = telemetryMutation.data ?? telemetryQuery.data
+  const telemetryStatus = telemetryQuery.data
   const telemetryEnabled = typeof telemetryStatus?.enabled === 'boolean'
     ? telemetryStatus.enabled
     : null
+  const telemetryChecked = telemetryMutation.isPending
+    ? telemetryMutation.variables.body.enabled
+    : telemetryEnabled
   const [telemetryError, setTelemetryError] = useState<string | null>(null)
   const errorRef = useRef<HTMLDivElement>(null)
   const { onboardingSessionId, emit } = useOnboardingTelemetry('platform')
@@ -883,6 +886,9 @@ function PlatformSetupPageBody({
         getApiV1TelemetryQueryKey({ client: heyClient }),
         status,
       )
+      if (status.enabled !== enabled) {
+        setTelemetryError(`The server kept telemetry ${status.enabled ? 'on' : 'off'}. Check its telemetry settings.`)
+      }
     } catch {
       setTelemetryError('Could not update telemetry. Try again.')
     }
@@ -920,7 +926,7 @@ function PlatformSetupPageBody({
         <p className="mt-2 max-w-lg text-sm leading-6 text-secondary">
           {skipSiteScan
             ? 'Add a public domain, then choose the queries you want to track. No site scan will run.'
-            : 'Enter your public website to see its pages, structure, and internal links.'}
+            : 'Enter your public website to see its pages, structure, internal links, and technical SEO scores.'}
         </p>
       </header>
 
@@ -1111,11 +1117,11 @@ function PlatformSetupPageBody({
 
       {telemetryEnabled !== null ? (
         <section className="mt-6 border-t border-default pt-5" aria-labelledby="telemetry-title">
-          <label className="flex min-h-11 cursor-pointer items-start gap-3 py-2">
+          <label className={`flex min-h-11 items-start gap-3 py-2 ${telemetryMutation.isPending ? 'cursor-wait' : 'cursor-pointer'}`}>
             <input
-              className="mt-0.5 size-4 shrink-0 rounded border-strong bg-bg"
+              className="mt-0.5 size-4 shrink-0 rounded border-strong bg-bg accent-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-mono-500 disabled:cursor-wait"
               type="checkbox"
-              checked={telemetryEnabled}
+              checked={telemetryChecked ?? false}
               disabled={telemetryMutation.isPending}
               onChange={(event) => { void updateTelemetry(event.target.checked) }}
               aria-describedby="telemetry-detail"
@@ -1127,6 +1133,7 @@ function PlatformSetupPageBody({
               </span>
             </span>
           </label>
+          {telemetryMutation.isPending ? <p className="mt-1 text-sm text-secondary" role="status">Saving preference…</p> : null}
           {telemetryError ? <p className="mt-1 text-sm text-negative" role="alert">{telemetryError}</p> : null}
         </section>
       ) : null}

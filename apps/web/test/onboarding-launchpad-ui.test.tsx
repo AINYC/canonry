@@ -269,11 +269,11 @@ test('continues a mapped project into focused AI Visibility setup', async () => 
   expect(heading).toBeTruthy()
   expect(document.activeElement).toBe(heading)
   expect(screen.getByText('Step 1 of 2')).toBeTruthy()
-  expect(screen.getByRole('list', { name: 'Setup progress' }).textContent).toContain('Queries')
-  expect(screen.getByRole('list', { name: 'Setup progress' }).textContent).toContain('First sweep')
-  expect(screen.getByRole('list', { name: 'Setup progress' }).textContent).not.toContain('System check')
-  expect(screen.getByRole('list', { name: 'Setup progress' }).textContent).not.toContain('Create project')
-  expect(screen.getByRole('list', { name: 'Setup progress' }).textContent).not.toContain('Competitors')
+  expect(screen.getByRole('heading', { name: 'Add queries' })).toBeTruthy()
+  expect(screen.queryByRole('list', { name: 'Setup progress' })).toBeNull()
+  expect(screen.queryByText('System check')).toBeNull()
+  expect(screen.queryByText('Create project')).toBeNull()
+  expect(screen.queryByText('Competitors')).toBeNull()
   const onboardingProgress = screen.getByRole('list', { name: 'Onboarding progress' })
   expect(within(onboardingProgress).getByText('AI Visibility').closest('[aria-current="step"]')).toBeTruthy()
   expect(screen.queryByRole('heading', { name: 'Map your site' })).toBeNull()
@@ -402,7 +402,7 @@ test('auto waits for a successful authoritative empty project list before showin
   await renderSetup()
 
   expect(await screen.findByRole('heading', { name: 'Map your site' })).toBeTruthy()
-  expect(screen.getByText('Enter your public website to see its pages, structure, and internal links.')).toBeTruthy()
+  expect(screen.getByText('Enter your public website to see its pages, structure, internal links, and technical SEO scores.')).toBeTruthy()
   const setupForm = screen.getByRole('form', { name: 'Map your site' })
   const agentOption = screen.getByRole('region', { name: 'Use your agent instead' })
   expect(Boolean(setupForm.compareDocumentPosition(agentOption) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true)
@@ -459,31 +459,157 @@ test('offers accessible supported locale selects with exact API codes', async ()
   expect(screen.getByText('United Kingdom · French')).toBeTruthy()
 })
 
-test('discloses and controls anonymous telemetry when the host supports it', async () => {
+function mockTelemetryPreferences(initialEnabled: boolean, update?: (enabled: boolean) => Response | Promise<Response>) {
   window.__CANONRY_CONFIG__ = { dashboard: { onboardingMode: 'platform' } }
-  let updated: boolean | undefined
-  const restore = mockFetch((url, init) => {
+  let serverEnabled = initialEnabled
+  const updates: boolean[] = []
+  const restore = mockFetch(async (url, init) => {
     const path = pathOf(url)
     if (path === '/api/v1/telemetry/onboarding') return jsonResponse({ accepted: true }, 202)
     if (path === '/api/v1/telemetry' && (init?.method ?? 'GET') === 'GET') {
-      return jsonResponse({ enabled: true, anonymousId: 'abcd1234...' })
+      return jsonResponse({ enabled: serverEnabled, anonymousId: 'abcd1234...' })
     }
     if (path === '/api/v1/telemetry' && init?.method === 'PUT') {
-      updated = (JSON.parse(String(init.body)) as { enabled: boolean }).enabled
-      return jsonResponse({ enabled: updated, anonymousId: 'abcd1234...' })
+      const requested = (JSON.parse(String(init.body)) as { enabled: boolean }).enabled
+      updates.push(requested)
+      const response = update
+        ? await update(requested)
+        : jsonResponse({ enabled: requested, anonymousId: 'abcd1234...' })
+      if (response.ok) serverEnabled = ((await response.clone().json()) as { enabled: boolean }).enabled
+      return response
     }
     return jsonResponse({})
   })
   onTestFinished(restore)
+  return {
+    updates,
+    setServerEnabled(enabled: boolean) { serverEnabled = enabled },
+  }
+}
+
+test('discloses the enabled fresh-install preference and toggles telemetry through its label in both directions', async () => {
+  const server = mockTelemetryPreferences(true)
   const { queryClient } = await renderSetup()
+  const telemetryKey = getApiV1TelemetryQueryKey({ client: heyClient })
 
   const control = await screen.findByRole('checkbox', { name: /Share anonymous product telemetry/ })
   expect((control as HTMLInputElement).checked).toBe(true)
   expect(screen.getByText(/does not send raw domains, URLs, queries, answer content, or credentials/i)).toBeTruthy()
+  expect(server.updates).toEqual([])
 
-  fireEvent.click(control)
-  await waitFor(() => expect(updated).toBe(false))
+  fireEvent.click(screen.getByText('Share anonymous product telemetry'))
+  await waitFor(() => expect(queryClient.getQueryData(telemetryKey)).toEqual({
+    enabled: false,
+    anonymousId: 'abcd1234...',
+  }))
   expect((control as HTMLInputElement).checked).toBe(false)
+  await waitFor(() => expect((control as HTMLInputElement).disabled).toBe(false))
+
+  fireEvent.click(screen.getByText('Share anonymous product telemetry'))
+  await waitFor(() => expect(queryClient.getQueryData(telemetryKey)).toEqual({
+    enabled: true,
+    anonymousId: 'abcd1234...',
+  }))
+  expect((control as HTMLInputElement).checked).toBe(true)
+  expect(server.updates).toEqual([false, true])
+
+  // A later server preference must replace the last mutation response.
+  server.setServerEnabled(false)
+  await queryClient.invalidateQueries({ queryKey: telemetryKey })
+  await waitFor(() => expect((control as HTMLInputElement).checked).toBe(false))
+  expect(queryClient.getQueryData(telemetryKey)).toEqual({
+    enabled: false,
+    anonymousId: 'abcd1234...',
+  })
+})
+
+test('preserves an existing telemetry opt-out until the user chooses to enable it', async () => {
+  const server = mockTelemetryPreferences(false)
+  const { queryClient } = await renderSetup()
+  const control = await screen.findByRole('checkbox', { name: /Share anonymous product telemetry/ }) as HTMLInputElement
+  expect(control.checked).toBe(false)
+  expect(server.updates).toEqual([])
+  fireEvent.click(screen.getByText('Share anonymous product telemetry'))
+  await waitFor(() => expect(queryClient.getQueryData(getApiV1TelemetryQueryKey({ client: heyClient }))).toEqual({
+    enabled: true,
+    anonymousId: 'abcd1234...',
+  }))
+  await waitFor(() => expect(control.disabled).toBe(false))
+  await waitFor(() => expect(server.updates).toEqual([true]))
+  expect(control.checked).toBe(true)
+})
+
+test('shows the requested telemetry preference while saving and blocks duplicate label clicks', async () => {
+  let resolveUpdate: ((response: Response) => void) | undefined
+  const server = mockTelemetryPreferences(true, () => new Promise<Response>(resolve => { resolveUpdate = resolve }))
+  const { queryClient } = await renderSetup()
+  const control = await screen.findByRole('checkbox', { name: /Share anonymous product telemetry/ }) as HTMLInputElement
+  fireEvent.click(screen.getByText('Share anonymous product telemetry'))
+
+  expect((await screen.findByText('Saving preference…')).closest('[role="status"]')).toBeTruthy()
+  expect(control.checked).toBe(false)
+  expect(control.disabled).toBe(true)
+  expect(queryClient.getQueryData(getApiV1TelemetryQueryKey({ client: heyClient }))).toEqual({
+    enabled: true,
+    anonymousId: 'abcd1234...',
+  })
+  fireEvent.click(screen.getByText('Share anonymous product telemetry'))
+  await waitFor(() => expect(server.updates).toEqual([false]))
+  await waitFor(() => expect(resolveUpdate).toBeTypeOf('function'))
+  resolveUpdate?.(jsonResponse({ enabled: false, anonymousId: 'abcd1234...' }))
+
+  await waitFor(() => expect(control.disabled).toBe(false))
+  expect(control.checked).toBe(false)
+  expect(screen.queryByText('Saving preference…')).toBeNull()
+  expect(server.updates).toEqual([false])
+  expect(queryClient.getQueryData(getApiV1TelemetryQueryKey({ client: heyClient }))).toEqual({
+    enabled: false,
+    anonymousId: 'abcd1234...',
+  })
+})
+
+test('rolls back a rejected telemetry update and lets the user retry', async () => {
+  let rejectNext = true
+  const server = mockTelemetryPreferences(true, enabled => {
+    if (rejectNext) {
+      rejectNext = false
+      return jsonResponse({ error: { code: 'INTERNAL_ERROR', message: 'Preference could not be saved' } }, 503)
+    }
+    return jsonResponse({ enabled, anonymousId: 'abcd1234...' })
+  })
+  const { queryClient } = await renderSetup()
+  const control = await screen.findByRole('checkbox', { name: /Share anonymous product telemetry/ }) as HTMLInputElement
+  fireEvent.click(screen.getByText('Share anonymous product telemetry'))
+
+  expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'Could not update telemetry. Try again.')
+  expect(control.checked).toBe(true)
+  expect(control.disabled).toBe(false)
+  expect(queryClient.getQueryData(getApiV1TelemetryQueryKey({ client: heyClient }))).toEqual({
+    enabled: true,
+    anonymousId: 'abcd1234...',
+  })
+
+  fireEvent.click(screen.getByText('Share anonymous product telemetry'))
+  await waitFor(() => expect(server.updates).toEqual([false, false]))
+  await waitFor(() => expect(control.disabled).toBe(false))
+  expect(control.checked).toBe(false)
+  expect(screen.queryByRole('alert')).toBeNull()
+  expect(queryClient.getQueryData(getApiV1TelemetryQueryKey({ client: heyClient }))).toEqual({
+    enabled: false,
+    anonymousId: 'abcd1234...',
+  })
+})
+
+test('explains when server settings keep telemetry off after an enable request', async () => {
+  const server = mockTelemetryPreferences(false, () => jsonResponse({ enabled: false, anonymousId: 'abcd1234...' }))
+  const { queryClient } = await renderSetup()
+  const control = await screen.findByRole('checkbox', { name: /Share anonymous product telemetry/ }) as HTMLInputElement
+  fireEvent.click(screen.getByText('Share anonymous product telemetry'))
+
+  expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'The server kept telemetry off. Check its telemetry settings.')
+  expect(control.checked).toBe(false)
+  expect(control.disabled).toBe(false)
+  expect(server.updates).toEqual([true])
   expect(queryClient.getQueryData(getApiV1TelemetryQueryKey({ client: heyClient }))).toEqual({
     enabled: false,
     anonymousId: 'abcd1234...',

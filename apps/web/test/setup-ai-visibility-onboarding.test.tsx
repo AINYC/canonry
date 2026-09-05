@@ -41,6 +41,15 @@ function renderProjectSetup(options: {
   includeLocalProvider?: boolean
 }) {
   const fixture = createDashboardFixture()
+  // Match the key destinations published by the provider adapter catalog.
+  const providerKeyUrls: Record<string, string> = {
+    gemini: 'https://aistudio.google.com/apikey',
+    claude: 'https://platform.claude.com/settings/keys',
+  }
+  fixture.dashboard.settings.providerStatuses = fixture.dashboard.settings.providerStatuses.map(provider => ({
+    ...provider,
+    keyUrl: providerKeyUrls[provider.name.toLowerCase()] ?? provider.keyUrl,
+  }))
   const project = structuredClone(fixture.dashboard.projects[0]!)
   project.project.providers = options.projectProviders ?? project.project.providers
   fixture.dashboard.projects = [project]
@@ -151,6 +160,53 @@ test('allows a project-scoped write key to configure its exact project', async (
   expect(screen.queryByText('Not connected')).toBeNull()
   expect(screen.queryByLabelText('Provider to connect')).toBeNull()
   expect(screen.queryByRole('link', { name: 'Open provider settings' })).toBeNull()
+  expect(screen.queryByRole('heading', { name: 'Start with Gemini’s free tier' })).toBeNull()
+  expect(screen.queryByRole('link', { name: 'Get a free Gemini API key ↗' })).toBeNull()
+})
+
+test('keeps Gemini onboarding guidance out of administrator-only setup for a read-only key', async () => {
+  renderProjectSetup({
+    onboarding: true,
+    providerReady: false,
+    apiKey: { id: 'read-only-key', scopes: ['read'], projectId: null, readOnly: true },
+  })
+  expect(await screen.findByText('Set up AI Visibility is for administrators')).toBeTruthy()
+  expect(screen.queryByRole('heading', { name: 'Start with Gemini’s free tier' })).toBeNull()
+  expect(screen.queryByRole('link', { name: 'Get a free Gemini API key ↗' })).toBeNull()
+  expect(screen.queryByLabelText('API key')).toBeNull()
+})
+
+test('introduces Gemini free-tier setup before the API key field with its limits and official links', async () => {
+  renderProjectSetup({ onboarding: true, providerReady: false })
+  const heading = await screen.findByRole('heading', { name: 'Start with Gemini’s free tier' })
+  const keyInput = screen.getByLabelText('API key')
+  expect(heading.compareDocumentPosition(keyInput) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  const keyLink = screen.getByRole('link', { name: 'Get a free Gemini API key ↗' })
+  expect(keyLink.getAttribute('href')).toBe('https://aistudio.google.com/apikey')
+  expect(keyLink.getAttribute('target')).toBe('_blank')
+  expect(keyLink.getAttribute('rel')).toContain('noopener')
+  expect(screen.getByText('Get a key in Google AI Studio, then paste it below. Free usage has model and rate limits; paid usage is billed by Google.')).toBeTruthy()
+  const pricingLink = screen.getByRole('link', { name: 'Pricing and limits' })
+  expect(pricingLink.getAttribute('href')).toBe('https://ai.google.dev/gemini-api/docs/pricing')
+  expect(pricingLink.getAttribute('target')).toBe('_blank')
+  expect(screen.queryByRole('link', { name: 'Get API key ↗' })).toBeNull()
+})
+
+test('switches Gemini free-tier guidance with the selected provider and preserves other key links', async () => {
+  const { requests } = renderProjectSetup({ onboarding: true, providerReady: false })
+  expect(await screen.findByRole('heading', { name: 'Start with Gemini’s free tier' })).toBeTruthy()
+  const provider = screen.getByLabelText('Provider to connect')
+  fireEvent.change(provider, { target: { value: 'Claude' } })
+  expect(screen.queryByRole('heading', { name: 'Start with Gemini’s free tier' })).toBeNull()
+  expect(screen.queryByRole('link', { name: 'Get a free Gemini API key ↗' })).toBeNull()
+  expect(screen.queryByRole('link', { name: 'Pricing and limits' })).toBeNull()
+  expect(screen.getByRole('link', { name: 'Get API key ↗' }).getAttribute('href')).toBe('https://platform.claude.com/settings/keys')
+
+  fireEvent.change(screen.getByLabelText('Provider to connect'), { target: { value: 'Gemini' } })
+  expect(screen.getByRole('heading', { name: 'Start with Gemini’s free tier' })).toBeTruthy()
+  expect(screen.getByRole('link', { name: 'Get a free Gemini API key ↗' })).toBeTruthy()
+  expect(screen.queryByRole('link', { name: 'Get API key ↗' })).toBeNull()
+  expect(requests.filter(request => request.method === 'PUT')).toEqual([])
 })
 
 test('keeps a stale project-list handoff scoped to the exact onboarding project', async () => {
@@ -237,7 +293,12 @@ test('offers provider setup before queries and keeps the draft after saving and 
   const providerHeading = await screen.findByRole('heading', { name: 'Connect a provider' })
   const queryHeading = screen.getByRole('heading', { name: 'Add queries' })
   expect(providerHeading.compareDocumentPosition(queryHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-  expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true)
+  const saveConnection = screen.getByRole('button', { name: 'Save connection' }) as HTMLButtonElement
+  expect(saveConnection.disabled).toBe(true)
+  expect(saveConnection.parentElement).toBe(screen.getByRole('button', { name: 'Check again' }).parentElement)
+  expect(screen.getByRole('region', { name: 'Add queries' }).tagName).toBe('SECTION')
+  expect(screen.getByRole('list', { name: 'Onboarding progress' })).toBeTruthy()
+  expect(screen.queryByRole('list', { name: 'Setup progress' })).toBeNull()
   expect(screen.getByText('Advanced provider settings').closest('details')?.open).toBe(false)
   // This is a provider secret, not the dashboard login password.
   const apiKeyField = screen.getByLabelText('API key')
@@ -247,7 +308,7 @@ test('offers provider setup before queries and keeps the draft after saving and 
 
   fireEvent.change(await screen.findByLabelText('Queries (one per line)'), { target: { value: 'unsubmitted customer question' } })
   fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'synthetic-test-key' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Save connection' }))
 
   expect(await screen.findByText('Provider updated.')).toBeTruthy()
   expect(requests.find(request => request.path === '/api/v1/settings/providers/gemini')).toMatchObject({
@@ -279,21 +340,23 @@ test('keeps failed provider setup retryable without losing queries', async () =>
   fireEvent.change(await screen.findByLabelText('Queries (one per line)'), { target: { value: 'keep this query' } })
   const keyInput = await screen.findByLabelText('API key')
   fireEvent.change(keyInput, { target: { value: 'synthetic-test-key' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Save connection' }))
   expect(await screen.findByText('Key could not be saved')).toBeTruthy()
   expect((screen.getByLabelText('Queries (one per line)') as HTMLTextAreaElement).value).toBe('keep this query')
-  expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(false)
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+  expect((screen.getByRole('button', { name: 'Save connection' }) as HTMLButtonElement).disabled).toBe(false)
+  fireEvent.click(screen.getByRole('button', { name: 'Save connection' }))
   expect(await screen.findByText('Provider updated.')).toBeTruthy()
 })
 
 test('requires the local endpoint, not an API key, when Local is selected', async () => {
   const { requests } = renderProjectSetup({ onboarding: true, providerReady: false, projectProviders: ['local'], includeLocalProvider: true })
   const baseUrl = await screen.findByLabelText('Base URL')
+  expect(screen.queryByRole('heading', { name: 'Start with Gemini’s free tier' })).toBeNull()
+  expect(screen.queryByRole('link', { name: 'Get a free Gemini API key ↗' })).toBeNull()
   expect(screen.getByLabelText('API key (optional)')).toBeTruthy()
-  expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true)
+  expect((screen.getByRole('button', { name: 'Save connection' }) as HTMLButtonElement).disabled).toBe(true)
   fireEvent.change(baseUrl, { target: { value: 'http://localhost:11434/v1' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Save connection' }))
   expect(await screen.findByText('Provider updated.')).toBeTruthy()
   expect(requests.find(request => request.path === '/api/v1/settings/providers/local')).toMatchObject({
     method: 'PUT', body: JSON.stringify({ baseUrl: 'http://localhost:11434/v1' }),
@@ -329,9 +392,11 @@ test('copies a project-specific Research request without starting provider work 
   expect(prompt).toContain(projectName)
   expect(prompt).toContain(domain)
   expect(prompt).toContain("Canonry's Research flow")
-  expect(prompt).toContain('saved answers and sources')
+  expect(prompt).toContain('saved answers and any available sources')
+  expect(prompt).toContain('unavailable citation evidence is not a "not cited" result')
+  expect(prompt).toContain('Text-only routes can inform query research but cannot establish an AI Visibility baseline')
   expect(prompt).toContain('Research does not add queries to tracking')
-  expect(prompt).toContain('configured API provider')
+  expect(prompt).toContain("configured connection's capabilities")
   expect(prompt).toContain('preserve existing queries')
   expect(prompt).toContain('Do not change tracked queries or launch a visibility sweep')
   expect(prompt).toContain('for me to paste into setup')
@@ -367,6 +432,8 @@ test('blocks launch when the ready provider is outside the project allowlist', a
   expect(screen.getByText(/provider allowed by this project/i)).toBeTruthy()
   expect((screen.getByLabelText('Provider to connect') as HTMLSelectElement).value).toBe('Claude')
   expect(within(screen.getByLabelText('Provider to connect')).queryByRole('option', { name: 'Gemini' })).toBeNull()
+  expect(screen.queryByRole('heading', { name: 'Start with Gemini’s free tier' })).toBeNull()
+  expect(screen.queryByRole('link', { name: 'Get a free Gemini API key ↗' })).toBeNull()
   expect((screen.getByRole('button', { name: 'Launch visibility sweep' }) as HTMLButtonElement).disabled).toBe(true)
 })
 
