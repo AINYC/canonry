@@ -1,71 +1,95 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title description">
-  <title id="title">Your agent uses Canonry to measure and act</title>
-  <desc id="description">Your agent uses Canonry's evidence and tools to operate across measurement and action. Read AI answers and citations, search analytics, server traffic, and site health. Through Canonry's CLI, REST API, MCP tools, and webhooks, your agent can publish content and schema, submit sitemaps and URLs, and prepare ChatGPT Ads for approval. Canonry is open source, self-hosted, and uses your provider keys. Your agent measures what changed to close the loop.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="910" viewBox="0 0 1280 910" role="img" aria-labelledby="title description">
+  <title id="title">Canonry architecture: evidence and execution for your agent</title>
+  <desc id="description">Your agent uses a self-hosted Canonry instance through the CLI, MCP tools, or REST API. The Agent Plugin supplies skills and MCP setup. Measurement covers AI answers, citations, cited sources, competitors, search analytics, site health, and server-side traffic. Advanced Measurement assigns questions, engines, models, and locations to properties and organizes market groups. Execution tools publish content and schema, submit sitemaps and URLs, and prepare paused ChatGPT Ads for approval. The dashboard shows stored evidence. Outbound webhooks notify your agent of events.</desc>
   <defs>
-    <marker id="forward" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <marker id="request-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
       <path d="M0 0 10 5 0 10Z" fill="#b71912"/>
     </marker>
+    <marker id="event-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 10 5 0 10Z" fill="#647184"/>
+    </marker>
   </defs>
+  <rect width="1280" height="910" fill="#f7f8fa"/>
 
-  <rect width="1280" height="640" fill="#f8f5f4"/>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif" fill="#202a38">
+    <text x="40" y="61" font-size="31" font-weight="650">Canonry</text>
+    <text x="194" y="61" font-size="26" fill="#566274">Open-source AEO operating platform</text>
 
-  <g font-family="'SFMono-Regular', Consolas, 'Liberation Mono', monospace" fill="#b71912">
-    <text x="640" y="53" text-anchor="middle" font-size="19" letter-spacing="3">BUILT FOR YOUR AGENT</text>
-    <path d="M606 76H674" stroke="#b71912" stroke-width="2.5"/>
-  </g>
-  <text x="640" y="137" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="43" fill="#242120">Your agent. One system to measure and act.</text>
+    <!-- The operator runs outside the self-hosted Canonry boundary. -->
+    <rect x="40" y="169" width="280" height="112" rx="9" fill="#fff" stroke="#a8b0bd" stroke-width="1.5"/>
+    <text x="61" y="207" font-size="25" font-weight="600">Agent Plugin</text>
+    <text x="61" y="243" font-size="22" fill="#566274">Skills + MCP setup</text>
+    <text x="61" y="266" font-size="19" fill="#647184">Optional agent guidance</text>
 
-  <!-- Evidence and work flank the shared operating system. -->
-  <g stroke="#ded9d6" stroke-width="1.5">
-    <path d="M48 195H365M48 508H365M918 195H1232M918 508H1232"/>
-    <path d="M48 374H365M48 429H365M918 374H1232M918 429H1232"/>
-  </g>
-  <rect x="411" y="195" width="458" height="313" fill="#fff" stroke="#b71912" stroke-width="1.5"/>
+    <rect x="40" y="356" width="280" height="132" rx="9" fill="#202a38"/>
+    <text x="61" y="400" font-size="29" font-weight="650" fill="#fff">Your agent</text>
+    <text x="61" y="436" font-size="22" fill="#e0e5ec">Chooses what to read,</text>
+    <text x="61" y="464" font-size="22" fill="#e0e5ec">change, and remeasure</text>
 
-  <g font-family="'SFMono-Regular', Consolas, 'Liberation Mono', monospace" font-size="19" letter-spacing="1.6" fill="#b71912">
-    <text x="48" y="239">MEASURE</text>
-    <text x="435" y="239">CANONRY</text>
-    <text x="918" y="239">ACT</text>
-  </g>
-  <g font-family="Georgia, 'Times New Roman', serif" font-size="36" fill="#242120">
-    <text x="48" y="286">The evidence</text>
-    <text x="435" y="286" font-size="34" fill="#b71912">Your agent’s tools</text>
-    <text x="918" y="286">The work</text>
+    <!-- Canonry is one operating surface with shared project context. -->
+    <rect x="372" y="119" width="868" height="765" rx="12" fill="#fff" stroke="#8793a3" stroke-width="1.5"/>
+    <path d="M384 119H1228Q1240 119 1240 131V224H372V131Q372 119 384 119Z" fill="#eef1f5"/>
+    <path d="M372 224H1240" stroke="#b9c1cd" stroke-width="1.5"/>
+    <text x="397" y="160" font-size="26" font-weight="650">CANONRY</text>
+    <text x="397" y="197" font-size="22" fill="#566274">Self-hosted · your infrastructure · your provider keys</text>
+
+    <!-- CLI and MCP expose the same underlying API operations. -->
+    <rect x="397" y="296" width="178" height="250" rx="8" fill="#f4f6f8" stroke="#b4bdc9" stroke-width="1.5"/>
+    <text x="486" y="333" text-anchor="middle" font-family="'SFMono-Regular', Consolas, 'Liberation Mono', monospace" font-size="19" fill="#566274">INTERFACES</text>
+    <path d="M413 352H559M413 411H559M413 470H559" stroke="#d7dce3"/>
+    <g font-family="'SFMono-Regular', Consolas, 'Liberation Mono', monospace" font-size="25" text-anchor="middle">
+      <text x="486" y="391">CLI</text>
+      <text x="486" y="450">MCP</text>
+      <text x="486" y="509">REST API</text>
+    </g>
+
+    <rect x="637" y="251" width="574" height="286" rx="8" fill="#fff" stroke="#a8b0bd" stroke-width="1.5"/>
+    <text x="659" y="292" font-size="27" font-weight="650">Measurement + evidence</text>
+    <g font-size="23" fill="#465264">
+      <text x="659" y="334">AI answers, citations + cited sources</text>
+      <text x="659" y="372">Competitors + share of voice</text>
+      <text x="659" y="410">Search analytics + site health</text>
+      <text x="659" y="448" font-size="22">Server-side traffic: crawlers, AI fetches, referrals</text>
+    </g>
+    <path d="M637 474H1211" stroke="#d7dce3"/>
+    <text x="659" y="513" font-size="22" fill="#566274">Dashboard: review stored evidence</text>
+
+    <rect x="637" y="583" width="574" height="191" rx="8" fill="#fff" stroke="#a8b0bd" stroke-width="1.5"/>
+    <text x="659" y="624" font-size="27" font-weight="650">Execution tools</text>
+    <g font-size="23" fill="#465264">
+      <text x="659" y="665">Publish content + schema</text>
+      <text x="659" y="703">Submit sitemaps + URLs</text>
+      <text x="659" y="741" font-size="22">Prepare paused ChatGPT Ads for approval</text>
+    </g>
+
+    <rect x="397" y="610" width="178" height="112" rx="8" fill="#f4f6f8" stroke="#b4bdc9" stroke-width="1.5"/>
+    <text x="486" y="653" text-anchor="middle" font-size="24" font-weight="600">Webhooks</text>
+    <text x="486" y="688" text-anchor="middle" font-size="20" fill="#566274">Outbound events</text>
+
+    <path d="M397 796H1211" stroke="#d7dce3"/>
+    <text x="397" y="830" font-size="23" font-weight="600">Advanced Measurement: properties + market groups</text>
+    <text x="397" y="862" font-size="22" fill="#566274">Questions, engines, models + locations per property</text>
   </g>
 
-  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif" font-size="23" fill="#514c49">
-    <text x="48" y="353">AI answers and citations</text>
-    <text x="48" y="408">Search and analytics</text>
-    <text x="48" y="462">Server traffic and site health</text>
-    <text x="918" y="353">Publish content and schema</text>
-    <text x="918" y="408">Submit sitemaps and URLs</text>
-    <text x="918" y="459">Prepare ChatGPT Ads</text>
-    <text x="918" y="488">for approval</text>
+  <!-- Skill guidance and event notifications are distinct from requests. -->
+  <g fill="none" stroke="#647184" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#event-arrow)">
+    <path d="M180 281V346"/>
+    <path d="M397 667H180V498"/>
+  </g>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif" font-size="20" fill="#647184">
+    <text x="195" y="321">guides</text>
+    <text x="203" y="651">optional events</text>
   </g>
 
-  <g fill="none" stroke="#b71912" stroke-width="1.5">
-    <rect x="435" y="319" width="134" height="39"/>
-    <rect x="579" y="319" width="134" height="39"/>
-    <rect x="723" y="319" width="122" height="39"/>
+  <g fill="none" stroke="#b71912" stroke-width="2.3" marker-end="url(#request-arrow)">
+    <path d="M320 423H387"/>
+    <path d="M575 423H601V391H627"/>
+    <path d="M601 423V677H627"/>
   </g>
-  <g font-family="'SFMono-Regular', Consolas, 'Liberation Mono', monospace" font-size="17" fill="#b71912" text-anchor="middle">
-    <text x="502" y="344">OPEN SOURCE</text>
-    <text x="646" y="344">SELF-HOSTED</text>
-    <text x="784" y="344">YOUR KEYS</text>
+  <rect x="577" y="549" width="48" height="27" fill="#fff"/>
+  <g font-family="'SFMono-Regular', Consolas, 'Liberation Mono', monospace" font-size="19" fill="#b71912">
+    <text x="330" y="407">call</text>
+    <text x="582" y="377">read</text>
+    <text x="584" y="568">act</text>
   </g>
-  <path d="M435 386H845" stroke="#e5e1df" stroke-width="1.5"/>
-  <g font-family="'SFMono-Regular', Consolas, 'Liberation Mono', monospace" font-size="21" fill="#514c49">
-    <text x="435" y="428"><tspan fill="#b71912">+</tspan><tspan dx="10">CLI</tspan></text>
-    <text x="651" y="428"><tspan fill="#b71912">+</tspan><tspan dx="10">REST API</tspan></text>
-    <text x="435" y="473"><tspan fill="#b71912">+</tspan><tspan dx="10">MCP TOOLS</tspan></text>
-    <text x="651" y="473"><tspan fill="#b71912">+</tspan><tspan dx="10">WEBHOOKS</tspan></text>
-  </g>
-
-  <g fill="none" stroke="#b71912" stroke-width="2.5" marker-end="url(#forward)">
-    <path d="M374 354H398"/>
-    <path d="M880 354H905"/>
-    <path d="M1075 526V577H206V527"/>
-  </g>
-  <rect x="480" y="559" width="320" height="36" fill="#f8f5f4"/>
-  <text x="640" y="585" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif" font-size="23" fill="#b71912">Measure what changed</text>
 </svg>

@@ -18,7 +18,7 @@ Canonry is an **agent-first, open-source AEO operating platform.**
 
 `npm install -g @canonry/canonry`
 
-![Your agent uses Canonry's evidence, CLI, REST API, MCP tools, and webhooks to measure AI visibility, publish content and schema, submit sitemaps, prepare ChatGPT Ads for approval, and measure what changed.](https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/measure-act.svg)
+![Canonry architecture: your agent connects through MCP, CLI, or REST API to measurement, project evidence, and execution tools. Agent Plugin skills guide the work. Webhooks return events.](https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/measure-act.svg)
 
 **Give your agent a job:**
 
