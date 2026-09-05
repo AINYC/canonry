@@ -6,7 +6,11 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { getPlatformEnv } from '@ainyc/canonry-config'
-import { PROVIDER_NAMES } from '@ainyc/canonry-contracts'
+import {
+  buildImplicitNativeEngineRoute,
+  canonicalEngineRoutePolicyJson,
+  PROVIDER_NAMES,
+} from '@ainyc/canonry-contracts'
 import { createClient, migrate, apiKeys, queries, runs } from '@ainyc/canonry-db'
 
 import { buildApp, cloudEngineRouteCapabilities } from '../src/app.js'
@@ -301,6 +305,7 @@ test('a plan-pinned run queued on Cloud freezes the inherited provider model int
     WORKER_PORT: '3001',
     GOOGLE_STATE_SECRET: 'test-only-google-state-secret-32b',
     GEMINI_API_KEY: 'gemini-test-key',
+    GEMINI_BASE_URL: 'https://gateway.example/v1',
   }))
 
   onTestFinished(async () => {
@@ -379,4 +384,15 @@ test('a plan-pinned run queued on Cloud freezes the inherited provider model int
       },
     },
   })
+  const route = buildImplicitNativeEngineRoute({
+    provider: 'gemini',
+    displayName: 'Gemini',
+    defaultModel: 'gemini-2.5-flash',
+    capabilities: cloudEngineRouteCapabilities('gemini'),
+  })
+  const expectedPolicyFingerprint = crypto.createHash('sha256')
+    .update(canonicalEngineRoutePolicyJson(route, undefined, 'https://gateway.example/v1'))
+    .digest('hex')
+  expect(run.measurementExecutionIdentity!.routes.gemini!.policyFingerprint)
+    .toBe(expectedPolicyFingerprint)
 })

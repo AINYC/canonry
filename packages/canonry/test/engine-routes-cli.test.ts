@@ -172,6 +172,27 @@ describe('engine route settings commands', () => {
     expect(cap.text()).toContain('cannot run an answer-visibility sweep')
   })
 
+  it('creates a generic text route without measurement configuration', async () => {
+    const command = SETTINGS_CLI_COMMANDS.find(spec => spec.path.join(' ') === 'settings engine-route')!
+    expect(command.options).not.toHaveProperty('mode')
+    await command.run({
+      positionals: ['route:new-research-gateway'],
+      values: {
+        label: 'Research gateway',
+        connection: 'gateway:team',
+        model: 'meta/llama-4',
+      },
+      format: 'json',
+      dryRun: false,
+    })
+
+    expect(mockUpsertEngineRoute).toHaveBeenCalledWith('route:new-research-gateway', {
+      label: 'Research gateway',
+      connectionId: 'gateway:team',
+      modelId: 'meta/llama-4',
+    })
+  })
+
   it('requires all connection policy fields before making an upsert request', async () => {
     const command = SETTINGS_CLI_COMMANDS.find(spec => spec.path.join(' ') === 'settings engine-connection')!
     await expect(command.run({
@@ -179,6 +200,19 @@ describe('engine route settings commands', () => {
       values: { label: 'Team gateway', preset: 'litellm', 'max-concurrent': '2', 'max-per-minute': '60' },
       format: 'json',
       dryRun: false,
+    })).rejects.toMatchObject({ code: 'CLI_USAGE_ERROR' })
+    expect(mockUpsertEngineConnection).not.toHaveBeenCalled()
+  })
+
+  it.each(['1.5', '2junk', '1e3', '0x10', '0', '-1', '9007199254740993'])('rejects an invalid whole-number quota without changing it: %s', async (value) => {
+    const command = SETTINGS_CLI_COMMANDS.find(spec => spec.path.join(' ') === 'settings engine-connection')!
+    await expect(command.run({
+      positionals: ['gateway:team'],
+      values: {
+        label: 'Team gateway', preset: 'litellm',
+        'max-concurrent': '2', 'max-per-minute': '60', 'max-per-day': value,
+      },
+      format: 'json', dryRun: false,
     })).rejects.toMatchObject({ code: 'CLI_USAGE_ERROR' })
     expect(mockUpsertEngineConnection).not.toHaveBeenCalled()
   })

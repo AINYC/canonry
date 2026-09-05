@@ -1649,6 +1649,88 @@ export type CompetitorLandscapeResponse = {
         excludedProbeResults: number;
         excludedNonCompletedResults: number;
     };
+    modelComparison?: {
+        basis: 'requested-model';
+        groups: Array<{
+            provider: string;
+            model: string | null;
+            servedModels: {
+                status: 'known';
+                model: string;
+            } | {
+                status: 'unknown';
+            } | {
+                status: 'mixed';
+                models: Array<string>;
+                includesUnknown: boolean;
+            };
+            snapshotCount: number;
+            project: {
+                domain: string;
+                label: string;
+                surfaceClass: 'own' | 'direct-competitor' | 'ota-aggregator' | 'editorial-media' | 'other' | 'unknown';
+                pinned: boolean;
+                mentionCount: number;
+                shareOfVoice: number | null;
+                citationCount: number;
+                answeredResults: number;
+                firstSeenAt: string | null;
+                lastSeenAt: string | null;
+                sampleUrls: Array<string>;
+            };
+            pinned: Array<{
+                domain: string;
+                label: string;
+                surfaceClass: 'own' | 'direct-competitor' | 'ota-aggregator' | 'editorial-media' | 'other' | 'unknown';
+                pinned: boolean;
+                mentionCount: number;
+                shareOfVoice: number | null;
+                citationCount: number;
+                answeredResults: number;
+                firstSeenAt: string | null;
+                lastSeenAt: string | null;
+                sampleUrls: Array<string>;
+            }>;
+            observed: Array<{
+                domain: string;
+                label: string;
+                surfaceClass: 'own' | 'direct-competitor' | 'ota-aggregator' | 'editorial-media' | 'other' | 'unknown';
+                pinned: boolean;
+                mentionCount: number;
+                shareOfVoice: number | null;
+                citationCount: number;
+                answeredResults: number;
+                firstSeenAt: string | null;
+                lastSeenAt: string | null;
+                sampleUrls: Array<string>;
+            }>;
+            otherSources: Array<{
+                domain: string;
+                label: string;
+                surfaceClass: 'own' | 'direct-competitor' | 'ota-aggregator' | 'editorial-media' | 'other' | 'unknown';
+                pinned: boolean;
+                mentionCount: number;
+                shareOfVoice: number | null;
+                citationCount: number;
+                answeredResults: number;
+                firstSeenAt: string | null;
+                lastSeenAt: string | null;
+                sampleUrls: Array<string>;
+            }>;
+            evidence: {
+                answeredResults: number;
+                sourceResults: number;
+                missingAnswerTextResults: number;
+                mentionCredits: number;
+                incompleteSourceResults: number;
+                excludedProbeResults: number;
+                excludedNonCompletedResults: number;
+            };
+            truncated: boolean;
+        }>;
+        totalGroups: number;
+        truncated: boolean;
+    };
     marketState: {
         activeRevision: number;
         draft: {
@@ -1660,6 +1742,8 @@ export type CompetitorLandscapeResponse = {
         scope: 'project' | 'all-markets';
         groupKey: string | null;
         provider: string | null;
+        model?: string;
+        groupBy?: 'model';
         queryClass: 'all' | 'branded' | 'non-brand';
         location: string | null;
         runId: string | null;
@@ -1920,7 +2004,7 @@ export type DomainClassificationsResponseDto = {
 export type EngineConnectionPublicDto = {
     id: string;
     label: string;
-    preset: 'openrouter' | 'litellm' | 'vercel-ai-gateway' | 'custom-openai-compatible';
+    preset: 'litellm' | 'vercel-ai-gateway' | 'custom-openai-compatible';
     protocol: 'openai-compatible';
     baseUrl: string;
     quota: {
@@ -1945,7 +2029,7 @@ export type EngineConnectionModelCatalogResponse = {
 
 export type EngineConnectionUpsertInput = {
     label: string;
-    preset: 'openrouter' | 'litellm' | 'vercel-ai-gateway' | 'custom-openai-compatible';
+    preset: 'litellm' | 'vercel-ai-gateway' | 'custom-openai-compatible';
     protocol: 'openai-compatible';
     apiKey?: string;
     quota: {
@@ -1962,7 +2046,7 @@ export type EngineRouteConfig = {
     connectionId: string;
     modelId: string;
     revision: number;
-    source: 'configured' | 'implicit-native' | 'verified-adapter';
+    source: 'configured' | 'implicit-native';
     capabilities: {
         kind: 'text-only';
     } | {
@@ -1981,7 +2065,7 @@ export type EngineRouteSummaryResponse = {
         label: string;
         modelId: string;
         revision: number;
-        source: 'configured' | 'implicit-native' | 'verified-adapter';
+        source: 'configured' | 'implicit-native';
         readiness: {
             state: 'unavailable' | 'text-ready' | 'measurement-ready';
             measurementReady: boolean;
@@ -9051,7 +9135,7 @@ export type SettingsDto = {
     engineConnections: Array<{
         id: string;
         label: string;
-        preset: 'openrouter' | 'litellm' | 'vercel-ai-gateway' | 'custom-openai-compatible';
+        preset: 'litellm' | 'vercel-ai-gateway' | 'custom-openai-compatible';
         protocol: 'openai-compatible';
         baseUrl: string;
         quota: {
@@ -9067,7 +9151,7 @@ export type SettingsDto = {
         connectionId: string;
         modelId: string;
         revision: number;
-        source: 'configured' | 'implicit-native' | 'verified-adapter';
+        source: 'configured' | 'implicit-native';
         capabilities: {
             kind: 'text-only';
         } | {
@@ -14783,11 +14867,19 @@ export type GetApiV1ProjectsByNameAnalyticsCompetitorsData = {
         /**
          * Set to "all-markets" to aggregate raw stored evidence across every Advanced Measurement market. It cannot be combined with groupKey.
          */
-        scope?: 'all-markets';
+        scope?: 'project' | 'all-markets';
         /**
          * Restrict evidence to one answer provider.
          */
         provider?: string;
+        /**
+         * Restrict all evidence and exclusions to one exact stored requested model ID (surrounding whitespace ignored). Requires provider. Never matches by served model or current configuration.
+         */
+        model?: string;
+        /**
+         * Set to "model" for an additional provider/requested-model breakdown with each group's sample counts and raw served-model evidence. Unknown requested IDs form a null group. Groups are descriptive, not equal-weight or matched-query comparisons; absent models are not measured zeros. At most 50 groups in provider/model order (unknown first), with totalGroups and truncation disclosed.
+         */
+        groupBy?: 'model';
         /**
          * Restrict evidence to a question class. Advanced groups use their frozen assignment classes; simple projects classify stored query text.
          */
@@ -15613,6 +15705,12 @@ export type PutApiV1SettingsProvidersByNameResponse = PutApiV1SettingsProvidersB
 
 export type PutApiV1SettingsEngineConnectionsByIdData = {
     body: EngineConnectionUpsertInput;
+    headers?: {
+        /**
+         * Create only; fail if the connection ID already exists.
+         */
+        'If-None-Match'?: '*';
+    };
     path: {
         /**
          * Instance-global gateway connection ID. The request body cannot replace it.
@@ -15628,6 +15726,10 @@ export type PutApiV1SettingsEngineConnectionsByIdErrors = {
      * Invalid connection configuration.
      */
     400: ErrorEnvelope;
+    /**
+     * The connection ID already exists.
+     */
+    412: ErrorEnvelope;
     /**
      * Engine connection updates are not supported.
      */
@@ -15647,6 +15749,12 @@ export type PutApiV1SettingsEngineConnectionsByIdResponse = PutApiV1SettingsEngi
 
 export type PutApiV1SettingsEngineRoutesByIdData = {
     body: EngineRouteUpsertInput;
+    headers?: {
+        /**
+         * Create only; fail if the route ID already exists.
+         */
+        'If-None-Match'?: '*';
+    };
     path: {
         /**
          * Stable generic route ID. Must use the server-reserved route: prefix.
@@ -15662,6 +15770,10 @@ export type PutApiV1SettingsEngineRoutesByIdErrors = {
      * Invalid route configuration or unknown connection.
      */
     400: ErrorEnvelope;
+    /**
+     * The route ID already exists.
+     */
+    412: ErrorEnvelope;
     /**
      * Engine route updates are not supported.
      */

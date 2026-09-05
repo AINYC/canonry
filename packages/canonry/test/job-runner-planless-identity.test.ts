@@ -4,6 +4,12 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { eq } from 'drizzle-orm'
+import {
+  buildMeasurementExecutionIdentity,
+  canonicalMeasurementExecutionIdentityJson,
+  type MeasurementExecutionIdentity,
+  type MeasurementExecutionIdentityInput,
+} from '@ainyc/canonry-contracts'
 import { createClient, migrate, competitors, queries, projects, querySnapshots, runs } from '@ainyc/canonry-db'
 import { JobRunner } from '../src/job-runner.js'
 import { ProviderRegistry } from '../src/provider-registry.js'
@@ -70,16 +76,24 @@ function seed(db: ReturnType<typeof createClient>) {
   return { projectId, runId, queryIds }
 }
 
-function registryFor(calls: RecordedCall[]) {
+function registryFor(calls: RecordedCall[], models: Partial<Record<'openai' | 'gemini', string>> = {}) {
   const registry = new ProviderRegistry()
   for (const name of ['openai', 'gemini'] as const) {
     registry.register(fakeAdapter({ name, calls }), {
       provider: name,
       apiKey: 'test-key',
+      ...(models[name] === undefined ? {} : { model: models[name] }),
       quotaPolicy: { maxConcurrency: 2, maxRequestsPerMinute: 60, maxRequestsPerDay: 1000 },
     })
   }
   return registry
+}
+
+function executionIdentity(input: MeasurementExecutionIdentityInput): MeasurementExecutionIdentity {
+  return buildMeasurementExecutionIdentity(
+    input,
+    crypto.createHash('sha256').update(canonicalMeasurementExecutionIdentityJson(input)).digest('hex'),
+  )
 }
 
 function callKey(call: RecordedCall): string {
@@ -159,4 +173,119 @@ test('a planless run writes exactly the snapshot rows it always wrote', async ()
   expect(run.status).toBe('completed')
   expect(run.measurementPlanVersionId).toBeNull()
   expect(run.measurementManifest).toBeNull()
+})
+
+test('a queue-stamped planless run uses its frozen provider roster and model', async () => {
+  const db = buildEnv()
+  const { projectId, runId } = seed(db)
+  db.update(runs).set({
+    measurementExecutionIdentity: executionIdentity({
+      providers: ['openai'],
+      models: { openai: 'queued-model' },
+    }),
+  }).where(eq(runs.id, runId)).run()
+  // Both project and registry settings move before the worker starts.
+  db.update(projects).set({
+    providers: ['gemini'],
+    providerModels: { openai: 'edited-project-model' },
+  }).where(eq(projects.id, projectId)).run()
+  const calls: RecordedCall[] = []
+
+  await new JobRunner(db, registryFor(calls, {
+    openai: 'edited-registry-model',
+    gemini: 'edited-gemini-model',
+  })).executeRun(runId, projectId, ['gemini'])
+
+  expect(calls).toHaveLength(2)
+  expect(calls.every(call => call.provider === 'openai' && call.model === 'queued-model')).toBe(true)
+  expect(db.select().from(querySnapshots).where(eq(querySnapshots.runId, runId)).all())
+    .toEqual(expect.arrayContaining([
+      expect.objectContaining({ provider: 'openai', model: 'queued-model' }),
+    ]))
+  expect(db.select().from(runs).where(eq(runs.id, runId)).get()?.status).toBe('completed')
+})
+
+test('a queue-stamped planless run fails closed when its provider is unavailable', async () => {
+  const db = buildEnv()
+  const { projectId, runId } = seed(db)
+  db.update(runs).set({
+    measurementExecutionIdentity: executionIdentity({
+      providers: ['perplexity'],
+      models: { perplexity: 'sonar' },
+    }),
+  }).where(eq(runs.id, runId)).run()
+  const calls: RecordedCall[] = []
+
+  await new JobRunner(db, registryFor(calls)).executeRun(runId, projectId)
+
+  expect(calls).toEqual([])
+  expect(db.select().from(querySnapshots).where(eq(querySnapshots.runId, runId)).all()).toEqual([])
+  expect(db.select().from(runs).where(eq(runs.id, runId)).get()).toMatchObject({
+    status: 'failed',
+    error: expect.stringMatching(/Queued provider perplexity is unavailable/),
+  })
+})
+
+test('a v2 planless run fails closed when the live route policy changed', async () => {
+  const db = buildEnv()
+  const { projectId, runId } = seed(db)
+  db.update(runs).set({
+    measurementExecutionIdentity: executionIdentity({
+      providers: ['openai'],
+      models: { openai: 'queued-model' },
+      routes: {
+        openai: {
+          routeId: 'native:openai',
+          routeRevision: 1,
+          policyFingerprint: 'a'.repeat(64),
+        },
+      },
+    }),
+  }).where(eq(runs.id, runId)).run()
+  const calls: RecordedCall[] = []
+
+  await new JobRunner(db, registryFor(calls), {
+    getProviderRouteDescriptors: () => ({
+      openai: {
+        routeId: 'native:openai',
+        routeRevision: 1,
+        policyFingerprint: 'b'.repeat(64),
+      },
+    }),
+  }).executeRun(runId, projectId)
+
+  expect(calls).toEqual([])
+  expect(db.select().from(querySnapshots).where(eq(querySnapshots.runId, runId)).all()).toEqual([])
+  expect(db.select().from(runs).where(eq(runs.id, runId)).get()).toMatchObject({
+    status: 'failed',
+    error: expect.stringMatching(/route policy for openai no longer matches/),
+  })
+})
+
+test('a v2 planless run fails closed on a worker that cannot verify route policy', async () => {
+  const db = buildEnv()
+  const { projectId, runId } = seed(db)
+  db.update(runs).set({
+    measurementExecutionIdentity: executionIdentity({
+      providers: ['openai'],
+      models: { openai: 'queued-model' },
+      routes: {
+        openai: {
+          routeId: 'native:openai',
+          routeRevision: 1,
+          policyFingerprint: 'a'.repeat(64),
+        },
+      },
+    }),
+  }).where(eq(runs.id, runId)).run()
+  const calls: RecordedCall[] = []
+
+  await new JobRunner(db, registryFor(calls)).executeRun(runId, projectId)
+
+  expect(calls).toEqual([])
+  expect(db.select().from(querySnapshots).where(eq(querySnapshots.runId, runId)).all()).toEqual([])
+  expect(db.select().from(runs).where(eq(runs.id, runId)).get()).toMatchObject({
+    status: 'failed',
+    error: expect.stringMatching(/cannot verify the queued engine route policy/),
+  })
 })

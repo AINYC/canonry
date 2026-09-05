@@ -7,21 +7,25 @@ import {
   type DatabaseClient,
 } from '@ainyc/canonry-db'
 import type { Agent, AgentMessage, AgentTool } from '@mariozechner/pi-agent-core'
-import type { Api, Model } from '@mariozechner/pi-ai'
+import { streamSimple, type Api, type Model } from '@mariozechner/pi-ai'
 import { agentBusy, AgentProviderIds, describeError } from '@ainyc/canonry-contracts'
 import { createLogger } from '../logger.js'
 import type { ApiClient } from '../client.js'
 import type { CanonryConfig } from '../config.js'
 import {
-  aeroStreamFnFor,
-  buildApiKeyResolver,
   createAeroSession,
   loadAeroSystemPrompt,
-  resolveAeroModel,
+  resolveAeroSessionRuntime,
   resolveSessionProviderAndModel,
   type AeroProviderId,
 } from './session.js'
-import { configuredTextRoute, defaultModelForAeroProvider, detectAeroProvider } from './providers.js'
+import {
+  configuredTextRoute,
+  defaultModelForAeroProvider,
+  detectAeroProvider,
+  isConfiguredTextRouteReady,
+  type ConfiguredTextRoute,
+} from './providers.js'
 import { runEngineRouteText } from '../engine-route-text-execution.js'
 import { buildSkillDocTools } from './skill-tools.js'
 import {
@@ -62,6 +66,36 @@ interface AgentSessionRow {
   followUpQueue: string
   createdAt: string
   updatedAt: string
+}
+
+interface LiveRouteGeneration {
+  provider: AeroProviderId
+  modelId: string
+  route: ConfiguredTextRoute
+}
+
+/** Compare every value that can change route execution or model identity. */
+function sameRouteGeneration(
+  left: LiveRouteGeneration | undefined,
+  right: LiveRouteGeneration,
+): boolean {
+  if (!left) return false
+  const a = left.route
+  const b = right.route
+  return left.provider === right.provider
+    && left.modelId === right.modelId
+    && a.route.id === b.route.id
+    && a.route.label === b.route.label
+    && a.route.connectionId === b.route.connectionId
+    && a.route.modelId === b.route.modelId
+    && a.route.revision === b.route.revision
+    && a.connection.id === b.connection.id
+    && a.connection.preset === b.connection.preset
+    && a.connection.baseUrl === b.connection.baseUrl
+    && a.connection.apiKey === b.connection.apiKey
+    && a.connection.quota.maxConcurrency === b.connection.quota.maxConcurrency
+    && a.connection.quota.maxRequestsPerMinute === b.connection.quota.maxRequestsPerMinute
+    && a.connection.quota.maxRequestsPerDay === b.connection.quota.maxRequestsPerDay
 }
 
 /**
@@ -114,6 +148,8 @@ export class SessionRegistry {
   private readonly profiles = new Map<string, AeroToolProfile>()
   /** Cached resolved project id per project name, used so alignScope can rebuild tool context without a DB roundtrip. */
   private readonly projectIds = new Map<string, string>()
+  /** Frozen route transport/model generation installed on each live Agent. */
+  private readonly routeGenerations = new Map<string, LiveRouteGeneration>()
   /**
    * In-flight compaction promises keyed by project name. A second
    * `acquireForTurn` that arrives while the first is still summarizing
@@ -209,8 +245,11 @@ export class SessionRegistry {
       // prompt, 500ing the project forever with no recovery but a hand DB edit.
       // Fall back to the detected default and persist the correction.
       let providerFellBack = false
+      const persistedRoute = effectiveProvider.startsWith('route:')
+        ? configuredTextRoute(this.opts.config, effectiveProvider)
+        : undefined
       if (effectiveProvider.startsWith('route:')
-        && !configuredTextRoute(this.opts.config, effectiveProvider)) {
+        && (!persistedRoute || !isConfiguredTextRouteReady(persistedRoute))) {
         const fallback = detectAeroProvider(this.opts.config)
         if (fallback) {
           log.warn('session.route-unavailable', {
@@ -237,6 +276,9 @@ export class SessionRegistry {
           .run()
       }
 
+      const routeSnapshot = effectiveProvider.startsWith('route:')
+        ? configuredTextRoute(this.opts.config, effectiveProvider)
+        : undefined
       const agent = createAeroSession({
         projectName,
         client: this.opts.client,
@@ -250,10 +292,18 @@ export class SessionRegistry {
         db: this.opts.db,
         projectId,
         agentSessionId: row.id,
+        routeSnapshot,
       })
       this.scopes.set(projectName, preferences?.toolScope ?? AeroToolScopes.all)
       this.profiles.set(projectName, preferences?.toolProfile ?? AeroToolProfiles.default)
       this.projectIds.set(projectName, projectId)
+      if (routeSnapshot) {
+        this.routeGenerations.set(projectName, {
+          provider: effectiveProvider,
+          modelId: effectiveModelId,
+          route: routeSnapshot,
+        })
+      }
 
       if (queued.length > 0) {
         this.appendPending(projectName, queued)
@@ -268,6 +318,9 @@ export class SessionRegistry {
     const { provider, modelId } = resolveSessionProviderAndModel(this.opts.config, preferences)
     const systemPrompt = loadAeroSystemPrompt()
     const sessionId = crypto.randomUUID()
+    const routeSnapshot = provider.startsWith('route:')
+      ? configuredTextRoute(this.opts.config, provider)
+      : undefined
 
     const agent = createAeroSession({
       projectName,
@@ -283,10 +336,14 @@ export class SessionRegistry {
       db: this.opts.db,
       projectId,
       agentSessionId: sessionId,
+      routeSnapshot,
     })
     this.scopes.set(projectName, preferences?.toolScope ?? AeroToolScopes.all)
     this.profiles.set(projectName, preferences?.toolProfile ?? AeroToolProfiles.default)
     this.projectIds.set(projectName, projectId)
+    if (routeSnapshot) {
+      this.routeGenerations.set(projectName, { provider, modelId, route: routeSnapshot })
+    }
 
     this.insertRow({
       id: sessionId,
@@ -388,9 +445,9 @@ export class SessionRegistry {
       scope: preferences?.toolScope ?? AeroToolScopes.all,
       profile: preferences?.toolProfile ?? AeroToolProfiles.default,
     })
-    if (preferences?.provider || preferences?.modelId) {
-      this.alignModel(projectName, agent, preferences)
-    }
+    // Always align: settings can replace a route's endpoint, credential,
+    // revision, or quota without changing the persisted provider/model ids.
+    this.alignModel(projectName, agent, preferences ?? {})
     // Merge injected remote MCP read-only tools (OSS-A) AFTER scope alignment,
     // which rebuilds state.tools from the local registry. Idempotent + fail-soft.
     await this.mergeExternalTools(agent)
@@ -435,20 +492,31 @@ export class SessionRegistry {
       // session's turns. Calling pi-ai directly put it outside the connection's
       // execution gate, so with maxConcurrency 1 a compaction and a user turn
       // could hit one gateway simultaneously and exceed the declared quota.
-      const compactionProvider = (row.modelProvider ?? '') as AeroProviderId
+      const compactionModel = agent.state.model as Model<Api>
+      const compactionProvider = compactionModel.provider
+      const routeGeneration = this.routeGenerations.get(projectName)
       const compactionRoute = compactionProvider.startsWith('route:')
-        ? configuredTextRoute(this.opts.config, compactionProvider)
+        && routeGeneration?.provider === compactionProvider
+        ? routeGeneration.route
         : undefined
+      if (compactionProvider.startsWith('route:') && !compactionRoute) {
+        throw new Error(`No frozen route generation for compaction provider '${compactionProvider}'.`)
+      }
+      // Capture both before the first await. A settings write may replace the
+      // live Agent runtime while another acquire waits on this compaction, but
+      // this call must remain entirely on its starting generation.
+      const getApiKey = agent.getApiKey
+      const frozenApiKey = await getApiKey?.(compactionProvider)
       const compact = () => compactMessages({
         db: this.opts.db,
         projectId,
         sessionId: row.id,
         messages: agent.state.messages,
-        model: agent.state.model as Model<Api>,
-        getApiKey: buildApiKeyResolver(this.opts.config),
+        model: compactionModel,
+        getApiKey: () => frozenApiKey,
       })
       const result = compactionRoute
-        ? await runEngineRouteText(compactionRoute.connection, compact)
+        ? await runEngineRouteText(compactionRoute.connection, compact, { db: this.opts.db })
         : await compact()
       if (!result) return
       agent.state.messages = result.messages
@@ -500,29 +568,87 @@ export class SessionRegistry {
     const row = this.loadRow(projectId)
     const currentProvider = (row?.modelProvider ?? AgentProviderIds.claude) as AeroProviderId
     const currentModelId = row?.modelId
-    const nextProvider = preferences.provider ?? currentProvider
-    const nextModelId =
+    let nextProvider = preferences.provider ?? currentProvider
+    let nextModelId =
       preferences.modelId ?? (preferences.provider
         ? defaultModelForAeroProvider(nextProvider, this.opts.config)
         : currentModelId)
     if (!nextModelId) return
-    if (nextProvider === currentProvider && nextModelId === currentModelId) return
 
-    agent.state.model = resolveAeroModel(nextProvider, this.opts.config, nextModelId)
-    // The connection gate lives in `streamFn`, which the Agent fixed at
-    // construction. Moving only the model left a switched-to-route session
-    // streaming outside its quota entirely, and a switched-to-native session
-    // still wrapped in the gateway's concurrency limit.
-    agent.streamFn = aeroStreamFnFor(this.opts.config, nextProvider)
-    this.opts.db
-      .update(agentSessions)
-      .set({
-        modelProvider: nextProvider,
+    let routeSnapshot = nextProvider.startsWith('route:')
+      ? configuredTextRoute(this.opts.config, nextProvider)
+      : undefined
+    if (nextProvider.startsWith('route:')
+      && (!routeSnapshot || !isConfiguredTextRouteReady(routeSnapshot))
+      && !preferences.provider) {
+      const fallback = detectAeroProvider(this.opts.config)
+      if (fallback) {
+        log.warn('session.route-unavailable', {
+          projectName,
+          storedProvider: nextProvider,
+          fallbackProvider: fallback,
+        })
+        nextProvider = fallback
+        nextModelId = defaultModelForAeroProvider(fallback, this.opts.config)
+        routeSnapshot = fallback.startsWith('route:')
+          ? configuredTextRoute(this.opts.config, fallback)
+          : undefined
+      }
+    }
+
+    const priorGeneration = this.routeGenerations.get(projectName)
+    // A hot session that followed the route default should follow a revised
+    // default model too. Persisted explicit model overrides remain pinned.
+    if (!preferences.provider
+      && !preferences.modelId
+      && routeSnapshot
+      && priorGeneration?.provider === nextProvider
+      && currentModelId === priorGeneration.route.route.modelId) {
+      nextModelId = routeSnapshot.route.modelId
+    }
+
+    const selectionChanged = nextProvider !== currentProvider || nextModelId !== currentModelId
+    const generationChanged = routeSnapshot
+      ? !sameRouteGeneration(priorGeneration, {
+          provider: nextProvider,
+          modelId: nextModelId,
+          route: routeSnapshot,
+        })
+      : priorGeneration !== undefined
+    if (!selectionChanged && !generationChanged) return
+
+    const runtime = resolveAeroSessionRuntime(this.opts.config, nextProvider, nextModelId, {
+      db: this.opts.db,
+      routeSnapshot,
+    })
+    // No await or callback occurs between these assignments: the Agent moves
+    // as one event-loop operation from the old coherent runtime generation to
+    // the new one. In-flight turns never enter this path because of the busy
+    // check in acquireForTurn.
+    agent.state.model = runtime.model
+    agent.streamFn = runtime.streamFn ?? streamSimple
+    agent.getApiKey = runtime.getApiKey
+    if (runtime.route) {
+      this.routeGenerations.set(projectName, {
+        provider: nextProvider,
         modelId: nextModelId,
-        updatedAt: new Date().toISOString(),
+        route: runtime.route,
       })
-      .where(eq(agentSessions.projectId, projectId))
-      .run()
+    } else {
+      this.routeGenerations.delete(projectName)
+    }
+
+    if (selectionChanged) {
+      this.opts.db
+        .update(agentSessions)
+        .set({
+          modelProvider: nextProvider,
+          modelId: nextModelId,
+          updatedAt: new Date().toISOString(),
+        })
+        .where(eq(agentSessions.projectId, projectId))
+        .run()
+    }
   }
 
   /** Persist a session's transcript back to the DB. Call after any run settles. */
@@ -612,6 +738,7 @@ export class SessionRegistry {
   /** Drop the live Agent for a project. Next lookup rehydrates from DB. */
   evict(projectName: string): void {
     this.live.delete(projectName)
+    this.routeGenerations.delete(projectName)
   }
 
   /**
@@ -631,11 +758,13 @@ export class SessionRegistry {
     this.scopes.delete(projectName)
     this.profiles.delete(projectName)
     this.projectIds.delete(projectName)
+    this.routeGenerations.delete(projectName)
   }
 
   /** Evict every live Agent. Durable state in DB is untouched. */
   clear(): void {
     this.live.clear()
+    this.routeGenerations.clear()
   }
 
   /** Visible so tests can assert whether a session is hot. */

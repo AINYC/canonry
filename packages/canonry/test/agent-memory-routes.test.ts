@@ -119,6 +119,24 @@ describe('agent memory HTTP routes', () => {
     })
   })
 
+  it('rejects an explicit hosted route that has no API key before opening SSE', async () => {
+    const connection = registry.getConfig().engineRoutes!.connections![0]!
+    Object.assign(connection, {
+      preset: 'vercel-ai-gateway',
+      baseUrl: 'https://ai-gateway.vercel.sh/v1',
+      apiKey: undefined,
+    })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/projects/demo/agent/prompt',
+      payload: { prompt: 'Hello', provider: 'route:gateway-gpt-5' },
+    })
+
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } })
+  })
+
   it('PUT upserts a note with source=user and GET returns it', async () => {
     const put = await app.inject({
       method: 'PUT',

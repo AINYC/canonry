@@ -19,22 +19,23 @@ import {
 import { usageError } from '../cli-error.js'
 import { engineConnectionPresetSchema } from '@ainyc/canonry-contracts'
 
-const ENGINE_CONNECTION_USAGE = 'canonry settings engine-connection <id> --label <label> --preset <openrouter|litellm|vercel-ai-gateway|custom-openai-compatible> --max-concurrent <n> --max-per-minute <n> --max-per-day <n> [--base-url <url>] [--api-key <key>] [--format json|jsonl]'
+const ENGINE_CONNECTION_USAGE = 'canonry settings engine-connection <id> --label <label> --preset <litellm|vercel-ai-gateway|custom-openai-compatible> --max-concurrent <n> --max-per-minute <n> --max-per-day <n> [--base-url <url>] [--api-key <key>] [--format json|jsonl]'
 const ENGINE_MODELS_USAGE = 'canonry settings engine-models <connection-id> [--format json|jsonl]'
 const ENGINE_ROUTE_USAGE = 'canonry settings engine-route <route-id> --label <label> --connection <connection-id> --model <model-id> [--format json|jsonl]'
 
 function requireIntegerSetting(input: Parameters<CliCommandSpec['run']>[0], key: string, command: string, usage: string): number {
-  requireStringOption(input, key, {
+  const raw = requireStringOption(input, key, {
     command,
     usage,
     message: `--${key} is required`,
   })
-  const value = parseIntegerOption(input, key, {
-    command,
-    usage,
-    message: `--${key} must be an integer`,
-  })
-  if (value === undefined) throw new Error(`Missing required integer setting: ${key}`)
+  const value = Number(raw)
+  if (!/^\d+$/.test(raw) || !Number.isSafeInteger(value) || value < 1) {
+    throw usageError(`--${key} must be a positive whole number`, {
+      message: `--${key} must be a positive whole number`,
+      details: { command, usage, option: key },
+    })
+  }
   return value
 }
 
@@ -47,9 +48,9 @@ function requireConnectionPreset(input: Parameters<CliCommandSpec['run']>[0], us
   const parsed = engineConnectionPresetSchema.safeParse(value)
   if (parsed.success) return parsed.data
   throw usageError(
-    'Error: --preset must be openrouter, litellm, vercel-ai-gateway, or custom-openai-compatible',
+    'Error: --preset must be litellm, vercel-ai-gateway, or custom-openai-compatible',
     {
-      message: '--preset must be openrouter, litellm, vercel-ai-gateway, or custom-openai-compatible',
+      message: '--preset must be litellm, vercel-ai-gateway, or custom-openai-compatible',
       details: { command: 'settings.engine-connection', usage, option: 'preset', value },
     },
   )

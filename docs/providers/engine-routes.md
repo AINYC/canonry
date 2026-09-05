@@ -1,9 +1,9 @@
 # Generic Engine Routes
 
 Generic engine routes let one Canonry install use an OpenAI-compatible gateway
-for text work without treating the gateway as a measured answer engine. No
-router is privileged: OpenRouter is one optional preset, alongside LiteLLM,
-Vercel AI Gateway, and a custom OpenAI-compatible endpoint.
+for text work. They cannot run visibility sweeps. Those sweeps use direct
+provider adapters with explicit rules for answer mentions and source citations.
+See [why Canonry selects models individually](model-selection.md).
 
 ## Connection versus route
 
@@ -70,7 +70,6 @@ not provider implementations or evidence claims.
 
 | Preset | Default endpoint | Notes |
 | --- | --- | --- |
-| `openrouter` | `https://openrouter.ai/api/v1` | Optional generic router preset. |
 | `litellm` | `http://localhost:4000` | Useful for a local or self-hosted gateway. |
 | `vercel-ai-gateway` | `https://ai-gateway.vercel.sh/v1` | Generic gateway preset. |
 | `custom-openai-compatible` | none | Requires `--base-url <url>`. |
@@ -81,7 +80,7 @@ affected route revision.
 
 ## Text-only is not sweep-ready
 
-Routes created with `settings engine-route` are **text-only**. They can serve
+Configured generic routes are **text-only**. They can serve
 ad-hoc text work, but they cannot run `canonry run` or become answer-visibility
 sweep providers. A generic gateway does not prove that Canonry can obtain all
 of these from a real answer-engine response:
@@ -91,9 +90,9 @@ of these from a real answer-engine response:
 3. Location handling.
 4. Served-model identity.
 
-Only a native or server-owned verified adapter can be `measurement-ready`.
-Configured routes remain `text-ready` even when a hand-edited config declares
-otherwise. When a text-only route runs research, Canonry records the answer
+Only a native provider adapter can be `measurement-ready`.
+Capability flags in a hand-edited configuration do not grant measurement access.
+When a text-only route runs research, Canonry records the answer
 text and its answer-text mentions. Canonry records no grounding sources, cited
 domains, search queries, served model, or negative citation claim. Its citation
 state is unavailable, not `not-cited`.

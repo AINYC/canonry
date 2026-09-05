@@ -7,6 +7,7 @@ import type { DatabaseClient } from '@ainyc/canonry-db'
 import type { ApiClient } from '../client.js'
 import type { CanonryConfig } from '../config.js'
 import { streamEngineRouteText } from '../engine-route-text-execution.js'
+import { resolveEngineConnectionTextApiKey } from '../engine-routes.js'
 import {
   agentProviderApiKeyEnvVar,
   agentProvidersByPriority,
@@ -17,6 +18,7 @@ import {
   resolveAeroProviderModel,
   validateAgentProviderRegistry,
   type AeroProviderId,
+  type ConfiguredTextRoute,
   type SupportedAgentProvider,
 } from './providers.js'
 import { resolveAeroSkillDir } from './skill-paths.js'
@@ -78,6 +80,8 @@ export interface AeroSessionOptions {
   db?: DatabaseClient
   projectId?: string
   agentSessionId?: string
+  /** Internal frozen route generation used by SessionRegistry. */
+  routeSnapshot?: ConfiguredTextRoute
 }
 
 export { resolveAeroSkillDir } from './skill-paths.js'
@@ -152,9 +156,10 @@ export function resolveAeroModel(
   provider: AeroProviderId,
   config: CanonryConfig,
   modelId?: string,
+  routeSnapshot?: ConfiguredTextRoute,
 ): Model<never> {
   ensureBuiltinsRegistered()
-  return resolveAeroProviderModel(provider, config, modelId)
+  return resolveAeroProviderModel(provider, config, modelId, routeSnapshot)
 }
 
 /** Resolver used by pi's `getApiKey` callback — `resolveApiKeyFor` handles canonry config and env-var fallback. */
@@ -162,6 +167,19 @@ export function buildApiKeyResolver(
   config: CanonryConfig,
 ): (piAiProvider: string) => string | undefined {
   return (piAiProvider: string) => resolveApiKeyFor(piAiProvider, config)
+}
+
+/** Freeze a configured route's credential generation for the whole turn. */
+function buildRouteApiKeyResolver(
+  route: ConfiguredTextRoute,
+): NonNullable<AgentOptions['getApiKey']> {
+  const apiKey = resolveEngineConnectionTextApiKey(route.connection)
+  if (!apiKey) {
+    throw new Error(
+      `Configured text route '${route.route.id}' requires an API key for its ${route.connection.preset} connection.`,
+    )
+  }
+  return (piAiProvider: string) => piAiProvider === route.route.id ? apiKey : undefined
 }
 
 function buildAeroProviderSessionId(opts: AeroSessionOptions): string {
@@ -183,26 +201,66 @@ export function aeroStreamFnFor(
   config: CanonryConfig,
   provider: AeroProviderId,
   base?: AgentOptions['streamFn'],
+  db?: DatabaseClient,
+  routeSnapshot?: ConfiguredTextRoute,
 ): NonNullable<AgentOptions['streamFn']> {
   const streamFn = base ?? streamSimple
   if (!provider.startsWith('route:')) return streamFn
-  const route = configuredTextRoute(config, provider)
+  const route = routeSnapshot?.route.id === provider
+    ? routeSnapshot
+    : configuredTextRoute(config, provider)
   if (!route) return streamFn
   return (model, context, options) => streamEngineRouteText(
     route.connection,
     () => streamFn(model, context, options),
+    { db, model, signal: options?.signal },
   )
 }
 
-/** Route streams hold the shared connection slot until their terminal event. */
-function resolveAeroStreamFn(
-  opts: AeroSessionOptions,
+export interface AeroSessionRuntime {
+  model: Model<never>
+  streamFn?: AgentOptions['streamFn']
+  getApiKey: NonNullable<AgentOptions['getApiKey']>
+  route?: ConfiguredTextRoute
+}
+
+/**
+ * Resolve model, transport gate, and credential from one route snapshot. The
+ * caller can install the returned values synchronously, so no turn can pair a
+ * replacement credential with the prior endpoint/model generation.
+ */
+export function resolveAeroSessionRuntime(
+  config: CanonryConfig,
   provider: AeroProviderId,
-): AgentOptions['streamFn'] | undefined {
-  // Native keeps the caller's override verbatim (undefined lets pi-ai pick its
-  // own default), so construction behaviour is byte-for-byte unchanged.
-  if (!provider.startsWith('route:')) return opts.streamFn
-  return aeroStreamFnFor(opts.config, provider, opts.streamFn)
+  modelId?: string,
+  opts?: {
+    streamFn?: AgentOptions['streamFn']
+    db?: DatabaseClient
+    routeSnapshot?: ConfiguredTextRoute
+  },
+): AeroSessionRuntime {
+  if (!provider.startsWith('route:')) {
+    return {
+      model: resolveAeroModel(provider, config, modelId),
+      // Preserve construction semantics: undefined lets Agent use pi-ai's
+      // default stream function for native providers.
+      streamFn: opts?.streamFn,
+      getApiKey: buildApiKeyResolver(config),
+    }
+  }
+
+  const route = opts?.routeSnapshot?.route.id === provider
+    ? opts.routeSnapshot
+    : configuredTextRoute(config, provider)
+  if (!route) {
+    throw new Error(`Configured text route '${provider}' is not available on this Canonry instance.`)
+  }
+  return {
+    model: resolveAeroModel(provider, config, modelId, route),
+    streamFn: aeroStreamFnFor(config, provider, opts?.streamFn, opts?.db, route),
+    getApiKey: buildRouteApiKeyResolver(route),
+    route,
+  }
 }
 
 export function createAeroSession(opts: AeroSessionOptions): Agent {
@@ -211,7 +269,11 @@ export function createAeroSession(opts: AeroSessionOptions): Agent {
   const provider = opts.provider ?? detectAeroProvider(opts.config)
   if (!provider) throw new Error(missingProviderMessage())
 
-  const model = resolveAeroModel(provider, opts.config, opts.modelId)
+  const runtime = resolveAeroSessionRuntime(opts.config, provider, opts.modelId, {
+    streamFn: opts.streamFn,
+    db: opts.db,
+    routeSnapshot: opts.routeSnapshot,
+  })
 
   const toolScope = opts.toolScope ?? AeroToolScopes.all
   const toolProfile = opts.toolProfile ?? AeroToolProfiles.default
@@ -236,15 +298,15 @@ export function createAeroSession(opts: AeroSessionOptions): Agent {
   const agent = new Agent({
     initialState: {
       systemPrompt,
-      model,
+      model: runtime.model,
       tools,
       ...(opts.initialMessages ? { messages: opts.initialMessages } : {}),
     },
-    streamFn: resolveAeroStreamFn(opts, provider),
+    streamFn: runtime.streamFn,
     sessionId: buildAeroProviderSessionId(opts),
     onPayload: splitAeroAnthropicSystemCachePayload,
     ...toolUsageHooks,
-    getApiKey: buildApiKeyResolver(opts.config),
+    getApiKey: runtime.getApiKey,
   })
 
   const telemetryDb = opts.db

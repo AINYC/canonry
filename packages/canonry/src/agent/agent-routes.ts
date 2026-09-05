@@ -27,7 +27,7 @@ import {
   type AeroToolProfile,
   type AeroToolScope,
 } from './tools.js'
-import { buildAgentProvidersResponse, configuredTextRoute } from './providers.js'
+import { buildAgentProvidersResponse, isAeroProviderConfigured } from './providers.js'
 import {
   COMPACTION_KEY_PREFIX,
   deleteMemoryEntry,
@@ -154,7 +154,7 @@ export function registerAgentRoutes(app: FastifyInstance, opts: AgentRoutesOptio
       }
       // A syntactically valid route id is still not an authority to use one.
       if (requestedProvider.startsWith('route:')
-        && !configuredTextRoute(opts.sessionRegistry.getConfig(), requestedProvider)) {
+        && !isAeroProviderConfigured(requestedProvider, opts.sessionRegistry.getConfig())) {
         throw validationError(
           `Configured text route '${requestedProvider}' is not available on this Canonry instance.`,
         )

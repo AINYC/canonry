@@ -267,6 +267,10 @@ Token migration guardrails:
   redacted route-summary endpoint, and embeds render no route editor.
 - Configured generic routes are text-only unless their server-owned capability
   says otherwise. Never enable one for a sweep from client-side inference.
+- New connection and route editors use create-only requests. Saved IDs must
+  never be overwritten through an Add action, including from stale tabs.
+- Project engine drafts reset on project navigation. History fallback pins show
+  unavailable metrics, never latest-only counts under a historical window.
 
 ## Common Mistakes
 

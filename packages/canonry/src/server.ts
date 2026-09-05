@@ -232,6 +232,7 @@ import {
 } from "@ainyc/canonry-db";
 import { ProviderRegistry } from "./provider-registry.js";
 import { createOpenAiCompatibleTextRouteAdapter, fetchOpenAiCompatibleModelCatalog } from "./engine-routes.js";
+import { configureEngineRouteTextExecution } from "./engine-route-text-execution.js";
 import { Scheduler } from "./scheduler.js";
 import { refreshAllIntegrations } from "./data-refresh.js";
 import { Notifier } from "./notifier.js";
@@ -366,6 +367,17 @@ const API_ADAPTERS: ProviderAdapter[] = [
 
 /** All known browser (CDP) adapters */
 const BROWSER_ADAPTERS: ProviderAdapter[] = [cdpChatgptAdapter];
+
+const BUILT_IN_PROVIDER_ADAPTERS = [...API_ADAPTERS, ...BROWSER_ADAPTERS].map((adapter) => ({
+  name: adapter.name,
+  displayName: adapter.displayName,
+  mode: adapter.mode,
+  modelConfigurable: adapter.mode === "api",
+  defaultModel: adapter.modelRegistry.defaultModel,
+  knownModels: adapter.modelRegistry.knownModels,
+  modelValidationPattern: adapter.modelRegistry.validationPattern,
+  modelValidationHint: adapter.modelRegistry.validationHint,
+}));
 
 const adapterMap = Object.fromEntries(
   API_ADAPTERS.map((a) => [a.name, a]),
@@ -909,11 +921,7 @@ export async function createServer(opts: {
     });
   }
 
-  /**
-   * Configured gateway routes are deliberately registered as text-only
-   * adapters. They are useful to internal callers that opt into a route, but
-   * `measurementReady: false` keeps them out of all sweep selection paths.
-   */
+  /** Generic gateway routes are text-only and never participate in sweeps. */
   const configuredEngineConnections = (): EngineConnectionConfig[] => {
     const connections: EngineConnectionConfig[] = [];
     for (const candidate of opts.config.engineRoutes?.connections ?? []) {
@@ -928,7 +936,7 @@ export async function createServer(opts: {
   };
 
   const configuredEngineRoutes = (): EngineRouteConfig[] => {
-    const routes: EngineRouteConfig[] = [];
+    const routes = new Map<string, EngineRouteConfig>();
     for (const candidate of opts.config.engineRoutes?.routes ?? []) {
       const parsed = engineRouteConfigSchema.safeParse(candidate);
       if (!parsed.success) {
@@ -943,19 +951,25 @@ export async function createServer(opts: {
         });
         continue;
       }
-      routes.push(parsed.data);
+      // Match ProviderRegistry's last-registration-wins identity without
+      // returning duplicate settings rows for one route id.
+      routes.set(parsed.data.id, parsed.data);
     }
-    return routes;
+    return [...routes.values()];
   };
 
   const registerConfiguredEngineRoutes = (connectionId?: string): void => {
     const connectionsById = new Map(configuredEngineConnections().map((connection) => [connection.id, connection]));
+    for (const connection of connectionsById.values()) {
+      if (connectionId && connection.id !== connectionId) continue;
+      configureEngineRouteTextExecution(connection);
+    }
     for (const route of configuredEngineRoutes()) {
       if (connectionId && route.connectionId !== connectionId) continue;
       // The `route:` namespace is server-reserved. Besides avoiding accidental
       // adapter replacement, this makes dynamic route identity unambiguous in
       // stored runs and shared connection quota accounting.
-      if (!route.id.startsWith("route:") || route.source !== "configured" || route.capabilities.kind !== "text-only") {
+      if (!route.id.startsWith("route:")) {
         log.warn("engine-route.unsupported-config", { id: route.id, source: route.source, capability: route.capabilities.kind });
         continue;
       }
@@ -964,7 +978,8 @@ export async function createServer(opts: {
         log.warn("engine-route.connection-missing", { id: route.id, connectionId: route.connectionId });
         continue;
       }
-      registry.register(createOpenAiCompatibleTextRouteAdapter({ connection, route }), {
+      const adapter = createOpenAiCompatibleTextRouteAdapter({ connection, route, db: opts.db });
+      registry.register(adapter, {
         provider: route.id,
         connectionId: connection.id,
         measurementReady: false,
@@ -990,17 +1005,13 @@ export async function createServer(opts: {
     ...implicitNativeEngineRoutes(),
   ];
 
-  /**
-   * Only registered measurement adapters receive an execution descriptor.
-   * Configured `route:*` gateways are intentionally absent because their
-   * `measurementReady: false` registration must fail closed before any sweep.
-   */
+  /** Only registered measurement adapters receive an execution descriptor. */
   const providerRouteDescriptors = (): Record<string, MeasurementExecutionRouteDescriptor> => {
     const configuredConnections = new Map(configuredEngineConnections().map(connection => [connection.id, connection]))
     const routesById = new Map(engineRouteSettings().map(route => [route.id, route]))
     const descriptors: Record<string, MeasurementExecutionRouteDescriptor> = {}
     for (const provider of registry.getMeasurableAll()) {
-      const route = routesById.get(`native:${provider.adapter.name}`)
+      const route = routesById.get(provider.adapter.name) ?? routesById.get(`native:${provider.adapter.name}`)
       if (!route) continue
       const connection = configuredConnections.get(route.connectionId)
       descriptors[provider.adapter.name] = {
@@ -1053,6 +1064,7 @@ export async function createServer(opts: {
   const serverUrl = `http://localhost:${port}`;
 
   const jobRunner = new JobRunner(opts.db, registry, {
+    getProviderRouteDescriptors: providerRouteDescriptors,
     // The one-time first-sweep thank-you. Lives on the serve console because
     // runs execute here, including the foreground serve that init hands off
     // to. TTY-gated inside, so supervised deployments never see it.
@@ -2608,11 +2620,13 @@ export async function createServer(opts: {
   // provider is configured (handled inside the explainer factory).
   const explainContentRecommendation = createRecommendationExplainer({
     config: opts.config,
+    db: opts.db,
   });
   // LLM-backed structured BRIEF synthesizer (brief mode). Same plumbing as the
   // explainer; gated to ownable targets by the route. 503 when no provider.
   const briefContentRecommendation = createRecommendationBriefSynthesizer({
     config: opts.config,
+    db: opts.db,
   });
 
   const dispatchResearchRun = (runId: string, projectId: string) => {
@@ -3015,16 +3029,7 @@ export async function createServer(opts: {
       includeCanonryLocal: true,
     },
     providerSummary,
-    providerAdapters: [...API_ADAPTERS, ...BROWSER_ADAPTERS].map((a) => ({
-      name: a.name,
-      displayName: a.displayName,
-      mode: a.mode,
-      modelConfigurable: a.mode === "api",
-      defaultModel: a.modelRegistry.defaultModel,
-      knownModels: a.modelRegistry.knownModels,
-      modelValidationPattern: a.modelRegistry.validationPattern,
-      modelValidationHint: a.modelRegistry.validationHint,
-    })),
+    providerAdapters: BUILT_IN_PROVIDER_ADAPTERS,
     engineConnections: () => configuredEngineConnections().map(buildEngineRoutePublicDto),
     engineRoutes: engineRouteSettings,
     getEngineConnectionModelCatalog: async (connectionId) => {
@@ -3167,30 +3172,39 @@ export async function createServer(opts: {
       return buildEngineRoutePublicDto(next);
     },
     onEngineRouteUpsert: (route) => {
-      // The HTTP layer derived id/revision/source/capabilities. Validate the
-      // complete object again at the host boundary before persisting it.
+      // Stamp capabilities at the secret-bearing host boundary. Configured
+      // gateway routes cannot claim the built-in measurement contract.
       const parsed = engineRouteConfigSchema.safeParse(route);
-      if (!parsed.success || !parsed.data.id.startsWith("route:") || parsed.data.source !== "configured" || parsed.data.capabilities.kind !== "text-only") {
+      if (!parsed.success || !parsed.data.id.startsWith("route:")) {
         return null;
       }
       const config = opts.config.engineRoutes ?? (opts.config.engineRoutes = {});
+      const connection = (config.connections ?? []).find((candidate) => candidate.id === parsed.data.connectionId);
+      if (!connection) return null;
+      let resolved: EngineRouteConfig;
+      try {
+        resolved = engineRouteConfigSchema.parse({
+          ...parsed.data,
+          source: "configured",
+          capabilities: { kind: "text-only" },
+        });
+      } catch {
+        return null;
+      }
       const routes = config.routes ?? (config.routes = []);
-      const existingIndex = routes.findIndex((candidate) => candidate.id === parsed.data.id);
-      const existing = existingIndex >= 0 ? routes[existingIndex] : undefined;
-      if (existingIndex >= 0) routes[existingIndex] = parsed.data;
-      else routes.push(parsed.data);
+      const priorRoutes = [...routes];
+      routes.splice(0, routes.length, ...routes.filter((candidate) => candidate.id !== resolved.id), resolved);
 
       try {
         saveConfigPatch({ engineRoutes: config });
       } catch (err) {
-        if (existingIndex >= 0 && existing) routes[existingIndex] = existing;
-        else routes.pop();
+        routes.splice(0, routes.length, ...priorRoutes);
         app.log.error({ err }, "Failed to save engine route config");
         return null;
       }
 
-      registerConfiguredEngineRoutes(parsed.data.connectionId);
-      return parsed.data;
+      registerConfiguredEngineRoutes(resolved.connectionId);
+      return resolved;
     },
     onProviderUpdate: (
       providerName: string,

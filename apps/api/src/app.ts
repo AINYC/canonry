@@ -205,7 +205,11 @@ export function buildApp(env: PlatformEnv) {
         routeId: route.id,
         routeRevision: route.revision,
         policyFingerprint: crypto.createHash('sha256')
-          .update(canonicalEngineRoutePolicyJson(route))
+          .update(canonicalEngineRoutePolicyJson(
+            route,
+            undefined,
+            env.providers[provider.name]?.baseUrl,
+          ))
           .digest('hex'),
       }
     }

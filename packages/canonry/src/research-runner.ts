@@ -14,6 +14,7 @@ import { computeCitedCompetitorDomains, determineCitationState, extractRecommend
 import type { ProviderRegistry } from './provider-registry.js'
 import { getSharedProviderExecutionGate } from './provider-execution-gate.js'
 import { getCurrentUsageDay, releaseDailyQueryQuota, reserveDailyQueryQuota } from './usage-quota.js'
+import { withEngineRouteDailyReservation } from './engine-route-text-execution.js'
 
 const unfinishedResearchQueryStatuses = [ResearchQueryStatuses.queued, ResearchQueryStatuses.running] as const
 
@@ -46,7 +47,7 @@ export async function executeResearchRun(db: DatabaseClient, registry: ProviderR
       throw new Error('Configured API provider is unavailable.')
     }
     const period = getCurrentUsageDay()
-    const connectionScope = provider.config.connectionId ?? run.provider
+    const connectionScope = provider.config.connectionId ? `connection:${provider.config.connectionId}` : run.provider
     // Keep native research's historical project budget, but gateway routes
     // share the one configured credential across every project and route.
     const scope = provider.config.connectionId
@@ -91,7 +92,7 @@ export async function executeResearchRun(db: DatabaseClient, registry: ProviderR
             return provider.adapter.generateText(row.queryText, config)
           }
           const answerText = provider.adapter.name.startsWith('route:')
-            ? await generateText()
+            ? await withEngineRouteDailyReservation({ db, scope, period }, generateText)
             : await gate.run(generateText)
           const namedCompetitors = extractRecommendedCompetitors(
             answerText,

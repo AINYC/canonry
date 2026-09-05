@@ -117,7 +117,7 @@ canonry serve --embed --embed-allow-origin https://app.example.com [--embed-allo
 canonry start --embed --embed-allow-origin https://app.example.com   # daemon form; forwards the embed flags to the spawned serve
 canonry project create <name> --domain <domain> --country US --language en
 canonry settings engine-routes [--format json|jsonl]  # safe route summaries only; JSONL stays one compact document
-canonry settings engine-connection <id> --label <label> --preset <openrouter|litellm|vercel-ai-gateway|custom-openai-compatible> --max-concurrent <n> --max-per-minute <n> --max-per-day <n> [--base-url <url>] [--api-key <key>]  # API key is write-only; omission preserves it
+canonry settings engine-connection <id> --label <label> --preset <litellm|vercel-ai-gateway|custom-openai-compatible> --max-concurrent <n> --max-per-minute <n> --max-per-day <n> [--base-url <url>] [--api-key <key>]  # API key is write-only; omission preserves it
 canonry settings engine-models <connection-id> [--format json|jsonl]  # non-inference catalog; unavailable still permits a manual model ID
 canonry settings engine-route <route-id> --label <label> --connection <connection-id> --model <model-id>  # generic route IDs use route:; generic routes are text-only
 canonry project update <project> --research-provider <route-id|native-id>  # default for research only; not a sweep-provider selection
@@ -126,7 +126,7 @@ canonry query add <project> <query>...
 canonry query replace <project> <query>...
 canonry competitor add <project> <domain>...
 canonry competitor remove <project> <domain>...
-canonry competitor landscape <project> [--window 7d|30d|90d|all] [--group-key <key>|--scope all-markets] [--provider <provider>] [--query-class all|branded|non-brand] [--location <label>] [--run-id <id>] [--format json|jsonl]  # stored evidence only; pins first, then observed direct competitors; all-markets recomputes raw evidence
+canonry competitor landscape <project> [--window 7d|30d|90d|all] [--group-key <key>|--scope all-markets] [--by-model] [--provider <provider> [--model <id>]] [--query-class all|branded|non-brand] [--location <label>] [--run-id <id>] [--format json|jsonl]  # stored evidence only; --by-model adds requested-model groups with separate served identity and sample counts; exact --model requires --provider; Simple and Advanced scopes share this read
 canonry measurement-plan discover <project> --sitemap-url <url> --rule <yaml|json|-> [--max-urls <n>]
 canonry measurement-plan show <project> [--revision <n>]
 canonry measurement-plan versions <project>

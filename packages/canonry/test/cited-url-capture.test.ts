@@ -97,6 +97,14 @@ test('capture reports complete direct and zero cases, preserves counts before de
   await expect(captureCitedUrls('future-adapter', [source('https://publisher.example/a')])).resolves.toMatchObject({ captureStatus: 'unsupported' })
 })
 
+test('does not capture citations for generic text routes', async () => {
+  const sources = [source('https://publisher.example/article')]
+  await expect(captureCitedUrls('route:gateway-text', sources))
+    .resolves.toMatchObject({ captureStatus: 'unsupported', citedUrls: null })
+  await expect(captureCitedUrls('future-adapter', sources))
+    .resolves.toMatchObject({ captureStatus: 'unsupported', citedUrls: null })
+})
+
 test('counts raw grounding sources while completing over capture-eligible candidates', async () => {
   await expect(captureCitedUrls('openai', [
     source('https://chatgpt.com/share/only-provider-self-link'),

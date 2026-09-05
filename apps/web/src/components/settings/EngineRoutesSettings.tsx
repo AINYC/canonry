@@ -19,13 +19,20 @@ import { asyncHandler } from '../../lib/async-handler.js'
 type ConnectionPreset = EngineConnectionPublicDto['preset']
 
 const PRESETS: ReadonlyArray<{ value: ConnectionPreset; label: string; endpoint: string }> = [
-  { value: 'openrouter', label: 'OpenRouter', endpoint: 'https://openrouter.ai/api/v1' },
   { value: 'litellm', label: 'LiteLLM', endpoint: 'http://localhost:4000' },
   { value: 'vercel-ai-gateway', label: 'Vercel AI Gateway', endpoint: 'https://ai-gateway.vercel.sh/v1' },
   { value: 'custom-openai-compatible', label: 'Custom OpenAI-compatible', endpoint: '' },
 ]
 
 const INPUT_CLASS = 'mt-1 w-full rounded-md border border-strong bg-transparent px-3 py-2 text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none focus:ring-1 focus:ring-mono-500'
+
+function newEditorId(prefix: string): string {
+  // IDs are not credentials. LAN HTTP installs can lack secure-context crypto.
+  const suffix = typeof globalThis.crypto?.randomUUID === 'function'
+    ? globalThis.crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+  return `${prefix}${suffix}`
+}
 
 function defaultEndpoint(preset: ConnectionPreset): string {
   return PRESETS.find(item => item.value === preset)?.endpoint ?? ''
@@ -36,27 +43,26 @@ function presetLabel(preset: ConnectionPreset): string {
 }
 
 function quotaInput(value: string): number | undefined {
-  const parsed = Number.parseInt(value, 10)
+  const parsed = Number(value)
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined
 }
 
 function sourceLabel(source: EngineRouteConfig['source']): string {
   if (source === 'implicit-native') return 'Native'
-  if (source === 'verified-adapter') return 'Verified adapter'
   return 'Configured'
 }
 
 function sourceOrder(source: EngineRouteConfig['source']): number {
   if (source === 'implicit-native') return 0
-  if (source === 'verified-adapter') return 1
-  return 2
+  return 1
 }
 
-function routeReadiness(route: EngineRouteConfig, connectionPresent: boolean): { label: string; tone: 'positive' | 'caution' | 'negative' } {
-  if (route.source !== 'implicit-native' && !connectionPresent) return { label: 'Connection missing', tone: 'negative' }
-  return route.capabilities.kind === 'verified-measurement'
-    ? { label: 'Sweep ready', tone: 'positive' }
-    : { label: 'Text-only', tone: 'caution' }
+function routeReadiness(route: EngineRouteConfig, connection: EngineConnectionPublicDto | undefined): { label: string; tone: 'positive' | 'caution' | 'negative' } {
+  if (route.source !== 'implicit-native' && !connection) return { label: 'Connection missing', tone: 'negative' }
+  const serverVerified = route.source === 'implicit-native'
+    && route.capabilities.kind === 'verified-measurement'
+  if (!serverVerified) return { label: 'Text-only', tone: 'caution' }
+  return { label: 'Sweep ready', tone: 'positive' }
 }
 
 function readinessLabel(readiness: { state: string; measurementReady: boolean }): { label: string; tone: 'positive' | 'caution' | 'negative' } {
@@ -143,8 +149,9 @@ export function EngineRoutesSettings() {
   const [routeEditor, setRouteEditor] = useState<EngineRouteConfig | 'new' | null>(null)
 
   const connections = settings.data?.engineConnections ?? []
-  const connectionIds = new Set(connections.map(connection => connection.id))
-  const routes = [...(settings.data?.engineRoutes ?? [])].sort((left, right) => (
+  const connectionsById = new Map(connections.map(connection => [connection.id, connection]))
+  const routes = [...(settings.data?.engineRoutes ?? [])]
+  routes.sort((left, right) => (
     sourceOrder(left.source) - sourceOrder(right.source) || left.label.localeCompare(right.label)
   ))
   if (embedded) return null
@@ -181,7 +188,7 @@ export function EngineRoutesSettings() {
           <Button type="button" size="sm" onClick={() => { setRouteEditor(null); setConnectionEditor('new') }}>Add connection</Button>
         </div>
       </div>
-      <p className="max-w-3xl text-sm text-secondary">Native engines remain available. Add a gateway route for text tasks without making a sweep-evidence claim.</p>
+      <p className="max-w-3xl text-sm text-secondary">Native engines remain available for visibility sweeps. Generic gateway routes support text work and research.</p>
       {settings.isError && <p role="alert" className="mt-3 text-sm text-caution-400">Could not refresh routes. Showing the last successful settings.</p>}
 
       <div className="mt-5 overflow-x-auto border-y border-default">
@@ -199,7 +206,7 @@ export function EngineRoutesSettings() {
           </thead>
           <tbody className="divide-y divide-default">
             {routes.map(route => {
-              const readiness = routeReadiness(route, route.source === 'implicit-native' || connectionIds.has(route.connectionId))
+              const readiness = routeReadiness(route, connectionsById.get(route.connectionId))
               return (
                 <tr key={route.id}>
                   <td className="px-3 py-3"><p className="font-medium text-heading">{route.label}</p><p className="mt-0.5 font-mono text-xs text-muted">{sourceLabel(route.source)}</p></td>
@@ -208,7 +215,7 @@ export function EngineRoutesSettings() {
                   <td className="px-3 py-3"><ToneBadge tone={readiness.tone}>{readiness.label}</ToneBadge></td>
                   <td className="px-3 py-3 tabular-nums text-secondary">{route.revision}</td>
                   <td className="px-3 py-3 text-right">
-                    {route.source === 'configured' && <Button type="button" variant="outline" size="sm" aria-label={`Edit ${route.label}`} onClick={() => { setConnectionEditor(null); setRouteEditor(route) }}>Edit</Button>}
+                    {route.source !== 'implicit-native' && <Button type="button" variant="outline" size="sm" aria-label={`Edit ${route.label}`} onClick={() => { setConnectionEditor(null); setRouteEditor(route) }}>Edit</Button>}
                   </td>
                 </tr>
               )
@@ -217,12 +224,13 @@ export function EngineRoutesSettings() {
           </tbody>
         </table>
       </div>
-      <p className="mt-2 text-sm text-secondary">Text-only routes can be used for research, not answer-visibility sweeps.</p>
+      <p className="mt-2 text-sm text-secondary">Text-only routes can power Aero and research. Native answer engines run visibility sweeps.</p>
 
       {routeEditor && (
         <RouteEditor
           key={routeEditor === 'new' ? 'new' : routeEditor.id}
           route={routeEditor === 'new' ? undefined : routeEditor}
+          existingRouteIds={routes.map(route => route.id)}
           connections={connections}
           onCancel={() => setRouteEditor(null)}
           onSaved={() => {
@@ -267,6 +275,7 @@ export function EngineRoutesSettings() {
         <ConnectionEditor
           key={connectionEditor === 'new' ? 'new' : connectionEditor.id}
           connection={connectionEditor === 'new' ? undefined : connectionEditor}
+          existingConnectionIds={connections.map(connection => connection.id)}
           onCancel={() => setConnectionEditor(null)}
           onSaved={() => {
             setConnectionEditor(null)
@@ -278,16 +287,17 @@ export function EngineRoutesSettings() {
   )
 }
 
-function ConnectionEditor({ connection, onCancel, onSaved }: {
+function ConnectionEditor({ connection, existingConnectionIds, onCancel, onSaved }: {
   connection?: EngineConnectionPublicDto
+  existingConnectionIds: string[]
   onCancel: () => void
   onSaved: () => void
 }) {
   const mutation = useMutation(putApiV1SettingsEngineConnectionsByIdMutation({ client: heyClient }))
-  const [id, setId] = useState(connection?.id ?? 'connection:gateway')
+  const [id, setId] = useState(() => connection?.id ?? newEditorId('connection:gateway-'))
   const [label, setLabel] = useState(connection?.label ?? '')
-  const [preset, setPreset] = useState<ConnectionPreset>(connection?.preset ?? 'openrouter')
-  const [baseUrl, setBaseUrl] = useState(connection?.baseUrl ?? defaultEndpoint('openrouter'))
+  const [preset, setPreset] = useState<ConnectionPreset>(connection?.preset ?? 'litellm')
+  const [baseUrl, setBaseUrl] = useState(connection?.baseUrl ?? defaultEndpoint('litellm'))
   const [apiKey, setApiKey] = useState('')
   const [maxConcurrency, setMaxConcurrency] = useState(String(connection?.quota.maxConcurrency ?? 3))
   const [maxRequestsPerMinute, setMaxRequestsPerMinute] = useState(String(connection?.quota.maxRequestsPerMinute ?? 60))
@@ -309,6 +319,10 @@ function ConnectionEditor({ connection, onCancel, onSaved }: {
       setError('Enter a stable ID, label, endpoint, and positive quota limits.')
       return
     }
+    if (!connection && existingConnectionIds.includes(id.trim())) {
+      setError('This connection ID already exists. Choose a new ID or edit the existing connection.')
+      return
+    }
     setError(null)
     try {
       await mutation.mutateAsync({
@@ -321,6 +335,7 @@ function ConnectionEditor({ connection, onCancel, onSaved }: {
           quota: quota as { maxConcurrency: number; maxRequestsPerMinute: number; maxRequestsPerDay: number },
           ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
         },
+        ...(!connection ? { headers: { 'If-None-Match': '*' as const } } : {}),
       })
       onSaved()
     } catch (cause) {
@@ -337,7 +352,11 @@ function ConnectionEditor({ connection, onCancel, onSaved }: {
         <label className="text-sm text-secondary">Preset<select className={INPUT_CLASS} value={preset} onChange={event => changePreset(event.target.value as ConnectionPreset)}>{PRESETS.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
         <label className="text-sm text-secondary">Base URL<input aria-label="Base URL" className={INPUT_CLASS} value={baseUrl} onChange={event => setBaseUrl(event.target.value)} placeholder="https://gateway.example.com/v1" /></label>
         <label className="text-sm text-secondary">API key<input aria-label="API key" type="password" autoComplete="new-password" className={INPUT_CLASS} value={apiKey} onChange={event => setApiKey(event.target.value)} /></label>
-        <p className="self-end pb-2 text-sm text-secondary">{connection?.secretConfigured ? 'Leave blank to keep the saved key.' : 'Optional for an unauthenticated endpoint.'}</p>
+        <p className="self-end pb-2 text-sm text-secondary">{connection?.secretConfigured
+          ? 'Leave blank to keep the saved key.'
+          : preset === 'vercel-ai-gateway'
+            ? 'Required to use this hosted gateway.'
+            : 'Optional for an unauthenticated endpoint.'}</p>
       </div>
       <fieldset className="mt-4"><legend className="text-sm text-secondary">Connection quota</legend><div className="mt-1 grid gap-3 md:grid-cols-3">
         <label className="text-sm text-secondary">Concurrent<input className={INPUT_CLASS} type="number" min="1" value={maxConcurrency} onChange={event => setMaxConcurrency(event.target.value)} /></label>
@@ -350,14 +369,15 @@ function ConnectionEditor({ connection, onCancel, onSaved }: {
   )
 }
 
-function RouteEditor({ route, connections, onCancel, onSaved }: {
+function RouteEditor({ route, existingRouteIds, connections, onCancel, onSaved }: {
   route?: EngineRouteConfig
+  existingRouteIds: string[]
   connections: EngineConnectionPublicDto[]
   onCancel: () => void
   onSaved: () => void
 }) {
   const mutation = useMutation(putApiV1SettingsEngineRoutesByIdMutation({ client: heyClient }))
-  const [id, setId] = useState(route?.id ?? 'route:')
+  const [id, setId] = useState(() => route?.id ?? newEditorId('route:research-'))
   const [label, setLabel] = useState(route?.label ?? '')
   const [connectionId, setConnectionId] = useState(route?.connectionId ?? (connections.length > 0 ? connections[0]!.id : ''))
   const [modelId, setModelId] = useState(route?.modelId ?? '')
@@ -405,11 +425,21 @@ function RouteEditor({ route, connections, onCancel, onSaved }: {
       setError('Enter a route ID, label, connection, and model ID.')
       return
     }
+    if (!route && existingRouteIds.includes(id.trim())) {
+      setError('This route ID already exists. Choose a new ID or edit the existing route.')
+      return
+    }
     setError(null)
     try {
+      const body = {
+        label: label.trim(),
+        connectionId,
+        modelId: modelId.trim(),
+      }
       await mutation.mutateAsync({
         path: { id: id.trim() },
-        body: { label: label.trim(), connectionId, modelId: modelId.trim() },
+        body,
+        ...(!route ? { headers: { 'If-None-Match': '*' as const } } : {}),
       })
       onSaved()
     } catch (cause) {
@@ -420,7 +450,7 @@ function RouteEditor({ route, connections, onCancel, onSaved }: {
   return (
     <form className="mt-5 border-y border-default py-5" onSubmit={asyncHandler(async event => { event.preventDefault(); await save() })} aria-label={route ? `Edit ${route.label}` : 'Add route'}>
       <div className="section-head"><div><p className="eyebrow eyebrow-soft">Route</p><h3>{route ? 'Edit route' : 'Add route'}</h3></div></div>
-      <p className="text-sm text-caution-400">Generic routes are text-only until a verified evidence adapter is installed.</p>
+      <p className="text-sm text-secondary">This route supports Aero and research. It cannot run answer-visibility sweeps.</p>
       <div className="mt-4 grid gap-3 md:grid-cols-2">
         <label className="text-sm text-secondary">Route label<input aria-label="Route label" className={INPUT_CLASS} value={label} onChange={event => setLabel(event.target.value)} autoFocus /></label>
         <label className="text-sm text-secondary">Route ID<input aria-label="Route ID" className={INPUT_CLASS} value={id} disabled={Boolean(route)} onChange={event => setId(event.target.value)} /></label>

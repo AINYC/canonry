@@ -4,6 +4,7 @@ import {
   buildMeasurementExecutionIdentity,
   buildMeasurementRunManifestV1,
   canonicalMeasurementExecutionIdentityJson,
+  defaultSweepProviderNames,
   MEASUREMENT_PLAN_V2_SCHEMA_VERSION,
   MeasurementRunScopeError,
   measurementRunScopeIsEmpty,
@@ -131,9 +132,10 @@ function storedProviderRoster(value: unknown): string[] {
 }
 
 /**
- * Which providers a run measures with: what was asked for, else the project's
- * own list, else everything the instance can run. An empty project list means
- * "all configured" everywhere else in canonry, and reading it as zero here
+ * Which native providers a run measures with: what was asked for, else the
+ * project's own list, else the instance's native defaults. Configured gateway
+ * routes are text-only and cannot enter measurement through any selection.
+ * An empty project list does not mean zero providers, and reading it so here
  * would freeze an expectation nothing could ever satisfy.
  */
 export function resolveRunProviderSelection(input: {
@@ -141,11 +143,11 @@ export function resolveRunProviderSelection(input: {
   projectProviders?: readonly string[] | null
   runnableProviders?: readonly string[] | null
 }): string[] {
-  const requested = normalizeProviders(input.requestedProviders ?? [])
-  if (requested.length) return requested
-  const project = normalizeProviders(input.projectProviders ?? [])
-  if (project.length) return project
-  return normalizeProviders(input.runnableProviders ?? [])
+  const requestedSelection = normalizeProviders(input.requestedProviders ?? [])
+  if (requestedSelection.length) return normalizeProviders(defaultSweepProviderNames(requestedSelection))
+  const projectSelection = normalizeProviders(input.projectProviders ?? [])
+  if (projectSelection.length) return normalizeProviders(defaultSweepProviderNames(projectSelection))
+  return normalizeProviders(defaultSweepProviderNames(input.runnableProviders ?? []))
 }
 
 function providerRoster(tx: DatabaseClient, params: QueueRunParams): string[] {
@@ -280,6 +282,15 @@ function materializeV2ExecutionNodes(
 
   for (const node of [...nodes].sort((left, right) => compareText(left.stableKey, right.stableKey))) {
     const nodeProviders = normalizeProviders(node.context.providers)
+    const unsupportedProviders = nodeProviders.filter(provider => provider.startsWith('route:'))
+    if (unsupportedProviders.length > 0) {
+      // A retained revision can predate the authoring guard. Refuse that
+      // execution without rewriting the frozen plan or dropping its slots.
+      throw validationError(
+        `Configured engine route(s) ${unsupportedProviders.join(', ')} are text-only and cannot run an answer-visibility measurement plan. Publish a revision with native provider adapters.`,
+        { unsupportedProviders },
+      )
+    }
     const declared = nodeProviderModels(node)
     const resolved = new Map<string, string>()
     for (const provider of nodeProviders) {

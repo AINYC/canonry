@@ -456,6 +456,11 @@ export async function apiRoutes(app: FastifyInstance, opts: ApiRoutesOptions) {
   // Register route plugins under the configured prefix (default: /api/v1).
   // When a basePath is set and the reverse proxy does not strip it, pass
   // routePrefix: `${basePath}api/v1` so routes match the full incoming path.
+  const providerSummary = opts.providerSummary
+  const getResearchConfiguredProviderNames = opts.getResearchConfiguredProviderNames
+    ?? (providerSummary !== undefined
+      ? () => providerSummary.filter(provider => provider.configured).map(provider => provider.name)
+      : undefined)
   await app.register(async (api) => {
     // Expensive POST-based previews opt in per route. Run after authentication
     // so API keys and named users get independent budgets; unauthenticated test
@@ -510,7 +515,7 @@ export async function apiRoutes(app: FastifyInstance, opts: ApiRoutesOptions) {
       onAliasesChanged: opts.onAliasesChanged,
       providerAdapters: opts.providerAdapters,
       getResearchProviderAdapters: opts.getResearchProviderAdapters,
-      getResearchConfiguredProviderNames: opts.getResearchConfiguredProviderNames,
+      getResearchConfiguredProviderNames,
     } satisfies ProjectRoutesOptions)
     await api.register(queryRoutes, {
       onGenerateQueries: opts.onGenerateQueries,
@@ -548,7 +553,7 @@ export async function apiRoutes(app: FastifyInstance, opts: ApiRoutesOptions) {
       onAliasesChanged: opts.onAliasesChanged,
       providerAdapters: opts.providerAdapters,
       getResearchProviderAdapters: opts.getResearchProviderAdapters,
-      getResearchConfiguredProviderNames: opts.getResearchConfiguredProviderNames,
+      getResearchConfiguredProviderNames,
       allowLoopbackWebhooks: opts.allowLoopbackWebhooks,
       onGoogleConnectionPropertyUpdated: (domain, connectionType, propertyId) => {
         opts.googleConnectionStore?.updateConnection(domain, connectionType, {
@@ -592,6 +597,7 @@ export async function apiRoutes(app: FastifyInstance, opts: ApiRoutesOptions) {
     await api.register(scheduleRoutes, {
       onScheduleUpdated: opts.onScheduleUpdated,
       validProviderNames: opts.providerAdapters?.map(a => a.name),
+      getRunnableProviderNames: opts.getRunnableProviderNames,
     } satisfies ScheduleRoutesOptions)
     await api.register(notificationRoutes, {
       allowLoopbackWebhooks: opts.allowLoopbackWebhooks,
@@ -705,8 +711,7 @@ export async function apiRoutes(app: FastifyInstance, opts: ApiRoutesOptions) {
     } satisfies DiscoveryRoutesOptions)
     await api.register(researchRoutes, {
       providerAdapters: opts.getResearchProviderAdapters ?? opts.providerAdapters,
-      configuredProviderNames: opts.getResearchConfiguredProviderNames
-        ?? opts.providerSummary?.filter(provider => provider.configured).map(provider => provider.name),
+      configuredProviderNames: getResearchConfiguredProviderNames,
       onResearchRunRequested: opts.onResearchRunRequested,
     } satisfies ResearchRoutesOptions)
     await api.register(technicalAeoRoutes, {

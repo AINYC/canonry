@@ -405,7 +405,7 @@ const competitorLandscapeScopeParameter: OpenApiParameter = {
   name: 'scope',
   in: 'query',
   description: 'Set to "all-markets" to aggregate raw stored evidence across every Advanced Measurement market. It cannot be combined with groupKey.',
-  schema: { type: 'string', enum: ['all-markets'] },
+  schema: { type: 'string', enum: ['project', 'all-markets'] },
 }
 
 const competitorLandscapeProviderParameter: OpenApiParameter = {
@@ -413,6 +413,20 @@ const competitorLandscapeProviderParameter: OpenApiParameter = {
   in: 'query',
   description: 'Restrict evidence to one answer provider.',
   schema: stringSchema,
+}
+
+const competitorLandscapeModelParameter: OpenApiParameter = {
+  name: 'model',
+  in: 'query',
+  description: 'Restrict all evidence and exclusions to one exact stored requested model ID (surrounding whitespace ignored). Requires provider. Never matches by served model or current configuration.',
+  schema: { type: 'string', minLength: 1 },
+}
+
+const competitorLandscapeGroupByParameter: OpenApiParameter = {
+  name: 'groupBy',
+  in: 'query',
+  description: 'Set to "model" for an additional provider/requested-model breakdown with each group\'s sample counts and raw served-model evidence. Unknown requested IDs form a null group. Groups are descriptive, not equal-weight or matched-query comparisons; absent models are not measured zeros. At most 50 groups in provider/model order (unknown first), with totalGroups and truncation disclosed.',
+  schema: { type: 'string', enum: ['model'] },
 }
 
 const competitorLandscapeQueryClassParameter: OpenApiParameter = {
@@ -2083,7 +2097,7 @@ const routeCatalog: OpenApiOperation[] = [
     method: 'get',
     path: '/api/v1/projects/{name}/analytics/competitors',
     summary: 'Get the stored competitor landscape',
-    description: 'Returns project pins first, then stored-discovery direct competitors and non-competitive cited sources. Mention share uses answer text only; citations remain a separate source-list signal. This is a stored-evidence read: it never calls a provider or classifier. Probe and non-terminal observations are excluded and counted explicitly. A groupKey scopes an Advanced Measurement market to its frozen v2 execution nodes and usage edges.',
+    description: 'Returns project pins first, then stored-discovery direct competitors and non-competitive cited sources. Mention share uses answer text only; citations remain a separate source-list signal. This is a stored-evidence read: it never calls a provider or classifier. Probe and non-terminal observations are excluded and counted explicitly. A groupKey scopes an Advanced Measurement market to its frozen v2 execution nodes and usage edges. Optional model filtering and groupBy=model apply to project, selected-market, and all-markets scopes; frozen competitor identities stay bound to their historical runs. The default response remains the combined landscape.',
     tags: ['analytics', 'competitors'],
     parameters: [
       nameParameter,
@@ -2091,6 +2105,8 @@ const routeCatalog: OpenApiOperation[] = [
       competitorLandscapeGroupKeyParameter,
       competitorLandscapeScopeParameter,
       competitorLandscapeProviderParameter,
+      competitorLandscapeModelParameter,
+      competitorLandscapeGroupByParameter,
       competitorLandscapeQueryClassParameter,
       competitorLandscapeLocationParameter,
       competitorLandscapeRunIdParameter,
@@ -2480,9 +2496,9 @@ const routeCatalog: OpenApiOperation[] = [
     method: 'put',
     path: '/api/v1/settings/engine-connections/{id}',
     summary: 'Create or update a generic gateway connection',
-    description: 'Stores an instance-global OpenAI-compatible connection. The credential may be supplied on write, is never returned, and an omitted apiKey preserves the stored credential.',
+    description: 'Stores an instance-global OpenAI-compatible connection. The credential may be supplied on write, is never returned, and an omitted apiKey preserves the stored credential. Send If-None-Match: * to create without replacing an existing connection.',
     tags: ['settings', 'engine-routes'],
-    parameters: [engineConnectionIdParameter],
+    parameters: [engineConnectionIdParameter, { name: 'If-None-Match', in: 'header', required: false, schema: { type: 'string', enum: ['*'] }, description: 'Create only; fail if the connection ID already exists.' }],
     requestBody: {
       required: true,
       content: {
@@ -2494,6 +2510,7 @@ const routeCatalog: OpenApiOperation[] = [
     responses: {
       200: jsonResponse('Credential-redacted connection metadata returned.', 'EngineConnectionPublicDto'),
       400: errorResponse('Invalid connection configuration.'),
+      412: errorResponse('The connection ID already exists.'),
       501: errorResponse('Engine connection updates are not supported.'),
     },
   },
@@ -2501,9 +2518,9 @@ const routeCatalog: OpenApiOperation[] = [
     method: 'put',
     path: '/api/v1/settings/engine-routes/{id}',
     summary: 'Create or update a generic text route',
-    description: 'The host owns route id, revision, source, and evidence capabilities. Configured generic routes remain text-only until a server-owned evidence adapter is implemented.',
+    description: 'The host owns route id, revision, source, and evidence capabilities. Configured generic routes remain text-only until a server-owned evidence adapter is implemented. Send If-None-Match: * to create without replacing an existing route.',
     tags: ['settings', 'engine-routes'],
-    parameters: [engineRouteIdParameter],
+    parameters: [engineRouteIdParameter, { name: 'If-None-Match', in: 'header', required: false, schema: { type: 'string', enum: ['*'] }, description: 'Create only; fail if the route ID already exists.' }],
     requestBody: {
       required: true,
       content: {
@@ -2515,6 +2532,7 @@ const routeCatalog: OpenApiOperation[] = [
     responses: {
       200: jsonResponse('Server-owned route configuration returned.', 'EngineRouteConfig'),
       400: errorResponse('Invalid route configuration or unknown connection.'),
+      412: errorResponse('The route ID already exists.'),
       501: errorResponse('Engine route updates are not supported.'),
     },
   },

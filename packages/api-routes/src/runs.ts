@@ -7,6 +7,7 @@ import type { LocationContext, MeasurementExecutionIdentity, MeasurementRunScope
 import {
   AppError as AppErrorClass,
   type AppError,
+  defaultSweepProviderNames,
   measurementRunScopeIsEmpty,
   RunKinds,
   RunTriggers,
@@ -63,8 +64,13 @@ export async function runRoutes(app: FastifyInstance, opts: RunRoutesOptions) {
     const rawProviders = body.providers
     if (rawProviders?.length) {
       const normalized = rawProviders.map(p => p.trim().toLowerCase()).filter(Boolean)
-      const validNames = opts.validProviderNames ?? []
-      if (validNames.length) {
+      const validNames = [...new Set(defaultSweepProviderNames([
+        ...(opts.validProviderNames ?? []),
+        ...(opts.getRunnableProviderNames?.() ?? []),
+      ]))]
+      const validatesProviderNames = opts.validProviderNames !== undefined
+        || opts.getRunnableProviderNames !== undefined
+      if (validatesProviderNames) {
         const invalid = normalized.filter(p => !validNames.includes(p))
         if (invalid.length) {
           throw validationError(`Invalid provider(s): ${invalid.join(', ')}. Must be one of: ${validNames.join(', ')}`, {
@@ -429,8 +435,13 @@ export async function runRoutes(app: FastifyInstance, opts: RunRoutesOptions) {
     const rawProviders = request.body?.providers
     if (rawProviders?.length) {
       const normalized = rawProviders.map(p => p.trim().toLowerCase()).filter(Boolean)
-      const validNames = opts.validProviderNames ?? []
-      if (validNames.length) {
+      const validNames = [...new Set(defaultSweepProviderNames([
+        ...(opts.validProviderNames ?? []),
+        ...(opts.getRunnableProviderNames?.() ?? []),
+      ]))]
+      const validatesProviderNames = opts.validProviderNames !== undefined
+        || opts.getRunnableProviderNames !== undefined
+      if (validatesProviderNames) {
         const invalid = normalized.filter(p => !validNames.includes(p))
         if (invalid.length) {
           throw validationError(`Invalid provider(s): ${invalid.join(', ')}. Must be one of: ${validNames.join(', ')}`, {
@@ -626,14 +637,16 @@ export function answerVisibilityPreflightError(input: {
     return noQueries(input.projectName)
   }
 
-  const availableProviders = normalizeProviderNames(input.runnableProviderNames)
-  const requestedProviders = normalizeProviderNames(input.requestedProviders ?? [])
-  const projectProviders = normalizeProviderNames(input.projectProviders)
-  const selectedProviders = requestedProviders.length > 0
+  const availableProviders = normalizeProviderNames(defaultSweepProviderNames(input.runnableProviderNames))
+  const requestedSelection = normalizeProviderNames(input.requestedProviders ?? [])
+  const requestedProviders = normalizeProviderNames(defaultSweepProviderNames(requestedSelection))
+  const projectSelection = normalizeProviderNames(input.projectProviders)
+  const projectProviders = normalizeProviderNames(defaultSweepProviderNames(projectSelection))
+  const selectedProviders = requestedSelection.length > 0
     ? requestedProviders
-    : projectProviders.length > 0
+    : projectSelection.length > 0
       ? projectProviders
-      : availableProviders
+      : defaultSweepProviderNames(availableProviders)
   const available = new Set(availableProviders)
   const runnableProviders = selectedProviders.filter(provider => available.has(provider))
 
@@ -642,9 +655,9 @@ export function answerVisibilityPreflightError(input: {
   return noProvider(input.projectName, {
     availableProviders,
     selectedProviders,
-    selectionSource: requestedProviders.length > 0
+    selectionSource: requestedSelection.length > 0
       ? 'request'
-      : projectProviders.length > 0
+      : projectSelection.length > 0
         ? 'project'
         : 'instance',
   })

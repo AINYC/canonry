@@ -183,7 +183,8 @@ test('settings routes refuse keys that lack the settings.write scope', async () 
 
 test('a settings-only key cannot invoke a live engine model catalog', async () => {
   const connection = normalizeEngineConnection({
-    id: 'gateway', label: 'Gateway', preset: 'openrouter', apiKey: 'catalog-secret',
+    id: 'gateway', label: 'Gateway', preset: 'custom-openai-compatible',
+    baseUrl: 'https://gateway.example/v1', apiKey: 'catalog-secret',
     quota: { maxConcurrency: 1, maxRequestsPerMinute: 10, maxRequestsPerDay: 100 },
   })
   let catalogCalls = 0

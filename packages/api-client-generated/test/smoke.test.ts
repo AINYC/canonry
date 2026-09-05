@@ -2,6 +2,7 @@ import { describe, expect, expectTypeOf, it, vi } from 'vitest'
 import {
   createClient,
   getApiV1Projects,
+  getApiV1ProjectsByNameAnalyticsCompetitors,
   getApiV1ProjectsByNameTechnicalAeoGraph,
   getApiV1ProjectsByNameTechnicalAeoChanges,
   getApiV1ProjectsByNameTechnicalAeoPath,
@@ -14,6 +15,8 @@ import type {
   AdsCampaignListResponse,
   AdsOperationReconcileResponse,
   AdsUnresolvedOperationListResponse,
+  CompetitorLandscapeResponse,
+  GetApiV1ProjectsByNameAnalyticsCompetitorsData,
   GetApiV1ProjectsByNameMeasurementReportData,
   GetApiV1ProjectsByNameTechnicalAeoGraphData,
   GetApiV1ProjectsByNameTechnicalAeoChangesData,
@@ -35,6 +38,34 @@ import type {
  * if hey-api ever changes its config shape, the test fails locally.
  */
 describe('canonry-api-client', () => {
+  it('preserves model comparison types and serializes model filters without losing scope', async () => {
+    type Query = NonNullable<GetApiV1ProjectsByNameAnalyticsCompetitorsData['query']>
+    type Comparison = NonNullable<CompetitorLandscapeResponse['modelComparison']>
+    type Group = Comparison['groups'][number]
+    expectTypeOf<Query['groupBy']>().toEqualTypeOf<'model' | undefined>()
+    expectTypeOf<Query['model']>().toEqualTypeOf<string | undefined>()
+    expectTypeOf<Query['scope']>().toEqualTypeOf<'project' | 'all-markets' | undefined>()
+    expectTypeOf<Group['model']>().toEqualTypeOf<string | null>()
+    expectTypeOf<Group['servedModels']['status']>().toEqualTypeOf<'known' | 'unknown' | 'mixed'>()
+    expectTypeOf<Comparison['basis']>().toEqualTypeOf<'requested-model'>()
+
+    const fakeFetch = vi.fn(async (_request: Request) => new Response('{}', {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }))
+    const client = createClient({ baseUrl: 'https://example.test/canonry', fetch: fakeFetch as typeof fetch })
+    await getApiV1ProjectsByNameAnalyticsCompetitors({
+      client,
+      path: { name: 'example' },
+      query: { groupBy: 'model', provider: 'openai', model: 'model/version', scope: 'all-markets', queryClass: 'non-brand', window: '30d' },
+    })
+    const url = new URL(fakeFetch.mock.calls[0]![0].url)
+    expect(url.pathname).toBe('/canonry/api/v1/projects/example/analytics/competitors')
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      groupBy: 'model', provider: 'openai', model: 'model/version', scope: 'all-markets', queryClass: 'non-brand', window: '30d',
+    })
+  })
+
   it('retains nullable ads bidding and billing values in generated response types', () => {
     type Campaign = AdsCampaignListResponse['campaigns'][number]
     type AdGroup = Campaign['adGroups'][number]

@@ -497,6 +497,10 @@ export const competitorLandscapeQuerySchema = z.object({
   groupKey: z.string().trim().min(1).optional(),
   scope: competitorLandscapeModeSchema.optional(),
   provider: z.string().trim().min(1).optional(),
+  /** Exact requested model ID; provider is required to disambiguate model names. */
+  model: modelIdSchema.optional(),
+  /** Opt-in agent comparison; the default landscape remains pooled. */
+  groupBy: z.literal('model').optional(),
   queryClass: competitorLandscapeQueryClassSchema.optional(),
   location: z.string().trim().min(1).optional(),
   runId: z.string().trim().min(1).optional(),
@@ -506,6 +510,13 @@ export const competitorLandscapeQuerySchema = z.object({
       code: 'custom',
       path: ['groupKey'],
       message: 'groupKey cannot be combined with scope=all-markets',
+    })
+  }
+  if (value.model !== undefined && value.provider === undefined) {
+    context.addIssue({
+      code: 'custom',
+      path: ['provider'],
+      message: 'provider is required when filtering by model',
     })
   }
 })
@@ -531,6 +542,50 @@ export const competitorLandscapeRowSchema = z.object({
 }).strict()
 export type CompetitorLandscapeRow = z.infer<typeof competitorLandscapeRowSchema>
 
+export const competitorLandscapeEvidenceSchema = z.object({
+  answeredResults: z.number().int().nonnegative(),
+  sourceResults: z.number().int().nonnegative(),
+  missingAnswerTextResults: z.number().int().nonnegative(),
+  /** Project plus direct-competitor named credits behind SOV. */
+  mentionCredits: z.number().int().nonnegative(),
+  /** Citation captures that cannot prove a complete source list; never inferred as misses. */
+  incompleteSourceResults: z.number().int().nonnegative(),
+  /** Stored probe snapshots intentionally omitted from every landscape metric. */
+  excludedProbeResults: z.number().int().nonnegative(),
+  /** Stored snapshots from queued/running/failed/cancelled runs omitted from every metric. */
+  excludedNonCompletedResults: z.number().int().nonnegative(),
+}).strict()
+export type CompetitorLandscapeEvidence = z.infer<typeof competitorLandscapeEvidenceSchema>
+
+export const COMPETITOR_LANDSCAPE_MODEL_GROUP_LIMIT = 50
+
+/** A measured provider/requested-model population, not an equal-weight or matched-query comparison. */
+export const competitorLandscapeModelGroupSchema = z.object({
+  provider: z.string().trim().min(1),
+  /** Null preserves historical observations with unknown requested model identity. */
+  model: modelIdSchema.nullable(),
+  /** Raw upstream-reported identity; never filled from the requested model or current settings. */
+  servedModels: modelEvidenceStateSchema,
+  snapshotCount: z.number().int().positive(),
+  project: competitorLandscapeRowSchema,
+  pinned: z.array(competitorLandscapeRowSchema),
+  observed: z.array(competitorLandscapeRowSchema),
+  otherSources: z.array(competitorLandscapeRowSchema),
+  evidence: competitorLandscapeEvidenceSchema,
+  /** Per-group ranked-row truncation; all pins and full-population denominators remain included. */
+  truncated: z.boolean(),
+}).strict()
+export type CompetitorLandscapeModelGroup = z.infer<typeof competitorLandscapeModelGroupSchema>
+
+export const competitorLandscapeModelComparisonSchema = z.object({
+  basis: z.literal('requested-model'),
+  groups: z.array(competitorLandscapeModelGroupSchema).max(COMPETITOR_LANDSCAPE_MODEL_GROUP_LIMIT),
+  totalGroups: z.number().int().nonnegative(),
+  /** Groups sort by provider and requested model. Use provider/model filters to narrow a truncated result. */
+  truncated: z.boolean(),
+}).strict()
+export type CompetitorLandscapeModelComparison = z.infer<typeof competitorLandscapeModelComparisonSchema>
+
 export const competitorLandscapeResponseSchema = z.object({
   window: metricsWindowSchema,
   scope: competitorLandscapeScopeSchema,
@@ -541,19 +596,9 @@ export const competitorLandscapeResponseSchema = z.object({
   observed: z.array(competitorLandscapeRowSchema),
   /** Aggregators, editorial, unknown, and other cited sources; never SOV competitors. */
   otherSources: z.array(competitorLandscapeRowSchema),
-  evidence: z.object({
-    answeredResults: z.number().int().nonnegative(),
-    sourceResults: z.number().int().nonnegative(),
-    missingAnswerTextResults: z.number().int().nonnegative(),
-    /** Project plus direct-competitor named credits behind SOV. */
-    mentionCredits: z.number().int().nonnegative(),
-    /** Citation captures that cannot prove a complete source list; never inferred as misses. */
-    incompleteSourceResults: z.number().int().nonnegative(),
-    /** Stored probe snapshots intentionally omitted from every landscape metric. */
-    excludedProbeResults: z.number().int().nonnegative(),
-    /** Stored snapshots from queued/running/failed/cancelled runs omitted from every metric. */
-    excludedNonCompletedResults: z.number().int().nonnegative(),
-  }).strict(),
+  evidence: competitorLandscapeEvidenceSchema,
+  /** Present only when groupBy=model; pooled fields remain available and unchanged. */
+  modelComparison: competitorLandscapeModelComparisonSchema.optional(),
   /** Present only for Advanced market reads; active metrics stay frozen while draft pins remain pending publish. */
   marketState: z.object({
     activeRevision: z.number().int().positive(),
@@ -568,6 +613,8 @@ export const competitorLandscapeResponseSchema = z.object({
     scope: competitorLandscapeModeSchema,
     groupKey: z.string().nullable(),
     provider: z.string().nullable(),
+    model: modelIdSchema.optional(),
+    groupBy: z.literal('model').optional(),
     queryClass: competitorLandscapeQueryClassSchema,
     location: z.string().nullable(),
     runId: z.string().nullable(),

@@ -19,16 +19,11 @@ const settings = {
     { name: 'cdp:chatgpt', displayName: 'ChatGPT (Browser)', mode: 'browser', modelConfigurable: false, defaultModel: 'chatgpt-web', knownModels: [], modelValidationPattern: { source: '.', flags: '' }, modelValidationHint: 'Detected from browser.' },
   ],
   engineConnections: [
-    { id: 'gateway:verified', label: 'Verified gateway', preset: 'custom-openai-compatible' as const, protocol: 'openai-compatible' as const, baseUrl: 'https://verified.example/v1', quota: { maxConcurrency: 1, maxRequestsPerMinute: 10, maxRequestsPerDay: 100 }, secretConfigured: true },
     { id: 'gateway:research', label: 'Research gateway', preset: 'custom-openai-compatible' as const, protocol: 'openai-compatible' as const, baseUrl: 'https://research.example/v1', quota: { maxConcurrency: 1, maxRequestsPerMinute: 10, maxRequestsPerDay: 100 }, secretConfigured: true },
   ],
   engineRoutes: [
     {
       id: 'native:gemini', label: 'Gemini', connectionId: 'native:gemini', modelId: 'gemini-2.5-flash', revision: 1, source: 'implicit-native' as const,
-      capabilities: { kind: 'verified-measurement' as const, retrieval: true, citations: true, location: true, servedModel: true, fallback: 'disabled' as const },
-    },
-    {
-      id: 'route:verified-gateway', label: 'Verified gateway', connectionId: 'gateway:verified', modelId: 'verified/model', revision: 2, source: 'verified-adapter' as const,
       capabilities: { kind: 'verified-measurement' as const, retrieval: true, citations: true, location: true, servedModel: true, fallback: 'disabled' as const },
     },
     {
@@ -54,14 +49,47 @@ function renderSection(
   return onSave
 }
 
-test('automatic providers serialize as an empty list and choose mode materializes configured engines', async () => {
+test('automatic providers serialize as an empty list and choose mode materializes configured native engines', async () => {
   const onSave = renderSection()
-  await screen.findByText('All configured engines')
-  expect((screen.getByLabelText('All configured engines') as HTMLInputElement).checked).toBe(true)
+  await screen.findByText('All configured native engines')
+  expect((screen.getByLabelText('All configured native engines') as HTMLInputElement).checked).toBe(true)
   act(() => { fireEvent.click(screen.getByLabelText('Choose engines')) })
   expect((screen.getByLabelText('Gemini') as HTMLInputElement).checked).toBe(true)
   act(() => { fireEvent.click(screen.getByRole('button', { name: 'Save engines' })) })
   await waitFor(() => expect(onSave).toHaveBeenCalledWith({ providers: ['gemini'], providerModels: {} }))
+})
+
+test('project navigation cannot carry an unsaved research or model draft into another project', async () => {
+  const restore = mockFetch(() => jsonResponse(settings))
+  onTestFinished(restore)
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const onSave = vi.fn().mockResolvedValue(undefined)
+  const renderProject = (name: string) => (
+    <QueryClientProvider client={client}>
+      <ProjectEngineSettingsSection project={{ name, providers: ['gemini'], providerModels: {}, researchProvider: null }} onSave={onSave} />
+    </QueryClientProvider>
+  )
+  const view = render(renderProject('first'))
+  await screen.findByLabelText('Research route')
+  fireEvent.change(screen.getByLabelText('Research route'), { target: { value: 'route:research-gateway' } })
+  fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'gemini-2.5-pro' } })
+  view.rerender(renderProject('second'))
+  await waitFor(() => expect((screen.getByLabelText('Research route') as HTMLSelectElement).value).toBe(''))
+  expect((screen.getByLabelText('Model') as HTMLSelectElement).value).toBe('__inherit__')
+  fireEvent.click(screen.getByRole('button', { name: 'Save engines' }))
+  await waitFor(() => expect(onSave).toHaveBeenCalledWith({ providers: ['gemini'], providerModels: {} }))
+})
+
+test('research selection stays disabled until the settings save settles', async () => {
+  let finish: (() => void) | undefined
+  const onSave = vi.fn(() => new Promise<void>(resolve => { finish = resolve }))
+  renderSection(onSave)
+  await screen.findByLabelText('Research route')
+  fireEvent.change(screen.getByLabelText('Research route'), { target: { value: 'route:research-gateway' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save engines' }))
+  expect((screen.getByLabelText('Research route') as HTMLSelectElement).disabled).toBe(true)
+  await act(async () => { finish?.() })
+  expect((screen.getByLabelText('Research route') as HTMLSelectElement).disabled).toBe(false)
 })
 
 test('inherit deletes only the selected provider override and custom models remain editable', async () => {
@@ -97,20 +125,41 @@ test('save drops overrides for engines that are not selected', async () => {
   await waitFor(() => expect(onSave).toHaveBeenCalledWith({ providers: ['gemini'], providerModels: { gemini: 'gemini-2.5-pro' } }))
 })
 
-test('migrates native route selections to legacy providers while retaining verified route IDs', async () => {
+test('migrates native route selections and model overrides to legacy providers', async () => {
   const onSave = renderSection(undefined, {
     name: 'demo', providers: ['native:gemini'], providerModels: { 'native:gemini': 'gemini-2.5-pro' }, researchProvider: 'native:gemini',
   })
   await screen.findByLabelText('Choose engines')
   expect((screen.getByLabelText('Gemini') as HTMLInputElement).checked).toBe(true)
-  fireEvent.click(screen.getByLabelText('Verified gateway'))
   fireEvent.change(screen.getByLabelText('Research route'), { target: { value: 'gemini' } })
   fireEvent.click(screen.getByRole('button', { name: 'Save engines' }))
   await waitFor(() => expect(onSave).toHaveBeenLastCalledWith({
-    providers: ['gemini', 'route:verified-gateway'],
+    providers: ['gemini'],
     providerModels: { gemini: 'gemini-2.5-pro' },
     researchProvider: 'gemini',
   }))
+})
+
+test('does not let a configured route self-assert sweep eligibility', async () => {
+  renderSection(undefined, { name: 'demo', providers: ['gemini'], providerModels: {} }, {
+    ...settings,
+    engineRoutes: [
+      ...settings.engineRoutes,
+      {
+        id: 'route:claimed',
+        label: 'Claimed measurement',
+        connectionId: 'gateway:research',
+        modelId: 'claimed/model',
+        revision: 1,
+        source: 'configured' as const,
+        capabilities: { kind: 'verified-measurement' as const, retrieval: true, citations: true, location: true, servedModel: true, fallback: 'disabled' as const },
+      },
+    ],
+  })
+
+  const control = await screen.findByLabelText('Claimed measurement') as HTMLInputElement
+  expect(control.disabled).toBe(true)
+  expect(screen.getAllByText('Text-only: Aero and research')).toHaveLength(2)
 })
 
 test('keeps text-only routes unavailable to sweeps and permits them only as a research route', async () => {
@@ -120,7 +169,7 @@ test('keeps text-only routes unavailable to sweeps and permits them only as a re
   await screen.findByLabelText('Research gateway')
   const textOnlySweepControl = screen.getByLabelText('Research gateway') as HTMLInputElement
   expect(textOnlySweepControl.disabled).toBe(true)
-  expect(screen.getByText('Text-only — research only')).toBeTruthy()
+  expect(screen.getByText('Text-only: Aero and research')).toBeTruthy()
 
   fireEvent.change(screen.getByLabelText('Research route'), { target: { value: 'route:research-gateway' } })
   fireEvent.click(screen.getByRole('button', { name: 'Save engines' }))
@@ -131,22 +180,22 @@ test('keeps text-only routes unavailable to sweeps and permits them only as a re
   }))
 })
 
-test('keeps selected stale sweep and research routes visible without silently clearing them', async () => {
+test('keeps a stale research route visible without silently clearing it', async () => {
   const onSave = renderSection(
     undefined,
-    { name: 'demo', providers: ['route:verified-gateway'], providerModels: {}, researchProvider: 'route:research-gateway' },
+    { name: 'demo', providers: ['gemini'], providerModels: {}, researchProvider: 'route:research-gateway' },
     { ...settings, engineConnections: [] },
   )
 
-  await screen.findByLabelText('Verified gateway')
-  expect((screen.getByLabelText('Verified gateway') as HTMLInputElement).checked).toBe(true)
-  expect(screen.getAllByText('Connection missing')).toHaveLength(2)
+  await screen.findByLabelText('Gemini')
+  expect((screen.getByLabelText('Gemini') as HTMLInputElement).checked).toBe(true)
+  expect(screen.getAllByText('Connection missing')).toHaveLength(1)
   expect((screen.getByLabelText('Research route') as HTMLSelectElement).value).toBe('route:research-gateway')
   expect(screen.getByText(/saved research route is unavailable/i)).toBeTruthy()
 
   fireEvent.click(screen.getByRole('button', { name: 'Save engines' }))
   await waitFor(() => expect(onSave).toHaveBeenLastCalledWith({
-    providers: ['route:verified-gateway'],
+    providers: ['gemini'],
     providerModels: {},
   }))
   expect((screen.getByLabelText('Research route') as HTMLSelectElement).value).toBe('route:research-gateway')

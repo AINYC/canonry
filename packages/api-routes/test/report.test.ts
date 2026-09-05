@@ -1768,6 +1768,8 @@ describe('GET /api/v1/projects/:name/report', () => {
     insertSnapshot(ctx.db, runId, kw, { provider: 'gemini', citationState: 'cited' })
     insertSnapshot(ctx.db, runId, kw, { provider: 'openai', citationState: 'not-cited' })
     insertSnapshot(ctx.db, runId, kw, { provider: 'cdp:chatgpt', citationState: 'not-cited' })
+    insertSnapshot(ctx.db, runId, kw, { provider: 'route:custom-gateway' })
+    insertSnapshot(ctx.db, runId, kw, { provider: 'route:unknown-policy' })
 
     await ctx.app.ready()
     const res = await ctx.app.inject({ method: 'GET', url: '/api/v1/projects/loc-meta/report' })
@@ -1786,6 +1788,8 @@ describe('GET /api/v1/projects/:name/report', () => {
     expect(byProvider['gemini']?.treatment).toBe('prompt')
     expect(byProvider['openai']?.treatment).toBe('request-param')
     expect(byProvider['cdp:chatgpt']?.treatment).toBe('browser-geo')
+    expect(byProvider['route:custom-gateway']?.treatment).toBe('ignored')
+    expect(byProvider['route:unknown-policy']?.treatment).toBe('ignored')
   })
 
   test('meta.location is null when the latest run had no location attached', async () => {

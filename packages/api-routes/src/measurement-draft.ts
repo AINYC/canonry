@@ -196,6 +196,22 @@ function draftModels(project: ProjectRow, providers: readonly string[]): Record<
   return models
 }
 
+function assertNoTextOnlyEngineRoutes(authoring: MeasurementDraftAuthoring): void {
+  const selected = [
+    ...authoring.defaultContext.providers,
+    ...authoring.assignments.flatMap(assignment => assignment.contextOverride?.providers ?? []),
+  ]
+  const unsupportedProviders = [...new Set(selected
+    .map(provider => provider.trim().toLowerCase())
+    .filter(provider => provider.startsWith('route:')))]
+    .sort(compareText)
+  if (unsupportedProviders.length === 0) return
+  throw validationError(
+    `Configured engine route(s) ${unsupportedProviders.join(', ')} are text-only and cannot run an answer-visibility measurement plan.`,
+    { unsupportedProviders },
+  )
+}
+
 function emptyAuthoring(project: ProjectRow, opts: MeasurementDraftRoutesOptions): MeasurementDraftAuthoring {
   const providers = draftProviderNames(project, opts)
   const models = draftModels(project, providers)
@@ -231,12 +247,35 @@ function seedAuthoring(
 
   if (active.schemaVersion === 2) {
     const assignments = new Map<string, MeasurementDraftAssignment>()
+    const nodesByKey = new Map(active.executionNodes.map(node => [node.stableKey, node]))
     for (const assignment of active.assignments) {
-      assignments.set(`${assignment.targetKey} ${assignment.queryId}`, {
+      const node = nodesByKey.get(assignment.executionNodeKey)
+      if (!node) throw validationError(`The published assignment references missing execution node "${assignment.executionNodeKey}".`)
+      const key = `${assignment.targetKey} ${assignment.queryId}`
+      const existing = assignments.get(key)
+      const providers = [...node.context.providers].sort(compareText)
+      const models = { ...node.context.models }
+      const locations = node.context.location ? [node.context.location.label] : []
+      if (existing) {
+        const prior = existing.contextOverride!
+        if (existing.queryClass !== assignment.queryClass
+          || canonicalJson({ providers: prior.providers, models: prior.models }) !== canonicalJson({ providers, models })
+          || (prior.locations!.length === 0) !== (locations.length === 0)) {
+          throw validationError(
+            `Published Target "${assignment.targetKey}" uses incompatible contexts for query "${assignment.queryId}". A draft cannot merge these into one assignment.`,
+          )
+        }
+        prior.locations = [...new Set([...prior.locations!, ...locations])].sort(compareText)
+        continue
+      }
+      assignments.set(key, {
         targetKey: assignment.targetKey,
         queryId: assignment.queryId,
         queryClass: assignment.queryClass,
         classificationSource: 'operator',
+        // Every field is explicit, including an empty model map or no-location
+        // list: today's project defaults must not rewrite a frozen assignment.
+        contextOverride: { providers, models, locations },
       })
     }
     return {
@@ -309,6 +348,19 @@ function seedAuthoring(
   }
 }
 
+function assertPinLocationsPreserved(project: ProjectRow, plan: MeasurementPlanV2): void {
+  const currentByLabel = new Map(project.locations.map(location => [location.label, location]))
+  for (const node of plan.executionNodes) {
+    const frozen = node.context.location
+    if (!frozen) continue
+    const current = currentByLabel.get(frozen.label)
+    if (current && canonicalJson(current) === canonicalJson(frozen)) continue
+    throw validationError(
+      `Published location "${frozen.label}" differs from the project's configured locations. Create and review a measurement draft before pinning a competitor.`,
+    )
+  }
+}
+
 function pinCompetitorInAuthoring(
   authoring: MeasurementDraftAuthoring,
   input: MeasurementDraftPinCompetitorRequest,
@@ -360,6 +412,7 @@ function authoringForCompile(
   project: ProjectRow,
   opts: MeasurementDraftRoutesOptions,
 ): MeasurementDraftAuthoring {
+  assertNoTextOnlyEngineRoutes(authoring)
   if (authoring.defaultContext.providers.length > 0) return authoring
   const providers = draftProviderNames(project, opts)
   if (providers.length === 0) return authoring
@@ -688,6 +741,7 @@ export async function measurementDraftRoutes(app: FastifyInstance, opts: Measure
       if (!activeGroup) throw validationError(`Unknown Advanced Measurement group "${input.groupKey}".`)
       const row = draftRow(tx, gate.project.id)
       const draftCreated = row === null
+      if (draftCreated) assertPinLocationsPreserved(gate.project, activePlan)
       const before = row
         ? parseStoredAuthoring(row.authoringJson)
         : seedAuthoring(gate.project, activePlan, actionContextFor(app.db, gate.project), opts)

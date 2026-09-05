@@ -10,6 +10,7 @@ import {
   type ContentBriefDto,
   type ContentTargetRowDto,
   type DemandSource,
+  type EngineConnectionConfig,
 } from '@ainyc/canonry-contracts'
 import type {
   ExplainContentRecommendationFn,
@@ -20,7 +21,9 @@ import type {
   SynthesizeContentBriefResult,
 } from '@ainyc/canonry-api-routes'
 import type { CanonryConfig } from '../config.js'
+import type { DatabaseClient } from '@ainyc/canonry-db'
 import { runEngineRouteText } from '../engine-route-text-execution.js'
+import { buildOpenAiCompatibleRouteModel, resolveEngineConnectionTextApiKey } from '../engine-routes.js'
 import {
   agentProviderApiKeyEnvVar,
   agentProvidersByPriority,
@@ -29,7 +32,6 @@ import {
   detectAeroProvider,
   isAeroProviderConfigured,
   resolveApiKeyFor,
-  resolveAeroProviderModel,
   resolveModelForCapability,
   type AeroProviderId,
 } from './providers.js'
@@ -170,26 +172,32 @@ function pickExplainProvider(
   )
 }
 
-function resolveTextWorkModel(
+function resolveTextWorkRuntime(
   provider: AeroProviderId,
   config: CanonryConfig,
   modelOverride?: string,
 ) {
-  return isAgentProviderId(provider)
-    ? resolveModelForCapability(provider, 'analyze', modelOverride)
-    : resolveAeroProviderModel(provider, config, modelOverride)
+  if (isAgentProviderId(provider)) {
+    return { model: resolveModelForCapability(provider, 'analyze', modelOverride), apiKey: resolveApiKeyFor(provider, config), connection: undefined }
+  }
+  const route = configuredTextRoute(config, provider)
+  if (!route) throw new Error(`Configured text route '${provider}' is not available on this Canonry instance.`)
+  const apiKey = resolveEngineConnectionTextApiKey(route.connection)
+  if (!apiKey) throw new Error(`Configured text route '${provider}' requires an API key.`)
+  return {
+    model: buildOpenAiCompatibleRouteModel({ ...route, config: { model: modelOverride } }),
+    apiKey,
+    connection: route.connection,
+  }
 }
 
 /** Native providers keep their established direct path; routes share a connection gate. */
 function runTextWork<T>(
-  provider: AeroProviderId,
-  config: CanonryConfig,
+  connection: EngineConnectionConfig | undefined,
   task: () => Promise<T>,
+  db?: DatabaseClient,
 ): Promise<T> {
-  if (isAgentProviderId(provider)) return task()
-  const route = configuredTextRoute(config, provider)
-  if (!route) throw new Error(`Configured text route '${provider}' is not available on this Canonry instance.`)
-  return runEngineRouteText(route.connection, task)
+  return connection ? runEngineRouteText(connection, task, { db }) : task()
 }
 
 /**
@@ -202,11 +210,11 @@ function runTextWork<T>(
  * One-shot synthesis, no tool use, cheap.
  */
 export function createRecommendationExplainer(
-  opts: { config: CanonryConfig },
+  opts: { config: CanonryConfig; db?: DatabaseClient },
 ): ExplainContentRecommendationFn {
   return async (input: ExplainContentRecommendationInput): Promise<ExplainContentRecommendationResult> => {
     const provider = pickExplainProvider(opts.config, input.providerOverride)
-    const model = resolveTextWorkModel(provider, opts.config, input.modelOverride)
+    const { model, apiKey, connection } = resolveTextWorkRuntime(provider, opts.config, input.modelOverride)
 
     const prompt = buildRecommendationPrompt({
       projectName: input.projectName,
@@ -224,8 +232,7 @@ export function createRecommendationExplainer(
         },
       ],
     }
-    const apiKey = resolveApiKeyFor(provider, opts.config)
-    const resp = await runTextWork(provider, opts.config, () => complete(model, context, apiKey ? { apiKey } : {}))
+    const resp = await runTextWork(connection, () => complete(model, context, apiKey ? { apiKey } : {}), opts.db)
     const parts = resp.content.filter((p): p is { type: 'text'; text: string } => p.type === 'text')
     const text = parts.map((p) => p.text).join('\n').trim()
     if (!text) {
@@ -325,12 +332,11 @@ function parseBrief(text: string, recommendation: ContentTargetRowDto): ContentB
  * then surface a clean 502 if still unparseable.
  */
 export function createRecommendationBriefSynthesizer(
-  opts: { config: CanonryConfig },
+  opts: { config: CanonryConfig; db?: DatabaseClient },
 ): SynthesizeContentBriefFn {
   return async (input: SynthesizeContentBriefInput): Promise<SynthesizeContentBriefResult> => {
     const provider = pickExplainProvider(opts.config, input.providerOverride)
-    const model = resolveTextWorkModel(provider, opts.config, input.modelOverride)
-    const apiKey = resolveApiKeyFor(provider, opts.config)
+    const { model, apiKey, connection } = resolveTextWorkRuntime(provider, opts.config, input.modelOverride)
     const prompt = buildBriefPrompt({
       projectName: input.projectName,
       canonicalDomain: input.canonicalDomain,
@@ -347,7 +353,7 @@ export function createRecommendationBriefSynthesizer(
         systemPrompt: BRIEF_SYSTEM_PROMPT,
         messages: [{ role: 'user', content: userContent, timestamp: Date.now() }],
       }
-      const resp = await runTextWork(provider, opts.config, () => complete(model, context, apiKey ? { apiKey } : {}))
+      const resp = await runTextWork(connection, () => complete(model, context, apiKey ? { apiKey } : {}), opts.db)
       totalCostDollars += Number.isFinite(resp.usage.cost.total) ? resp.usage.cost.total : 0
       const parts = resp.content.filter((p): p is { type: 'text'; text: string } => p.type === 'text')
       const text = parts.map((p) => p.text).join('\n').trim()

@@ -2,7 +2,7 @@ import crypto from 'node:crypto'
 import { and, eq } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { projects, competitors, schedules, notifications } from '@ainyc/canonry-db'
-import { forbidden, normalizeProjectAliases, normalizeProjectDomain, projectConfigSchema, registrableDomain, resolveConfigSpecQueries, SchedulableRunKinds, validationError, describeError } from '@ainyc/canonry-contracts'
+import { defaultSweepProviderNames, forbidden, normalizeProjectAliases, normalizeProjectDomain, projectConfigSchema, registrableDomain, resolveConfigSpecQueries, SchedulableRunKinds, validationError, describeError } from '@ainyc/canonry-contracts'
 import type { ProviderAdapterInfo } from './settings.js'
 import { pruneProviderModelsForProviders, validateProviderModels } from './provider-models.js'
 import { writeAuditLog } from './helpers.js'
@@ -39,9 +39,11 @@ export async function applyRoutes(app: FastifyInstance, opts?: ApplyRoutesOption
 
     const config = parsed.data
 
-    // Validate provider names against registered adapters
-    const validNames = opts?.providerAdapters?.map(adapter => adapter.name) ?? []
-    if (validNames.length) {
+    // The YAML project and its schedule use native measurement providers.
+    // Research has a broader catalog that may include text-only routes.
+    const validNames = defaultSweepProviderNames(opts?.providerAdapters?.map(adapter => adapter.name) ?? [])
+    const validatesProviderNames = opts?.providerAdapters !== undefined
+    if (validatesProviderNames) {
       const allProviders = [
         ...(config.spec.providers ?? []),
         ...(config.spec.schedule?.providers ?? []),

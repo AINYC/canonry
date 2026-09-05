@@ -227,6 +227,22 @@ const expectedToolNames = [
 ] as const
 
 describe('MCP tool registry', () => {
+  it('exposes optional requested-model competitor groups without widening read-only access', () => {
+    const tool = canonryMcpTools.find(candidate => candidate.name === 'canonry_competitor_landscape')!
+    expect(tool).toMatchObject({ access: 'read', tier: 'monitoring', annotations: { readOnlyHint: true } })
+    expect(getCanonryMcpTools('read-only').map(candidate => candidate.name)).toContain(tool.name)
+    const input = {
+      project: 'acme', groupBy: 'model', provider: 'openai', model: 'gpt-test',
+      groupKey: 'north', queryClass: 'non-brand', location: 'nyc',
+    }
+    expect(tool.inputSchema.parse(input)).toEqual(input)
+    expect(tool.inputSchema.safeParse({ project: 'acme', groupBy: 'model', scope: 'all-markets' }).success).toBe(true)
+    expect(tool.inputSchema.safeParse({ project: 'acme', model: 'gpt-test' }).success).toBe(false)
+    expect(tool.inputSchema.safeParse({ project: 'acme', groupBy: 'served-model' }).success).toBe(false)
+    expect(tool.description).toContain('exact requested model ID')
+    expect(schemaProperty(inputSchemaFor(tool.name), 'groupBy')).toMatchObject({ const: 'model' })
+  })
+
   it('defers Cloudflare connect to the local secret-safe CLI workflow', () => {
     expect(canonryMcpTools.some(tool => tool.name === 'canonry_traffic_connect_cloudflare')).toBe(false)
     expect(MCP_OPENAPI_OPERATION_CLASSIFICATIONS[
@@ -1189,6 +1205,12 @@ const handlerCases: HandlerCase[] = [
     input: { project: 'acme', window: '30d', scope: 'all-markets', provider: 'openai', queryClass: 'non-brand' },
     methods: ['getCompetitorLandscape'],
     expectedArgs: [['acme', { window: '30d', scope: 'all-markets', provider: 'openai', queryClass: 'non-brand' }]],
+  },
+  {
+    tool: 'canonry_competitor_landscape',
+    input: { project: 'acme', scope: 'all-markets', provider: 'openai', groupBy: 'model', model: 'gpt-test', queryClass: 'non-brand' },
+    methods: ['getCompetitorLandscape'],
+    expectedArgs: [['acme', { scope: 'all-markets', provider: 'openai', groupBy: 'model', model: 'gpt-test', queryClass: 'non-brand' }]],
   },
   { tool: 'canonry_search', input: { project: 'acme', q: 'rival' }, methods: ['searchProject'] },
   { tool: 'canonry_project_export', input: projectInput, methods: ['getExport'] },

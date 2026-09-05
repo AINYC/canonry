@@ -12,6 +12,7 @@ import { Button } from '../components/ui/button.js'
 import { Card } from '../components/ui/card.js'
 import { WriteButton } from '../components/shared/AccessControls.js'
 import { InfoTooltip } from '../components/shared/InfoTooltip.js'
+import { MentionShare } from '../components/project/MentionShare.js'
 import {
   CompetitorLandscape,
   type CompetitorLandscapeRow,
@@ -1819,6 +1820,7 @@ function ProjectPageContent({
     path: { name: projectName },
     query: {
       window: competitorLandscapeWindow,
+      ...(activeMeasurementPlanSchemaVersion === 2 ? { queryClass: advancedMeasurementView.queryClass } : {}),
       ...(competitorLandscapeGroupKey ? { groupKey: competitorLandscapeGroupKey } : {}),
       ...(isAdvancedAllMarkets ? { scope: 'all-markets' as const } : {}),
     },
@@ -2436,6 +2438,40 @@ function ProjectPageContent({
             suggestedQueries={model.suggestedQueries}
             projectName={model.project.name}
           />
+
+          <section className="page-section-divider">
+            <div className="section-head section-head-inline">
+              <div>
+                <p className="eyebrow eyebrow-soft">Competitive</p>
+                <h2>Where competitors are winning</h2>
+                <p className="supporting-copy">Latest measured results against pinned competitors.</p>
+              </div>
+            </div>
+            <div className="aeo-hero competitive-summary">
+              <MentionShare
+                key={model.project.name}
+                summary={model.mentionShareSummary}
+                projectLabel={model.project.displayName || model.project.name}
+                competitorDomains={competitorDomains}
+              />
+              <div className="competitive-gaps">
+                <div className="aeo-hero-rows">
+                  <OverviewMetricRow
+                    label="Mention gaps"
+                    summary={model.mentionGaps}
+                    displayValue={<><span className="text-primary">{model.mentionGaps.value}</span><span className="text-faint"> / {model.queryCounts.total}</span></>}
+                    tooltip="Queries where a competitor was mentioned in the answer but your brand was not."
+                  />
+                  <OverviewMetricRow
+                    label="Citation gaps"
+                    summary={model.gapQueries}
+                    displayValue={<><span className="text-primary">{model.gapQueries.value}</span><span className="text-faint"> / {model.queryCounts.total}</span></>}
+                    tooltip="Queries where a competitor was cited as a source but you were not."
+                  />
+                </div>
+              </div>
+            </div>
+          </section>
 
           <section className="page-section-divider">
             <CompetitorLandscape

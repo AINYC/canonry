@@ -22,7 +22,10 @@ import {
   type EngineRouteConfig,
   type LlmCapability,
 } from '@ainyc/canonry-contracts'
-import { buildOpenAiCompatibleRouteModel } from '../engine-routes.js'
+import {
+  buildOpenAiCompatibleRouteModel,
+  isEngineConnectionTextReady,
+} from '../engine-routes.js'
 
 export type { AeroProviderId } from '@ainyc/canonry-contracts'
 
@@ -338,6 +341,11 @@ export function configuredTextRoute(
   return configuredTextRoutes(config).find((entry) => entry.route.id === provider)
 }
 
+/** True when the connection has a credential or explicitly permits keyless text calls. */
+export function isConfiguredTextRouteReady(entry: ConfiguredTextRoute): boolean {
+  return isEngineConnectionTextReady(entry.connection)
+}
+
 /** Accept a native ID or a syntactically valid configured-route ID. */
 export function coerceAeroProvider(value: string | undefined): AeroProviderId | undefined {
   if (!value || !isAeroProviderId(value)) return undefined
@@ -349,7 +357,8 @@ export function detectAeroProvider(config: AeroProviderConfig): AeroProviderId |
   for (const provider of agentProvidersByPriority()) {
     if (resolveApiKeyFor(provider, config)) return provider
   }
-  return configuredTextRoutes(config)[0]?.route.id as AeroProviderId | undefined
+  return configuredTextRoutes(config)
+    .find(isConfiguredTextRouteReady)?.route.id as AeroProviderId | undefined
 }
 
 export function defaultModelForAeroProvider(
@@ -369,9 +378,12 @@ export function resolveAeroProviderModel(
   provider: AeroProviderId,
   config: AeroProviderConfig,
   modelId?: string,
+  routeSnapshot?: ConfiguredTextRoute,
 ): Model<never> {
   if (isAgentProviderId(provider)) return resolveModelForProvider(provider, modelId)
-  const entry = configuredTextRoute(config, provider)
+  const entry = routeSnapshot?.route.id === provider
+    ? routeSnapshot
+    : configuredTextRoute(config, provider)
   if (!entry) {
     throw new Error(`Configured text route '${provider}' is not available on this Canonry instance.`)
   }
@@ -386,14 +398,17 @@ export function resolveAeroProviderModel(
   }) as Model<never>
 }
 
-/** A route can be usable without an API key (for example a local gateway). */
+/** LiteLLM/custom routes may be intentionally keyless; hosted gateways may not. */
 export function isAeroProviderConfigured(
   provider: AeroProviderId,
   config: AeroProviderConfig,
 ): boolean {
   return isAgentProviderId(provider)
     ? resolveApiKeyFor(provider, config) !== undefined
-    : configuredTextRoute(config, provider) !== undefined
+    : (() => {
+        const route = configuredTextRoute(config, provider)
+        return route !== undefined && isConfiguredTextRouteReady(route)
+      })()
 }
 
 /** Enum constant — use `AgentProviders.claude` instead of the literal `'claude'`. */
@@ -671,21 +686,19 @@ export function buildAgentProvidersResponse(config: {
       keySource: source?.source ?? null,
     }
   })
-  const routeProviders: AgentProviderOption[] = configuredTextRoutes(config).map(({ route, connection }) => ({
-    // `configuredTextRoutes` retained only validated `route:*` ids above.
-    id: route.id as AeroProviderId,
-    label: route.label,
-    defaultModel: route.modelId,
-    // `configured` must mean the same thing it means for a native provider one
-    // block up: a credential is present. Reporting every resolved connection as
-    // configured let a keyless gateway render with no 'Needs setup' badge (the
-    // operator only learned at a 401 mid-stream) and, because the doctor check
-    // titled 'Agent provider keys' counts this flag, reported OK on an install
-    // holding zero LLM credentials. `keySource` already carried the truth and
-    // no surface rendered it.
-    configured: Boolean(connection.apiKey),
-    keySource: connection.apiKey ? 'config' : null,
-  }))
+  const routeProviders: AgentProviderOption[] = configuredTextRoutes(config).map((entry) => {
+    const { route, connection } = entry
+    return {
+      // `configuredTextRoutes` retained only validated `route:*` ids above.
+      id: route.id as AeroProviderId,
+      label: route.label,
+      defaultModel: route.modelId,
+      // LiteLLM/custom gateways can be intentionally unauthenticated. Hosted
+      // presets remain unconfigured until their connection has a credential.
+      configured: isConfiguredTextRouteReady(entry),
+      keySource: connection.apiKey ? 'config' : null,
+    }
+  })
   const providers = [...nativeProviders, ...routeProviders]
   const firstConfigured = detectAeroProvider(config)
   return {

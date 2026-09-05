@@ -30,6 +30,8 @@ export interface CompetitorLandscapeHistorySnapshot {
   citedDomains: readonly string[]
   /** Captured source URLs. Null means the row predates URL capture. */
   citedUrls: readonly string[] | null
+  /** Advanced competitors frozen into this snapshot's run revision only. */
+  frozenCompetitors?: readonly CompetitorLandscapeIdentity[]
 }
 
 export interface CompetitorLandscapeIdentity {
@@ -48,13 +50,7 @@ export interface CompetitorLandscapeHistoryOptions {
   project: CompetitorLandscapeProjectIdentity
   /** Explicit user-managed competitors. They always remain visible. */
   pinned: readonly CompetitorLandscapeIdentity[]
-  /**
-   * Frozen Advanced Measurement competitors from the selected historical runs.
-   * They are eligible direct competitors even when discovery never classified
-   * their domain or the answer only mentioned (rather than cited) them.
-   */
-  historicalDirect?: readonly CompetitorLandscapeIdentity[]
-  /** Discovery's persisted domain type. This read never invokes discovery/LLM work. */
+  /** Discovery's persisted exact-host type. This read never invokes discovery/LLM work. */
   classifications: ReadonlyMap<string, CompetitorLandscapeSurfaceClass>
   snapshots: readonly CompetitorLandscapeHistorySnapshot[]
   /** Capped evidence samples keep the response bounded. */
@@ -112,6 +108,7 @@ interface MutableRow {
 interface Candidate {
   domain: string
   label: string
+  aliases: readonly string[]
   surfaceClass: CompetitorLandscapeSurfaceClass
   pinned: boolean
   matcher: BrandAliasMatcher
@@ -126,13 +123,15 @@ export function buildCompetitorLandscapeHistory(
   options: CompetitorLandscapeHistoryOptions,
 ): CompetitorLandscapeHistoryResult {
   const sampleUrlLimit = options.sampleUrlLimit ?? 3
-  const projectDomains = normalizedDomains(options.project.domains)
-  const projectDomain = normalizeDomain(options.project.domain) ?? options.project.domain
+  const projectDomain = hostOf(options.project.domain) ?? options.project.domain
+  // Ownership is an exact-host/subdomain boundary. Reducing an owned host to
+  // eTLD+1 first would claim its parent and every sibling as project evidence.
+  const projectDomains = normalizedHosts([projectDomain, ...options.project.domains])
   const pinned = new Map<string, Candidate>()
   for (const identity of options.pinned) {
     const domain = normalizeDomain(identity.domain)
-    if (!domain || hostMatchesAnyDomain(domain, projectDomains)) continue
-    pinned.set(domain, candidateFor({
+    if (!domain || hostMatchesAnyDomain(identity.domain, projectDomains)) continue
+    putCandidate(pinned, candidateFor({
       domain,
       label: identity.label,
       aliases: identity.aliases,
@@ -145,37 +144,48 @@ export function buildCompetitorLandscapeHistory(
   // a stored discovery classification or frozen market competitor can be named
   // in answer prose without being cited. We suppress zero-activity observed rows
   // when finalizing, while pins deliberately remain visible at zero.
-  const observed = new Map<string, Candidate>()
-  const others = new Map<string, Candidate>()
-  for (const [classifiedDomain, surfaceClass] of options.classifications) {
-    const domain = normalizeDomain(classifiedDomain)
-    if (!domain || surfaceClass !== 'direct-competitor' || hostMatchesAnyDomain(domain, projectDomains) || pinned.has(domain)) continue
-    observed.set(domain, candidateFor({
+  const groupedClassifications = groupClassifications(new Map(
+    [...options.classifications].filter(([host]) => !hostMatchesAnyDomain(host, projectDomains)),
+  ))
+  const classifiedDirect = new Map<string, Candidate>()
+  for (const [domain, surfaceClass] of groupedClassifications) {
+    if (surfaceClass !== 'direct-competitor' || hostMatchesAnyDomain(domain, projectDomains) || pinned.has(domain)) continue
+    putCandidate(classifiedDirect, candidateFor({
       domain,
       label: brandLabelFromDomain(domain) || domain,
       pinned: false,
       surfaceClass,
     }))
   }
-  for (const identity of options.historicalDirect ?? []) {
-    const domain = normalizeDomain(identity.domain)
-    if (!domain || hostMatchesAnyDomain(domain, projectDomains) || pinned.has(domain)) continue
-    observed.set(domain, candidateFor({
-      domain,
-      label: identity.label,
-      aliases: identity.aliases,
-      pinned: false,
-      surfaceClass: 'direct-competitor',
-    }))
+
+  const observed = new Map<string, Candidate>(classifiedDirect)
+  const others = new Map<string, Candidate>()
+  const frozenBySnapshot = new Map<string, Map<string, Candidate>>()
+  for (const snapshot of options.snapshots) {
+    const frozen = new Map<string, Candidate>()
+    for (const identity of snapshot.frozenCompetitors ?? []) {
+      const domain = normalizeDomain(identity.domain)
+      if (!domain || hostMatchesAnyDomain(identity.domain, projectDomains)) continue
+      const candidate = candidateFor({
+        domain,
+        label: identity.label,
+        aliases: identity.aliases,
+        pinned: false,
+        surfaceClass: 'direct-competitor',
+      })
+      putCandidate(frozen, candidate)
+      if (!pinned.has(domain)) putCandidate(observed, candidate)
+    }
+    if (frozen.size > 0) frozenBySnapshot.set(snapshot.id, frozen)
   }
   for (const snapshot of options.snapshots) {
     for (const source of sourcesOf(snapshot)) {
       const domain = normalizeDomain(source)
-      if (!domain || hostMatchesAnyDomain(domain, projectDomains) || pinned.has(domain)) continue
+      if (!domain || hostMatchesAnyDomain(source, projectDomains) || pinned.has(domain)) continue
       // Frozen/direct candidates already own this domain. A missing discovery
       // classification must not demote their citation into otherSources.
       if (observed.has(domain)) continue
-      const surfaceClass = options.classifications.get(domain) ?? 'unknown'
+      const surfaceClass = surfaceClassForSource(source, domain, options.classifications, groupedClassifications)
       const candidate = candidateFor({
         domain,
         label: brandLabelFromDomain(domain) || domain,
@@ -183,9 +193,10 @@ export function buildCompetitorLandscapeHistory(
         surfaceClass,
       })
       if (surfaceClass === 'direct-competitor') {
-        if (!observed.has(domain)) observed.set(domain, candidate)
+        putCandidate(classifiedDirect, candidate)
+        putCandidate(observed, candidate)
       } else {
-        others.set(domain, candidate)
+        putCandidate(others, candidate)
       }
     }
   }
@@ -212,7 +223,14 @@ export function buildCompetitorLandscapeHistory(
     if (text !== '') {
       answeredResults++
       if (snapshot.projectMentioned) recordMention(projectRow, snapshot.createdAt)
-      for (const candidate of [...pinned.values(), ...observed.values()]) {
+      const eligibleCandidates = new Map<string, Candidate>()
+      for (const candidate of [...pinned.values(), ...classifiedDirect.values()]) {
+        putCandidate(eligibleCandidates, candidate)
+      }
+      for (const candidate of frozenBySnapshot.get(snapshot.id)?.values() ?? []) {
+        putCandidate(eligibleCandidates, candidate)
+      }
+      for (const candidate of eligibleCandidates.values()) {
         if (matcherMatchesText(candidate.matcher, text)) {
           recordMention(candidateRows.get(candidate.domain)!, snapshot.createdAt)
         }
@@ -226,7 +244,7 @@ export function buildCompetitorLandscapeHistory(
     for (const source of sources) {
       const normalized = normalizeDomain(source)
       if (!normalized) continue
-      if (hostMatchesAnyDomain(normalized, projectDomains)) {
+      if (hostMatchesAnyDomain(source, projectDomains)) {
         if (!seenCitationDomains.has(projectDomain)) {
           seenCitationDomains.add(projectDomain)
           recordCitation(projectRow, snapshot.createdAt, source, sampleUrlLimit)
@@ -268,9 +286,9 @@ export function buildCompetitorLandscapeHistory(
   }
 }
 
-function normalizedDomains(domains: readonly string[]): string[] {
+function normalizedHosts(domains: readonly string[]): string[] {
   return domains.flatMap(domain => {
-    const normalized = normalizeDomain(domain)
+    const normalized = hostOf(domain)
     return normalized ? [normalized] : []
   })
 }
@@ -287,15 +305,69 @@ function candidateFor(input: {
   pinned: boolean
 }): Candidate {
   const host = hostOf(input.domain)
-  const aliases = [
+  const identityAliases = [...new Set(input.aliases ?? [])]
+  const matcherAliases = [
     input.label,
-    ...(input.aliases ?? []),
+    ...identityAliases,
     brandLabelFromDomain(input.domain),
     host,
   ].filter((value): value is string => (
     typeof value === 'string' && brandKeyFromText(value).length >= MIN_BRAND_ALIAS_KEY_LENGTH
   ))
-  return { ...input, matcher: compileBrandAliases(aliases) }
+  return { ...input, aliases: identityAliases, matcher: compileBrandAliases(matcherAliases) }
+}
+
+function putCandidate(target: Map<string, Candidate>, candidate: Candidate): void {
+  const existing = target.get(candidate.domain)
+  target.set(candidate.domain, existing ? mergeCandidates(existing, candidate) : candidate)
+}
+
+function mergeCandidates(primary: Candidate, additional: Candidate): Candidate {
+  return candidateFor({
+    domain: primary.domain,
+    label: primary.label,
+    aliases: [...new Set([...primary.aliases, additional.label, ...additional.aliases])],
+    surfaceClass: preferredSurfaceClass(primary.surfaceClass, additional.surfaceClass),
+    pinned: primary.pinned || additional.pinned,
+  })
+}
+
+function groupClassifications(
+  classifications: ReadonlyMap<string, CompetitorLandscapeSurfaceClass>,
+): Map<string, CompetitorLandscapeSurfaceClass> {
+  const grouped = new Map<string, CompetitorLandscapeSurfaceClass>()
+  for (const [classifiedHost, surfaceClass] of classifications) {
+    const domain = normalizeDomain(classifiedHost)
+    if (!domain) continue
+    grouped.set(domain, preferredSurfaceClass(grouped.get(domain), surfaceClass))
+  }
+  return grouped
+}
+
+function surfaceClassForSource(
+  source: string,
+  domain: string,
+  exact: ReadonlyMap<string, CompetitorLandscapeSurfaceClass>,
+  grouped: ReadonlyMap<string, CompetitorLandscapeSurfaceClass>,
+): CompetitorLandscapeSurfaceClass {
+  const sourceHost = hostOf(source)
+  return (sourceHost ? exact.get(sourceHost) : undefined) ?? grouped.get(domain) ?? 'unknown'
+}
+
+const SURFACE_CLASS_PRIORITY: Record<CompetitorLandscapeSurfaceClass, number> = {
+  unknown: 0,
+  other: 1,
+  'editorial-media': 2,
+  'ota-aggregator': 3,
+  'direct-competitor': 4,
+}
+
+function preferredSurfaceClass(
+  current: CompetitorLandscapeSurfaceClass | undefined,
+  candidate: CompetitorLandscapeSurfaceClass,
+): CompetitorLandscapeSurfaceClass {
+  if (!current) return candidate
+  return SURFACE_CLASS_PRIORITY[candidate] > SURFACE_CLASS_PRIORITY[current] ? candidate : current
 }
 
 function emptyRow(

@@ -1773,7 +1773,7 @@ export const deleteApiV1ProjectsByNameCompetitorsById = <ThrowOnError extends bo
 /**
  * Get the stored competitor landscape
  *
- * Returns project pins first, then stored-discovery direct competitors and non-competitive cited sources. Mention share uses answer text only; citations remain a separate source-list signal. This is a stored-evidence read: it never calls a provider or classifier. Probe and non-terminal observations are excluded and counted explicitly. A groupKey scopes an Advanced Measurement market to its frozen v2 execution nodes and usage edges.
+ * Returns project pins first, then stored-discovery direct competitors and non-competitive cited sources. Mention share uses answer text only; citations remain a separate source-list signal. This is a stored-evidence read: it never calls a provider or classifier. Probe and non-terminal observations are excluded and counted explicitly. A groupKey scopes an Advanced Measurement market to its frozen v2 execution nodes and usage edges. Optional model filtering and groupBy=model apply to project, selected-market, and all-markets scopes; frozen competitor identities stay bound to their historical runs. The default response remains the combined landscape.
  */
 export const getApiV1ProjectsByNameAnalyticsCompetitors = <ThrowOnError extends boolean = false>(options: Options<GetApiV1ProjectsByNameAnalyticsCompetitorsData, ThrowOnError>) => {
     return (options.client ?? client).get<GetApiV1ProjectsByNameAnalyticsCompetitorsResponses, GetApiV1ProjectsByNameAnalyticsCompetitorsErrors, ThrowOnError>({
@@ -2167,7 +2167,7 @@ export const putApiV1SettingsProvidersByName = <ThrowOnError extends boolean = f
 /**
  * Create or update a generic gateway connection
  *
- * Stores an instance-global OpenAI-compatible connection. The credential may be supplied on write, is never returned, and an omitted apiKey preserves the stored credential.
+ * Stores an instance-global OpenAI-compatible connection. The credential may be supplied on write, is never returned, and an omitted apiKey preserves the stored credential. Send If-None-Match: * to create without replacing an existing connection.
  */
 export const putApiV1SettingsEngineConnectionsById = <ThrowOnError extends boolean = false>(options: Options<PutApiV1SettingsEngineConnectionsByIdData, ThrowOnError>) => {
     return (options.client ?? client).put<PutApiV1SettingsEngineConnectionsByIdResponses, PutApiV1SettingsEngineConnectionsByIdErrors, ThrowOnError>({
@@ -2189,7 +2189,7 @@ export const putApiV1SettingsEngineConnectionsById = <ThrowOnError extends boole
 /**
  * Create or update a generic text route
  *
- * The host owns route id, revision, source, and evidence capabilities. Configured generic routes remain text-only until a server-owned evidence adapter is implemented.
+ * The host owns route id, revision, source, and evidence capabilities. Configured generic routes remain text-only until a server-owned evidence adapter is implemented. Send If-None-Match: * to create without replacing an existing route.
  */
 export const putApiV1SettingsEngineRoutesById = <ThrowOnError extends boolean = false>(options: Options<PutApiV1SettingsEngineRoutesByIdData, ThrowOnError>) => {
     return (options.client ?? client).put<PutApiV1SettingsEngineRoutesByIdResponses, PutApiV1SettingsEngineRoutesByIdErrors, ThrowOnError>({

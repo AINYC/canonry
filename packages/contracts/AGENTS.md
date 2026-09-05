@@ -10,6 +10,7 @@ Shared DTOs, enums, Zod schemas, error codes, config validation, and **generic u
 |------|------|
 | `src/errors.ts` | `AppError` class, `ErrorCode` union (27 codes), factory functions, and `describeError` — the shared way to render a caught `unknown` as text. Prefer it over `err instanceof Error ? err.message : String(err)` everywhere: that `String()` branch renders a thrown plain object as `[object Object]`, and `@typescript-eslint/no-base-to-string` only catches it where the value is typed `unknown`. `describeError` keeps the Error and string paths identical, reports null/undefined as `'unknown error'`, JSON-serializes anything else, and never throws. Note the one place it must NOT be used: `integration-cloudflare-worker`'s generated Worker source is a template literal, so a call there would compile to a reference the edge bundle cannot resolve. |
 | `src/provider.ts` | `ProviderName`, `ProviderConfig`, `ProviderAdapter` interface |
+| `src/engine-routes.ts` | Generic OpenAI-compatible connection and route contracts. Persisted `route:*` entries are text-only; only host-owned `implicit-native` adapters can be measurement-ready. The removed OpenRouter preset and measurement-policy fields are rejected by strict schemas rather than downgraded. |
 | `src/project.ts` | Project DTOs and Zod schemas |
 | `src/run.ts` | Run and grounding source types |
 | `src/snapshot.ts` | Snapshot DTOs and diff types |
@@ -53,6 +54,17 @@ Shared DTOs, enums, Zod schemas, error codes, config validation, and **generic u
 3. Re-export from `src/index.ts`.
 4. Add a test file in `test/<topic>.test.ts` with happy path + edge cases (empty input, invalid input, boundary values).
 5. Migrate any inline duplicates you discover in the same change — don't leave duplication for "later."
+
+### Competitor model comparisons
+
+`competitorLandscapeQuerySchema` accepts optional `groupBy: model` and an exact
+requested `model` filter. A model filter requires `provider`. The optional
+`modelComparison` response groups stored evidence by provider and requested
+model, with independent counts and denominators. Null model identity remains
+unknown. `servedModels` carries separate upstream evidence; never substitute
+requested identity for missing served identity. Existing aggregate responses
+remain valid without these optional fields. Pins remain project/market identities,
+not model-specific records. The same contract covers Simple and Advanced scopes.
 
 ### Error factory functions
 

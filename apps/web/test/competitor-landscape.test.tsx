@@ -201,6 +201,19 @@ describe('CompetitorLandscape', () => {
     expect(screen.getAllByRole('table', { name: 'Competitor landscape' })).toHaveLength(1)
   })
 
+  test('does not present latest-only fallback counts as windowed history', () => {
+    renderLandscape({
+      landscape: undefined,
+      pinnedFallback: [row({ domain: 'saved.example', label: 'Saved pin', pinned: true, mentionCount: 91, citationCount: 42, shareOfVoice: 67 })],
+      error: 'Could not load observed competitors.',
+    })
+    const pinRow = screen.getByRole('rowheader', { name: 'Saved pin' }).closest('tr')!
+    expect(within(pinRow).getAllByText('Unavailable')).toHaveLength(3)
+    expect(pinRow.textContent).not.toContain('91')
+    expect(pinRow.textContent).not.toContain('42')
+    expect(pinRow.textContent).not.toContain('67.0%')
+  })
+
   test('states when ranked observed rows are truncated while pins remain complete', () => {
     renderLandscape({ landscape: landscape({ truncated: true }) })
 

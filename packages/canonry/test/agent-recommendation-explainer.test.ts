@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { ContentTargetRowDto } from '@ainyc/canonry-contracts'
+import { engineRouteConfigSchema, normalizeEngineConnection } from '@ainyc/canonry-contracts'
 import { resetSharedProviderExecutionGates } from '../src/provider-execution-gate.js'
+import { createClient, migrate, usageCounters } from '@ainyc/canonry-db'
 
 // Stub `complete` at module-load time so the explainer's `import { complete }`
 // resolves to the mock. Each test seeds `mockState.completeImpl` to control
@@ -347,6 +349,8 @@ describe('createRecommendationExplainer', () => {
   })
 
   it('shares one connection gate across recommendation routes', async () => {
+    const db = createClient(':memory:')
+    migrate(db)
     const config = {
       providers: {},
       engineRoutes: {
@@ -357,7 +361,7 @@ describe('createRecommendationExplainer', () => {
           protocol: 'openai-compatible' as const,
           baseUrl: 'http://127.0.0.1:43123/v1',
           apiKey: 'route-secret',
-          quota: { maxConcurrency: 1, maxRequestsPerMinute: 60, maxRequestsPerDay: 500 },
+          quota: { maxConcurrency: 1, maxRequestsPerMinute: 60, maxRequestsPerDay: 2 },
         }],
         routes: [
           { id: 'route:recommendation:first', label: 'First', connectionId: 'recommendation-gateway', modelId: 'first', revision: 1, source: 'configured' as const, capabilities: { kind: 'text-only' as const } },
@@ -365,7 +369,7 @@ describe('createRecommendationExplainer', () => {
         ],
       },
     }
-    const explainer = createRecommendationExplainer({ config })
+    const explainer = createRecommendationExplainer({ config, db })
     let active = 0
     let maxActive = 0
     mockState.completeImpl = async () => {
@@ -388,6 +392,27 @@ describe('createRecommendationExplainer', () => {
     ])
 
     expect(maxActive).toBe(1)
+    expect(db.select().from(usageCounters).get()).toMatchObject({ scope: 'connection:recommendation-gateway', count: 2 })
+    await expect(createRecommendationBriefSynthesizer({ config, db })({
+      projectId: 'third', projectName: 'acme', canonicalDomain: 'acme.com',
+      recommendation: makeRecommendation(), providerOverride: 'route:recommendation:first',
+    })).rejects.toThrow('Daily quota exceeded')
+    expect(mockState.callCount).toBe(2)
+  })
+
+  it('uses explicit keyless transport for explanations and briefs without forwarding native credentials', async () => {
+    vi.stubEnv('OPENAI_API_KEY', 'native-key-must-stay-native')
+    const connection = normalizeEngineConnection({ id: 'keyless-recommendation', label: 'Local', preset: 'litellm', quota: { maxConcurrency: 1, maxRequestsPerMinute: 60, maxRequestsPerDay: 10 } })
+    const route = engineRouteConfigSchema.parse({ id: 'route:keyless-recommendation', label: 'Local text', connectionId: connection.id, modelId: 'local-model', revision: 1, source: 'configured', capabilities: { kind: 'text-only' } })
+    const config = { providers: {}, engineRoutes: { connections: [connection], routes: [route] } }
+    const input = { projectId: 'p1', projectName: 'acme', canonicalDomain: 'acme.com', recommendation: makeRecommendation(), providerOverride: route.id }
+    mockState.completeImpl = async () => fakeAssistantMessage('A local explanation')
+    await expect(createRecommendationExplainer({ config })(input)).resolves.toMatchObject({ responseText: 'A local explanation' })
+    expect(mockState.lastCall?.model).toMatchObject({ headers: { Authorization: null } })
+    expect(mockState.lastCall?.opts).toEqual({ apiKey: 'canonry-unauthenticated-route' })
+    mockState.completeImpl = async () => fakeAssistantMessage(JSON.stringify({ angle: 'A', whyWinnable: 'B', schemaHookup: 'C', controllableSurfaceRationale: 'D' }))
+    await expect(createRecommendationBriefSynthesizer({ config })(input)).resolves.toMatchObject({ brief: { angle: 'A' } })
+    expect(mockState.lastCall?.opts).toEqual({ apiKey: 'canonry-unauthenticated-route' })
   })
 
   it('forwards the api key to pi-ai via options.apiKey', async () => {

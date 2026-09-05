@@ -6,7 +6,6 @@ import { providerQuotaPolicySchema } from './provider.js'
  * Presets only fill safe defaults; the persisted contract stays portable.
  */
 export const engineConnectionPresetSchema = z.enum([
-  'openrouter',
   'litellm',
   'vercel-ai-gateway',
   'custom-openai-compatible',
@@ -76,7 +75,6 @@ export const ENGINE_CONNECTION_PRESET_DEFAULTS: Readonly<Record<Exclude<EngineCo
   protocol: EngineConnectionProtocol
   baseUrl: string
 }>> = {
-  openrouter: { protocol: 'openai-compatible', baseUrl: 'https://openrouter.ai/api/v1' },
   litellm: { protocol: 'openai-compatible', baseUrl: 'http://localhost:4000' },
   'vercel-ai-gateway': { protocol: 'openai-compatible', baseUrl: 'https://ai-gateway.vercel.sh/v1' },
 }
@@ -208,7 +206,7 @@ export const engineRouteCapabilitiesSchema = z.discriminatedUnion('kind', [
 ])
 export type EngineRouteCapabilities = z.output<typeof engineRouteCapabilitiesSchema>
 
-export const engineRouteSourceSchema = z.enum(['configured', 'implicit-native', 'verified-adapter'])
+export const engineRouteSourceSchema = z.enum(['configured', 'implicit-native'])
 export type EngineRouteSource = z.output<typeof engineRouteSourceSchema>
 
 export const engineRouteConfigSchema = z.object({
@@ -280,8 +278,8 @@ export const engineRouteSummaryResponseSchema = z.object({
 export type EngineRouteSummaryResponse = z.output<typeof engineRouteSummaryResponseSchema>
 
 /**
- * A capability declaration is not evidence proof. Only native or server-owned
- * adapters may return measurement-ready; user-configured gateway routes stay
+ * A capability declaration is not evidence proof. Only host-owned native
+ * adapters may return measurement-ready; configured gateway routes stay
  * text-ready even if a hand-edited config claims otherwise.
  */
 export function engineRouteReadiness(
@@ -291,7 +289,7 @@ export function engineRouteReadiness(
   if (options.connectionAvailable === false) {
     return { state: 'unavailable', measurementReady: false }
   }
-  const verifiedOwner = route.source === 'implicit-native' || route.source === 'verified-adapter'
+  const verifiedOwner = route.source === 'implicit-native'
   const verified = route.capabilities.kind === 'verified-measurement'
   return verifiedOwner && verified
     ? { state: 'measurement-ready', measurementReady: true }
@@ -349,6 +347,11 @@ export function canonicalEngineRoutePolicyJson(
     source: route.source,
     capabilities: route.capabilities,
   })
+}
+
+/** Configured `route:*` providers are text-only and excluded from measurement rosters. */
+export function defaultSweepProviderNames(providerNames: readonly string[]): string[] {
+  return providerNames.filter(provider => !provider.trim().toLowerCase().startsWith('route:'))
 }
 
 /** Preserve a route identity across cosmetic edits; bump on an execution change. */

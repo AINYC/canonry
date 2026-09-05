@@ -2012,7 +2012,7 @@ export const getApiV1ProjectsByNameAnalyticsCompetitorsQueryKey = (options: Opti
 /**
  * Get the stored competitor landscape
  *
- * Returns project pins first, then stored-discovery direct competitors and non-competitive cited sources. Mention share uses answer text only; citations remain a separate source-list signal. This is a stored-evidence read: it never calls a provider or classifier. Probe and non-terminal observations are excluded and counted explicitly. A groupKey scopes an Advanced Measurement market to its frozen v2 execution nodes and usage edges.
+ * Returns project pins first, then stored-discovery direct competitors and non-competitive cited sources. Mention share uses answer text only; citations remain a separate source-list signal. This is a stored-evidence read: it never calls a provider or classifier. Probe and non-terminal observations are excluded and counted explicitly. A groupKey scopes an Advanced Measurement market to its frozen v2 execution nodes and usage edges. Optional model filtering and groupBy=model apply to project, selected-market, and all-markets scopes; frozen competitor identities stay bound to their historical runs. The default response remains the combined landscape.
  */
 export const getApiV1ProjectsByNameAnalyticsCompetitorsOptions = (options: Options<GetApiV1ProjectsByNameAnalyticsCompetitorsData>) => {
     return queryOptions({
@@ -2552,7 +2552,7 @@ export const putApiV1SettingsProvidersByNameMutation = (options?: Partial<Option
 /**
  * Create or update a generic gateway connection
  *
- * Stores an instance-global OpenAI-compatible connection. The credential may be supplied on write, is never returned, and an omitted apiKey preserves the stored credential.
+ * Stores an instance-global OpenAI-compatible connection. The credential may be supplied on write, is never returned, and an omitted apiKey preserves the stored credential. Send If-None-Match: * to create without replacing an existing connection.
  */
 export const putApiV1SettingsEngineConnectionsByIdMutation = (options?: Partial<Options<PutApiV1SettingsEngineConnectionsByIdData>>): UseMutationOptions<PutApiV1SettingsEngineConnectionsByIdResponse, PutApiV1SettingsEngineConnectionsByIdError, Options<PutApiV1SettingsEngineConnectionsByIdData>> => {
     const mutationOptions: UseMutationOptions<PutApiV1SettingsEngineConnectionsByIdResponse, PutApiV1SettingsEngineConnectionsByIdError, Options<PutApiV1SettingsEngineConnectionsByIdData>> = {
@@ -2571,7 +2571,7 @@ export const putApiV1SettingsEngineConnectionsByIdMutation = (options?: Partial<
 /**
  * Create or update a generic text route
  *
- * The host owns route id, revision, source, and evidence capabilities. Configured generic routes remain text-only until a server-owned evidence adapter is implemented.
+ * The host owns route id, revision, source, and evidence capabilities. Configured generic routes remain text-only until a server-owned evidence adapter is implemented. Send If-None-Match: * to create without replacing an existing route.
  */
 export const putApiV1SettingsEngineRoutesByIdMutation = (options?: Partial<Options<PutApiV1SettingsEngineRoutesByIdData>>): UseMutationOptions<PutApiV1SettingsEngineRoutesByIdResponse, PutApiV1SettingsEngineRoutesByIdError, Options<PutApiV1SettingsEngineRoutesByIdData>> => {
     const mutationOptions: UseMutationOptions<PutApiV1SettingsEngineRoutesByIdResponse, PutApiV1SettingsEngineRoutesByIdError, Options<PutApiV1SettingsEngineRoutesByIdData>> = {

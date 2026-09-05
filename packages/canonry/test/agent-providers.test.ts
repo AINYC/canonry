@@ -264,6 +264,61 @@ describe('buildAgentProvidersResponse', () => {
       baseUrl: 'http://127.0.0.1:43123/v1',
     })
   })
+
+  it('treats only explicitly keyless-capable presets as ready without a credential', () => {
+    const priors: Record<string, string | undefined> = {}
+    for (const provider of listAgentProviders()) {
+      const envName = agentProviderApiKeyEnvVar(provider)
+      priors[envName] = process.env[envName]
+      delete process.env[envName]
+    }
+    try {
+      const config = {
+        providers: {},
+        engineRoutes: {
+          connections: [
+            {
+              id: 'vercel', label: 'Vercel AI Gateway', preset: 'vercel-ai-gateway',
+              protocol: 'openai-compatible', baseUrl: 'https://ai-gateway.vercel.sh/v1',
+              quota: { maxConcurrency: 1, maxRequestsPerMinute: 60, maxRequestsPerDay: 500 },
+            },
+            {
+              id: 'local', label: 'Private LiteLLM', preset: 'litellm',
+              protocol: 'openai-compatible', baseUrl: 'http://litellm.internal:4000',
+              quota: { maxConcurrency: 1, maxRequestsPerMinute: 60, maxRequestsPerDay: 500 },
+            },
+          ],
+          routes: [
+            {
+              id: 'route:vercel', label: 'Hosted', connectionId: 'vercel',
+              modelId: 'openai/gpt-5', revision: 1, source: 'configured',
+              capabilities: { kind: 'text-only' },
+            },
+            {
+              id: 'route:local', label: 'Private', connectionId: 'local',
+              modelId: 'local-model', revision: 1, source: 'configured',
+              capabilities: { kind: 'text-only' },
+            },
+          ],
+        },
+      }
+      const result = buildAgentProvidersResponse(config)
+      expect(result.providers.find(provider => provider.id === 'route:vercel')).toMatchObject({
+        configured: false,
+        keySource: null,
+      })
+      expect(result.providers.find(provider => provider.id === 'route:local')).toMatchObject({
+        configured: true,
+        keySource: null,
+      })
+      expect(result.defaultProvider).toBe('route:local')
+    } finally {
+      for (const [key, value] of Object.entries(priors)) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+    }
+  })
 })
 
 describe('PROVIDER_MODELS capability tiers', () => {

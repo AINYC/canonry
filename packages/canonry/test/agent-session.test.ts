@@ -1,4 +1,6 @@
 import fs from 'node:fs'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
@@ -215,6 +217,69 @@ describe('createAeroSession — end-to-end with faux provider', () => {
     expect(buildApiKeyResolver(config)('route:gateway-gpt-5')).toBe('route-secret')
   })
 
+  it('runs an explicitly keyless route without leaking an env key or fake Authorization header', async () => {
+    let authorization: string | undefined
+    const server = createServer((request, response) => {
+      authorization = request.headers.authorization
+      request.resume()
+      response.writeHead(200, { 'content-type': 'text/event-stream' })
+      response.write(`data: ${JSON.stringify({
+        id: 'chatcmpl-local', object: 'chat.completion.chunk', created: 1, model: 'local-model',
+        choices: [{ index: 0, delta: { role: 'assistant', content: 'Local response.' }, finish_reason: null }],
+      })}\n\n`)
+      response.write(`data: ${JSON.stringify({
+        id: 'chatcmpl-local', object: 'chat.completion.chunk', created: 1, model: 'local-model',
+        choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+      })}\n\n`)
+      response.end('data: [DONE]\n\n')
+    })
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', resolve)
+    })
+    const address = server.address() as AddressInfo
+    const priorOpenAiKey = process.env.OPENAI_API_KEY
+    process.env.OPENAI_API_KEY = 'must-not-leak'
+    try {
+      const config = stubConfig({
+        providers: {},
+        engineRoutes: {
+          connections: [{
+            id: 'local', label: 'Local gateway', preset: 'custom-openai-compatible',
+            protocol: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`,
+            quota: { maxConcurrency: 1, maxRequestsPerMinute: 60, maxRequestsPerDay: 500 },
+          }],
+          routes: [{
+            id: 'route:local', label: 'Local model', connectionId: 'local', modelId: 'local-model',
+            revision: 1, source: 'configured', capabilities: { kind: 'text-only' },
+          }],
+        },
+      })
+      const agent = createAeroSession({
+        projectName: 'demo',
+        client: stubClient(),
+        config,
+        provider: 'route:local',
+        systemPromptOverride: 'You are a test agent.',
+      })
+
+      await agent.prompt('Hello')
+      await agent.waitForIdle()
+
+      expect(agent.getApiKey('route:local')).toBeTruthy()
+      expect(agent.getApiKey('route:local')).not.toBe('must-not-leak')
+      expect(authorization).toBeUndefined()
+      expect(agent.state.messages.at(-1)).toMatchObject({
+        role: 'assistant',
+        stopReason: 'stop',
+      })
+    } finally {
+      if (priorOpenAiKey === undefined) delete process.env.OPENAI_API_KEY
+      else process.env.OPENAI_API_KEY = priorOpenAiKey
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+    }
+  })
+
   it('shares a connection gate across Aero sessions using different text routes', async () => {
     const config = stubConfig({
       providers: {},
@@ -258,5 +323,43 @@ describe('createAeroSession — end-to-end with faux provider', () => {
     await Promise.all([first.waitForIdle(), second.waitForIdle()])
 
     expect(maxActive).toBe(1)
+  })
+
+  it('aborts an Aero turn queued behind another session without dispatching it', async () => {
+    const config = stubConfig({
+      providers: {},
+      engineRoutes: {
+        connections: [{
+          id: 'abort-gateway', label: 'Test gateway', preset: 'custom-openai-compatible',
+          protocol: 'openai-compatible', baseUrl: 'http://127.0.0.1:43123/v1', apiKey: 'route-secret',
+          quota: { maxConcurrency: 1, maxRequestsPerMinute: 60, maxRequestsPerDay: 500 },
+        }],
+        routes: [{ id: 'route:abort', label: 'Test', connectionId: 'abort-gateway', modelId: 'test', revision: 1, source: 'configured', capabilities: { kind: 'text-only' } }],
+      },
+    })
+    let dispatches = 0
+    let notifyStarted!: () => void
+    const started = new Promise<void>(resolve => { notifyStarted = resolve })
+    const upstream = createAssistantMessageEventStream()
+    const streamFn = () => {
+      dispatches++
+      notifyStarted()
+      return upstream
+    }
+    const options = { client: stubClient(), config, provider: 'route:abort' as const, systemPromptOverride: 'test', streamFn }
+    const first = createAeroSession({ ...options, projectName: 'first' })
+    const second = createAeroSession({ ...options, projectName: 'second' })
+    const firstTurn = first.prompt('first')
+    await started
+    const secondTurn = second.prompt('second')
+    await new Promise<void>(resolve => setImmediate(resolve))
+    second.abort()
+    await secondTurn
+    expect(dispatches).toBe(1)
+    expect(second.state.messages.at(-1)).toMatchObject({ stopReason: 'aborted' })
+    const message = fauxAssistantMessage('First response.')
+    upstream.push({ type: 'done', reason: 'stop', message })
+    upstream.end(message)
+    await firstTurn
   })
 })

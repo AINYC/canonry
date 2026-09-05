@@ -169,6 +169,15 @@ incrementally.
 
 Routes fire lifecycle hooks via `opts` callbacks — `onRunCreated`, `onProviderUpdate`, `onScheduleUpdated`, `onProjectDeleted`. Fire these **after** the database transaction commits, not inside it.
 
+### Engine route boundary
+
+- Configured `route:*` engine routes are generic text-only routes. Never admit
+  them to answer-visibility runs, schedules, or measurement-plan contexts,
+  including through stored project defaults or a host-supplied provider list.
+- Only the host's native provider adapters can be measurement-ready. Reject
+  the removed OpenRouter preset or measurement-policy fields instead of
+  silently persisting them as a generic text route.
+
 ### Historical competitor landscapes
 
 - `GET /projects/:name/analytics/competitors` is a stored-evidence read. It
@@ -176,11 +185,26 @@ Routes fire lifecycle hooks via `opts` callbacks — `onRunCreated`, `onProvider
 - Include only completed/partial answer-visibility snapshots; count excluded
   probes and non-terminal results in the response.
 - A Simple pin reinterprets stored history at read time. An Advanced market
-  reads the frozen plan revision for each contributing run and unions project
-  pins with that market's active and pending-draft competitors.
+  reads the frozen plan revision for each contributing run. Project pins plus
+  active and pending-draft competitors intentionally reinterpret every selected
+  snapshot; a historical-only competitor identity and its aliases may match
+  only snapshots from runs that used that revision.
 - `scope=all-markets` recomputes from raw scoped evidence. Never average market
-  percentages, and compare draft pins with active pins per group.
+  percentages, compare draft pins with active pins per group, and union every
+  market's aliases when multiple identities normalize to the same domain.
 - Advanced pinning is a revision-guarded draft mutation. It never publishes.
+- Optional `groupBy=model` adds provider/requested-model groups to the same
+  stored evidence. Trim IDs, retain null/empty IDs as unknown, and never infer
+  identity from current settings or served models. Preserve raw served IDs and
+  unknown served evidence separately. `model` requires `provider` and narrows
+  totals and exclusions before grouping. Group only eligible observations;
+  absent models are unmeasured, not zero. Cap groups at 50 and ranked rows at
+  100 per group; retain every pin. All Advanced frozen scope and alias rules
+  apply within each group. This is descriptive, not a matched-query comparison.
+- Advanced query classes follow the snapshot's frozen execution node and its
+  scoped Target usage edges. Never union classes by query ID or text: the same
+  question can be branded for one Target/context and non-brand for another.
+  A deleted query retains its execution identity, so no text fallback is needed.
 
 ### Derived row schemas (drizzle-zod)
 

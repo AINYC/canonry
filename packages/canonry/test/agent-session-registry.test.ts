@@ -22,7 +22,7 @@ import {
 import { eq } from 'drizzle-orm'
 import { Type } from '@sinclair/typebox'
 import type { AgentMessage, AgentTool } from '@mariozechner/pi-agent-core'
-import { MemorySources } from '@ainyc/canonry-contracts'
+import { MemorySources, upsertEngineConnection } from '@ainyc/canonry-contracts'
 import { SessionRegistry } from '../src/agent/session-registry.js'
 import { CanonryMcpToolNames, canonryMcpTools } from '../src/mcp/tool-registry.js'
 import { AERO_EXCLUDED_MCP_TOOLS } from '../src/agent/mcp-to-agent-tool.js'
@@ -794,5 +794,70 @@ describe('SessionRegistry', () => {
     const row = db.select().from(agentSessions).where(eq(agentSessions.projectId, projectId)).get()
     expect(row?.modelProvider).toBe('route:gateway-gpt-5')
     expect(row?.modelId).toBe('openai/gpt-5')
+  })
+
+  it('atomically refreshes a hot route after production-shaped connection and revision updates', async () => {
+    insertProject(db, 'demo')
+    const config = {
+      ...stubConfig(),
+      providers: {},
+      engineRoutes: {
+        connections: [{
+          id: 'gateway', label: 'Gateway', preset: 'custom-openai-compatible',
+          protocol: 'openai-compatible', baseUrl: 'http://old.test/v1', apiKey: 'old-secret',
+          quota: { maxConcurrency: 1, maxRequestsPerMinute: 60, maxRequestsPerDay: 500 },
+        }],
+        routes: [{
+          id: 'route:gateway', label: 'Gateway route', connectionId: 'gateway',
+          modelId: 'old-model', revision: 1, source: 'configured',
+          capabilities: { kind: 'text-only' },
+        }],
+      },
+    } as CanonryConfig
+    const registry = new SessionRegistry({ db, client: stubClient(), config })
+    const agent = registry.getOrCreate('demo', { provider: 'route:gateway' })
+
+    const oldConnection = config.engineRoutes!.connections![0]!
+    const replacement = upsertEngineConnection(oldConnection, {
+      id: oldConnection.id,
+      label: oldConnection.label,
+      preset: oldConnection.preset,
+      protocol: oldConnection.protocol,
+      baseUrl: 'http://new.test/v1',
+      apiKey: 'replacement-secret',
+      quota: oldConnection.quota,
+    })
+    // This mirrors server.onEngineConnectionUpsert: replace the connection and
+    // bump every dependent route revision when the endpoint moves.
+    config.engineRoutes!.connections![0] = replacement
+    config.engineRoutes!.routes![0] = {
+      ...config.engineRoutes!.routes![0]!,
+      modelId: 'new-model',
+      revision: 2,
+    }
+
+    // A turn already holding the old Agent retains one coherent generation.
+    expect(agent.state.model).toMatchObject({ id: 'old-model', baseUrl: 'http://old.test/v1' })
+    expect(agent.getApiKey('route:gateway')).toBe('old-secret')
+
+    const refreshed = await registry.acquireForTurn('demo')
+    expect(refreshed).toBe(agent)
+    expect(agent.state.model).toMatchObject({ id: 'new-model', baseUrl: 'http://new.test/v1' })
+    expect(agent.getApiKey('route:gateway')).toBe('replacement-secret')
+
+    // Credential-only settings edits do not bump route revision, so the
+    // connection snapshot itself must also participate in generation checks.
+    config.engineRoutes!.connections![0] = upsertEngineConnection(replacement, {
+      id: replacement.id,
+      label: replacement.label,
+      preset: replacement.preset,
+      protocol: replacement.protocol,
+      baseUrl: replacement.baseUrl,
+      apiKey: 'rotated-secret',
+      quota: replacement.quota,
+    })
+    await registry.acquireForTurn('demo')
+    expect(agent.state.model).toMatchObject({ id: 'new-model', baseUrl: 'http://new.test/v1' })
+    expect(agent.getApiKey('route:gateway')).toBe('rotated-secret')
   })
 })

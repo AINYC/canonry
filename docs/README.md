@@ -32,6 +32,7 @@ Canonry is API-first. The API is the source of truth, the CLI is the standard op
 | [`competitor-landscape.md`](competitor-landscape.md) | current | operators, engineers | Pinned-first historical competitor evidence for Simple and Advanced Measurement scopes |
 | [`google-marketing.md`](google-marketing.md) | current | operators, agents | Google Ads and GTM setup, conversion evidence, integrity states, live-read authority, and v1 safety boundary |
 | [`providers/README.md`](providers/README.md) | current | engineers | Provider system overview, ProviderAdapter interface, how to add a provider |
+| [`providers/model-selection.md`](providers/model-selection.md) | current | operators, engineers | Direct-model selection, answer and citation evidence, and model router trade-offs |
 | [`providers/gemini.md`](providers/gemini.md) | current | engineers | Gemini provider behavior and constraints |
 | [`providers/openai.md`](providers/openai.md) | current | engineers | OpenAI provider behavior and constraints |
 | [`providers/claude.md`](providers/claude.md) | current | engineers | Claude provider behavior and constraints |

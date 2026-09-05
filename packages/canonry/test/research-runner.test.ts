@@ -7,6 +7,7 @@ import { competitors, createClient, migrate, projects, researchRunQueries, resea
 import { executeResearchRun } from '../src/research-runner.js'
 import { ProviderRegistry } from '../src/provider-registry.js'
 import { reserveDailyQueryQuota } from '../src/usage-quota.js'
+import { runEngineRouteText } from '../src/engine-route-text-execution.js'
 
 const cleanup: string[] = []
 afterEach(() => cleanup.splice(0).forEach(dir => fs.rmSync(dir, { recursive: true, force: true })))
@@ -70,6 +71,26 @@ function setup(opts: {
   return { db, registry, models, trackedCalls, textCalls }
 }
 describe('executeResearchRun', () => {
+  it('does not double-charge the shared adapter daily quota for a prepaid generic research batch', async () => {
+    const { db, registry, textCalls } = setup({ textOnly: true })
+    const original = registry.get('test')!
+    const quota = { ...original.config.quotaPolicy, maxRequestsPerDay: 2 }
+    const connection = { id: 'gateway-one', quota }
+    const routeName = 'route:prepaid-research'
+    registry.register({
+      ...original.adapter,
+      name: routeName,
+      generateText: (prompt, config) => runEngineRouteText(connection, () => original.adapter.generateText(prompt, config), { db }),
+    }, { ...original.config, provider: routeName, quotaPolicy: quota })
+    db.update(researchRuns).set({ provider: routeName }).run()
+    await executeResearchRun(db, registry, 'r', 'p')
+    expect(db.select().from(researchRuns).get()?.status).toBe('completed')
+    expect(textCalls).toHaveLength(2)
+    expect(db.select().from(usageCounters).get()).toMatchObject({ scope: 'connection:gateway-one', count: 2 })
+    await expect(registry.get(routeName)!.adapter.generateText('extra', { ...original.config, provider: routeName, quotaPolicy: quota })).rejects.toThrow('Daily quota exceeded')
+    expect(textCalls).toHaveLength(2)
+  })
+
   it('records partial results, preserves a null served model, and charges dispatched calls only', async () => {
     const { db, registry, models } = setup()
     await executeResearchRun(db, registry, 'r', 'p')

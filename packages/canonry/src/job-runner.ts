@@ -5,8 +5,8 @@ import os from 'node:os'
 import { and, eq, inArray, ne, sql } from 'drizzle-orm'
 import type { DatabaseClient } from '@ainyc/canonry-db'
 import { runs, queries, competitors, projects, querySnapshots, siteCrawlAttempts, usageCounters } from '@ainyc/canonry-db'
-import type { ProviderErrorCode, ProviderName, LocationContext, MeasurementRunManifestV1 } from '@ainyc/canonry-contracts'
-import { CITED_URL_CAPTURE_VERSION, ONBOARDING_FLOW_VERSION, RunKinds, bucketOnboardingCount, classifyProviderErrorMessages, buildRunErrorFromMessages, determineAnswerMentioned, effectiveBrandNames, effectiveDomains, isBrowserProvider, normalizeMeasurementExecutionQueryText, parseMeasurementRunManifestV1, providerSupportsLocationContext, serializeRunError, describeError } from '@ainyc/canonry-contracts'
+import type { ProviderErrorCode, ProviderName, LocationContext, MeasurementExecutionIdentity, MeasurementExecutionRouteDescriptor, MeasurementRunManifestV1 } from '@ainyc/canonry-contracts'
+import { CITED_URL_CAPTURE_VERSION, ONBOARDING_FLOW_VERSION, RunKinds, bucketOnboardingCount, canonicalMeasurementExecutionIdentityJson, classifyProviderErrorMessages, buildRunErrorFromMessages, determineAnswerMentioned, effectiveBrandNames, effectiveDomains, isBrowserProvider, normalizeMeasurementExecutionQueryText, parseMeasurementRunManifestV1, parseStoredMeasurementExecutionIdentity, providerSupportsLocationContext, serializeRunError, describeError } from '@ainyc/canonry-contracts'
 import type { ProviderRegistry, RegisteredProvider } from './provider-registry.js'
 import { trackEvent } from './telemetry.js'
 import { buildRunCompletedProps, hashDomain, type RunPhaseTimings } from './run-telemetry.js'
@@ -85,6 +85,18 @@ interface RunState {
   queries: string[] | null
   measurementPlanVersionId: string | null
   measurementManifest: Record<string, unknown> | null
+  measurementExecutionIdentity: MeasurementExecutionIdentity | null
+}
+
+function parseVerifiedExecutionIdentity(value: unknown): MeasurementExecutionIdentity {
+  const identity = parseStoredMeasurementExecutionIdentity(value)
+  const checksum = crypto.createHash('sha256')
+    .update(canonicalMeasurementExecutionIdentityJson(identity))
+    .digest('hex')
+  if (checksum !== identity.checksum) {
+    throw new Error('Stored measurement execution identity checksum is invalid')
+  }
+  return identity
 }
 
 /**
@@ -192,6 +204,7 @@ export class JobRunner {
    * fires (and is given) independently of whether telemetry is enabled.
    */
   private readonly onFirstActivation?: () => void
+  private readonly getProviderRouteDescriptors?: () => Readonly<Record<string, MeasurementExecutionRouteDescriptor>>
   private db: DatabaseClient
   private registry: ProviderRegistry
   onRunCompleted?: (runId: string, projectId: string) => Promise<void>
@@ -199,9 +212,13 @@ export class JobRunner {
   constructor(
     db: DatabaseClient,
     registry: ProviderRegistry,
-    opts?: { onFirstActivation?: () => void },
+    opts?: {
+      onFirstActivation?: () => void
+      getProviderRouteDescriptors?: () => Readonly<Record<string, MeasurementExecutionRouteDescriptor>>
+    },
   ) {
     this.onFirstActivation = opts?.onFirstActivation
+    this.getProviderRouteDescriptors = opts?.getProviderRouteDescriptors
     this.db = db
     this.registry = registry
   }
@@ -260,6 +277,7 @@ export class JobRunner {
     let activeProviders: RegisteredProvider[] = []
     let projectQueries: typeof queries.$inferSelect[] = []
     let planExecution: PlanExecution | null = null
+    let planlessExecutionIdentity: MeasurementExecutionIdentity | null = null
     let runTrigger: string | undefined
     let canonicalDomain: string | undefined
     const providerDispatchCounts = new Map<ProviderName, number>()
@@ -334,20 +352,49 @@ export class JobRunner {
             .all()
 
       // A run that pinned a measurement plan carries its own execution graph.
-      // A run that did not gets the legacy query-by-query path below, untouched.
+      // A run that did not still uses the legacy query-by-query work shape, but
+      // a queue-stamped execution identity is authoritative for its provider,
+      // model, and route-policy selection.
       planExecution = resolvePlanExecution(existingRun, projectQueries)
+      const executionIdentity = existingRun.measurementExecutionIdentity !== null
+        ? parseVerifiedExecutionIdentity(existingRun.measurementExecutionIdentity)
+        : null
+      if (!planExecution) planlessExecutionIdentity = executionIdentity
+      // Both manifest-backed and simple sweeps must verify the frozen route
+      // policy before spending. A plan pins the questions, not permission to
+      // dispatch them through a changed gateway or retrieval adapter.
+      if (executionIdentity?.schemaVersion === 2) {
+        if (!this.getProviderRouteDescriptors) {
+          throw new Error('This worker cannot verify the queued engine route policy; start a new run on a route-aware worker.')
+        }
+        const currentDescriptors = this.getProviderRouteDescriptors()
+        for (const providerName of executionIdentity.providers) {
+          const frozen = executionIdentity.routes[providerName]!
+          const current = currentDescriptors[providerName]
+          if (
+            !current
+            || current.routeId !== frozen.routeId
+            || current.routeRevision !== frozen.routeRevision
+            || current.policyFingerprint !== frozen.policyFingerprint
+          ) {
+            throw new Error(`Queued engine route policy for ${providerName} no longer matches this worker; start a new run.`)
+          }
+        }
+      }
 
       // Resolve which providers to use. A manifest-pinned run measures exactly
       // the providers frozen onto its manifest at queue time — reading
       // `project.providers` here would let a provider added or removed after
       // queueing (but before this run got to the front of the queue) silently
       // change what an already-queued run measures, defeating the point of
-      // freezing a manifest at all. Only a planless run honours the per-run
-      // override / live project config, exactly as before.
+      // freezing a manifest at all. Only an unstamped legacy planless run
+      // honours the per-run override / live project config.
       if (planExecution) {
         const plan = planExecution
         const manifestProviders = [...plan.unitsByProvider.keys()] as ProviderName[]
-        const unsupportedRoutes = manifestProviders.filter(name => this.registry.get(name)?.config.measurementReady === false)
+        const unsupportedRoutes = manifestProviders.filter(name =>
+          this.registry.get(name)?.config.measurementReady === false
+          || (name.startsWith('route:') && !this.registry.isMeasurementReady(name)))
         if (unsupportedRoutes.length > 0) {
           throw new Error(
             `Engine route${unsupportedRoutes.length === 1 ? '' : 's'} ${unsupportedRoutes.join(', ')} ` +
@@ -357,6 +404,23 @@ export class JobRunner {
         activeProviders = manifestProviders
           .map(name => this.registry.get(name))
           .filter((entry): entry is RegisteredProvider => entry !== undefined)
+      } else if (planlessExecutionIdentity) {
+        activeProviders = planlessExecutionIdentity.providers.map((providerName) => {
+          const model = planlessExecutionIdentity!.models[providerName]
+          if (!model) {
+            throw new Error(`Queued model identity for ${providerName} is unavailable; start a new run.`)
+          }
+          const entry = this.registry.get(providerName)
+          if (!entry) {
+            throw new Error(`Queued provider ${providerName} is unavailable on this worker; start a new run.`)
+          }
+          if (entry.config.measurementReady === false) {
+            throw new Error(
+              `Engine route ${providerName} cannot run an answer-visibility sweep because it does not prove retrieval, citation, location, and served-model evidence.`,
+            )
+          }
+          return { ...entry, config: { ...entry.config, model } }
+        })
       } else {
         const projectProviders = providerOverride ?? (project.providers as ProviderName[])
         const unsupportedRoutes = projectProviders.filter(name => this.registry.get(name)?.config.measurementReady === false)
@@ -444,7 +508,7 @@ export class JobRunner {
         executionGates.set(
           provider.adapter.name,
           getSharedProviderExecutionGate(
-            provider.config.connectionId ?? provider.adapter.name,
+            provider.config.connectionId ? `connection:${provider.config.connectionId}` : provider.adapter.name,
             provider.config.quotaPolicy.maxConcurrency,
             provider.config.quotaPolicy.maxRequestsPerMinute,
           ),
@@ -545,7 +609,7 @@ export class JobRunner {
                 queryId: q.id,
                 queryText: q.query,
                 provider: providerName,
-                model: raw.model,
+                model: planlessExecutionIdentity?.models[providerName] ?? raw.model,
                 servedModel: raw.servedModel ?? null,
                 servedProvider: raw.servedProvider ?? null,
                 citationState,
@@ -567,7 +631,7 @@ export class JobRunner {
                 location: runLocation?.label ?? null,
                 screenshotPath: screenshotRelPath,
                 rawResponse: JSON.stringify({
-                  model: raw.model,
+                  model: planlessExecutionIdentity?.models[providerName] ?? raw.model,
                   servedModel: raw.servedModel ?? null,
                   servedProvider: raw.servedProvider ?? null,
                   groundingSources: normalized.groundingSources,
@@ -583,7 +647,7 @@ export class JobRunner {
                 queryId: q.id,
                 queryText: q.query,
                 provider: providerName,
-                model: raw.model,
+                model: planlessExecutionIdentity?.models[providerName] ?? raw.model,
                 servedModel: raw.servedModel ?? null,
                 servedProvider: raw.servedProvider ?? null,
                 citationState,
@@ -604,7 +668,7 @@ export class JobRunner {
                 recommendedCompetitors: extractedCompetitors,
                 location: runLocation?.label ?? null,
                 rawResponse: JSON.stringify({
-                  model: raw.model,
+                  model: planlessExecutionIdentity?.models[providerName] ?? raw.model,
                   servedModel: raw.servedModel ?? null,
                   servedProvider: raw.servedProvider ?? null,
                   groundingSources: normalized.groundingSources,
@@ -1085,6 +1149,7 @@ export class JobRunner {
         queries: runs.queries,
         measurementPlanVersionId: runs.measurementPlanVersionId,
         measurementManifest: runs.measurementManifest,
+        measurementExecutionIdentity: runs.measurementExecutionIdentity,
       })
       .from(runs)
       .where(eq(runs.id, runId))

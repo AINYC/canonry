@@ -9,7 +9,6 @@ import {
   engineRouteConfigSchema,
   engineRouteSummaryResponseSchema,
   type EngineRouteUpsertInput,
-  engineRouteReadiness,
 } from '@ainyc/canonry-contracts'
 
 function getClient() {
@@ -182,7 +181,8 @@ export async function upsertEngineRoute(
   input: EngineRouteUpsertInput,
   format?: string,
 ): Promise<void> {
-  const response = engineRouteConfigSchema.parse(await getClient().upsertEngineRoute(id, input))
+  const client = getClient()
+  const response = engineRouteConfigSchema.parse(await client.upsertEngineRoute(id, input))
 
   if (isMachineFormat(format)) {
     printMachineDocument(response, format)
@@ -194,16 +194,8 @@ export async function upsertEngineRoute(
   console.log(`  Connection: ${response.connectionId}`)
   console.log(`  Model:      ${response.modelId}`)
   console.log(`  Revision:   ${response.revision}`)
-  // Readiness needs BOTH a verified owner and verified-measurement capabilities.
-  // Checking only the capability let the CLI print 'measurement-ready' for a
-  // configured route whose capabilities were hand-edited, while the API reported
-  // 'text-ready' for the same row. One rule, one helper.
-  if (engineRouteReadiness(response).measurementReady) {
-    console.log('  Readiness:  measurement-ready')
-  } else {
-    console.log('  Readiness:  text-only')
-    console.log('  This route can support text work and project researchProvider, but cannot run an answer-visibility sweep.')
-  }
+  console.log('  Readiness:  text-only')
+  console.log('  This route can support text work and project researchProvider, but cannot run an answer-visibility sweep.')
 }
 
 export function setGoogleAuth(opts: { clientId: string; clientSecret: string; format?: string }): void {

@@ -6,6 +6,9 @@ Providers are adapters that connect canonry to AI answer engines. Each provider 
 
 ## Available Providers
 
+See [why Canonry selects models individually](model-selection.md) for the
+direct-API trade-off, answer and citation evidence, and model router boundaries.
+
 | Provider | Package | Mode | Service |
 |----------|---------|------|---------|
 | Gemini | `provider-gemini` | API | Google Gemini with `googleSearch` grounding |

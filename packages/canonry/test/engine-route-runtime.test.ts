@@ -1,5 +1,5 @@
 import http from 'node:http'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   engineRouteConfigSchema,
   normalizeEngineConnection,
@@ -9,6 +9,7 @@ import { createOpenAiCompatibleTextRouteAdapter, fetchOpenAiCompatibleModelCatal
 const servers: http.Server[] = []
 
 afterEach(async () => {
+  vi.unstubAllGlobals()
   await Promise.all(servers.splice(0).map(server => new Promise<void>((resolve, reject) => {
     server.close(error => error ? reject(error) : resolve())
   })))
@@ -34,6 +35,28 @@ async function fakeOpenAiServer(): Promise<{ baseUrl: string; requests: Array<{ 
 }
 
 describe('generic OpenAI-compatible text route', () => {
+  it.each([
+    { status: 503, headers: {} },
+    { status: 200, headers: { 'content-length': '1000001' } },
+  ])('aborts unread catalog bodies on early return ($status)', async ({ status, headers }) => {
+    let requestSignal: AbortSignal | null | undefined
+    let streamAborted = false
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+      requestSignal = init?.signal
+      requestSignal?.addEventListener('abort', () => { streamAborted = true }, { once: true })
+      return new Response(new ReadableStream(), { status, headers })
+    }))
+    const connection = normalizeEngineConnection({
+      id: 'unread-catalog', label: 'Unread catalog', preset: 'litellm',
+      quota: { maxConcurrency: 1, maxRequestsPerMinute: 30, maxRequestsPerDay: 100 },
+    })
+    await expect(fetchOpenAiCompatibleModelCatalog(connection)).resolves.toMatchObject({
+      state: 'unavailable', manualModelIdAllowed: true, models: [],
+    })
+    expect(requestSignal?.aborted).toBe(true)
+    expect(streamAborted).toBe(true)
+  })
+
   it('uses pi-ai against a local endpoint, but refuses to fabricate sweep evidence', async () => {
     const fake = await fakeOpenAiServer()
     const connection = normalizeEngineConnection({

@@ -134,6 +134,14 @@ cnry run my-site --wait
 cnry visibility-stats my-site --by-provider
 ```
 
+### Why we use model providers' APIs directly (not a router)
+
+Canonry uses direct provider APIs to capture answers, citations, and available
+search details that model routers can omit. This richer data helps us measure
+brand mentions and website citations accurately and explain changes in your
+visibility.
+[Read more about accuracy and why we chose models and direct provider API adapters individually](docs/providers/model-selection.md).
+
 ## Technical surface
 
 | Surface | Use it for |

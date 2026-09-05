@@ -5,6 +5,7 @@ import { projects, queries, competitors, schedules, notifications, runs, querySn
 import type { InferSelectModel } from 'drizzle-orm'
 import {
   alreadyExists,
+  defaultSweepProviderNames,
   forbidden,
   hostOf,
   validationError,
@@ -97,9 +98,11 @@ export async function projectRoutes(app: FastifyInstance, opts: ProjectRoutesOpt
       throw validationError('canonicalDomain must be a valid hostname or http(s) URL.')
     }
 
-    // Validate provider names against registered adapters.
-    const validNames = opts.providerAdapters?.map(adapter => adapter.name) ?? []
-    if (validNames.length && body.providers?.length) {
+    // Generic text routes are intentionally absent from this measurement
+    // catalog even when they are available to research callers.
+    const validNames = defaultSweepProviderNames(opts.providerAdapters?.map(adapter => adapter.name) ?? [])
+    const validatesProviderNames = opts.providerAdapters !== undefined
+    if (validatesProviderNames && body.providers?.length) {
       const invalid = body.providers.filter(p => !validNames.includes(p))
       if (invalid.length) {
         throw validationError(`Invalid provider(s): ${invalid.join(', ')}. Must be one of: ${validNames.join(', ')}`, {
@@ -217,9 +220,10 @@ export async function projectRoutes(app: FastifyInstance, opts: ProjectRoutesOpt
     }
     const body = parsedBody.data
 
-    // Validate provider names against registered adapters
-    const validNames = opts.providerAdapters?.map(adapter => adapter.name) ?? []
-    if (validNames.length && body.providers?.length) {
+    // Validate provider names against native measurement adapters.
+    const validNames = defaultSweepProviderNames(opts.providerAdapters?.map(adapter => adapter.name) ?? [])
+    const validatesProviderNames = opts.providerAdapters !== undefined
+    if (validatesProviderNames && body.providers?.length) {
       const invalid = body.providers.filter(p => !validNames.includes(p))
       if (invalid.length) {
         throw validationError(`Invalid provider(s): ${invalid.join(', ')}. Must be one of: ${validNames.join(', ')}`, {

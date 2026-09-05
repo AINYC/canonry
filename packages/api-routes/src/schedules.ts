@@ -7,6 +7,7 @@ import {
   type ProviderName,
   type SchedulableRunKind,
   SchedulableRunKinds,
+  defaultSweepProviderNames,
   schedulableRunKindSchema,
   scheduleUpsertRequestSchema,
   validationError,
@@ -40,6 +41,7 @@ export interface ScheduleRoutesOptions {
   onScheduleUpdated?: (action: 'upsert' | 'delete', projectId: string, kind: SchedulableRunKind) => void
   /** Valid provider names from registered adapters — used to reject unknown providers */
   validProviderNames?: string[]
+  getRunnableProviderNames?: () => readonly string[]
 }
 
 export async function scheduleRoutes(app: FastifyInstance, opts: ScheduleRoutesOptions) {
@@ -95,8 +97,13 @@ export async function scheduleRoutes(app: FastifyInstance, opts: ScheduleRoutesO
     }
 
     // Validate provider names against registered adapters
-    const validNames = opts.validProviderNames ?? []
-    if (validNames.length && providers?.length) {
+    const validNames = [...new Set(defaultSweepProviderNames([
+      ...(opts.validProviderNames ?? []),
+      ...(opts.getRunnableProviderNames?.() ?? []),
+    ]))]
+    const validatesProviderNames = opts.validProviderNames !== undefined
+      || opts.getRunnableProviderNames !== undefined
+    if (validatesProviderNames && providers?.length) {
       const invalid = providers.filter(p => !validNames.includes(p))
       if (invalid.length) {
         throw validationError(`Invalid provider(s): ${invalid.join(', ')}. Must be one of: ${validNames.join(', ')}`, {
