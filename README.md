@@ -6,7 +6,7 @@
 
 Canonry is an agent-first, open-source AEO operating platform. Connect the agent you already use through the [Agent Plugin](docs/plugins.md), [MCP](docs/mcp.md), CLI, or REST API. Canonry gives it the project evidence, tools, and skills to measure AI visibility, investigate problems, and carry out the work.
 
-Your agent can combine AI answers and citations with search analytics, website traffic, and technical audits. It can plan content, update WordPress pages, deploy structured data, submit sitemaps, and prepare paused ChatGPT Ads campaigns for approval.
+Your agent can combine AI answers and citations with search analytics, server-side traffic, and technical audits. It can plan content, update WordPress pages, deploy structured data, submit sitemaps, and prepare paused ChatGPT Ads campaigns for approval.
 
 Run Canonry on your infrastructure with your own provider keys. Use the dashboard to review the same evidence and recommendations as your agent.
 
