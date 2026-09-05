@@ -261,14 +261,26 @@ export function AuthGate() {
         setError('Setup failed')
         return
       }
-      const currentApiKey = await fetchCurrentApiKey()
-      setApiKey(currentApiKey)
-      setApiKeyPending(false)
+      // Password creation is committed. Hide its fields before the separate
+      // access read, and never offer the one-time setup mutation as its retry.
       setPassword('')
       setConfirmPassword('')
       setShowPassword(false)
       setSessionExpired(false)
-      setAuthState('ready')
+      setApiKey(null)
+      setApiKeyPending(true)
+      setAuthState('checking')
+      try {
+        const currentApiKey = await fetchCurrentApiKey()
+        setApiKey(currentApiKey)
+        setApiKeyPending(false)
+        setAuthState('ready')
+      } catch (err) {
+        // Stay fail-closed. The existing retry reloads the authenticated
+        // session and verifies access without creating another password.
+        setError(err instanceof Error ? err.message : 'Could not verify API key access')
+        setAuthState('api-key-error')
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'Setup failed')
     } finally {

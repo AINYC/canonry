@@ -134,6 +134,86 @@ describe('AuthGate', () => {
       expect(confirmation.type).toBe('text')
     })
 
+    test('recovers failed access verification without creating the dashboard password twice', async () => {
+      let setupRequests = 0
+      let metadataReads = 0
+      let passwordCreated = false
+      let metadataUnavailable = true
+      mockFetch((url, init) => {
+        if (url.includes('/auth/session')) return jsonResponse({ authRequired: false, user: null })
+        if (url.endsWith('/session/setup') && init?.method === 'POST') {
+          setupRequests += 1
+          if (passwordCreated) {
+            return jsonResponse({ error: { code: 'VALIDATION_ERROR', message: 'Dashboard password is already configured' } }, 400)
+          }
+          passwordCreated = true
+          return jsonResponse({ authenticated: true })
+        }
+        if (url.endsWith('/session')) {
+          return jsonResponse({ authenticated: passwordCreated, setupRequired: !passwordCreated })
+        }
+        if (url.includes('/keys/self')) {
+          metadataReads += 1
+          if (metadataUnavailable) {
+            return jsonResponse({ error: { code: 'INTERNAL_ERROR', message: 'Temporary metadata failure' } }, 503)
+          }
+        }
+        return dashboardFallback(url)
+      })
+
+      render(<AuthGate />)
+      await screen.findByRole('heading', { name: 'Create a dashboard password' })
+      fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'long-enough' } })
+      fireEvent.change(screen.getByLabelText('Confirm password'), { target: { value: 'long-enough' } })
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Create password and continue' }))
+      })
+
+      expect(await screen.findByRole('heading', { name: 'Could not verify API key access' })).toBeTruthy()
+      expect(screen.getByText('Temporary metadata failure')).toBeTruthy()
+      expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy()
+      expect(screen.queryByRole('button', { name: 'Create password and continue' })).toBeNull()
+      expect(screen.queryByLabelText('Password')).toBeNull()
+      expect(screen.queryByLabelText('Confirm password')).toBeNull()
+      expect(screen.queryByRole('heading', { name: 'Portfolio' })).toBeNull()
+      expect(setupRequests).toBe(1)
+      expect(metadataReads).toBe(1)
+
+      // The existing access-recovery action reloads the page. Remount with the
+      // real post-setup session contract: the cookie is valid, setup is closed.
+      cleanup()
+      metadataUnavailable = false
+      render(<AuthGate />)
+      expect(await screen.findByRole('heading', { name: 'Portfolio' })).toBeTruthy()
+      expect(setupRequests).toBe(1)
+      expect(metadataReads).toBe(2)
+    })
+
+    test('hides the saved password and dashboard while initial access verification is pending', async () => {
+      let resolveMetadata: (response: Response) => void = () => { throw new Error('Metadata was not requested') }
+      mockFetch((url, init) => {
+        if (url.includes('/auth/session')) return jsonResponse({ authRequired: false, user: null })
+        if (url.endsWith('/session/setup') && init?.method === 'POST') return jsonResponse({ authenticated: true })
+        if (url.endsWith('/session')) return jsonResponse({ authenticated: false, setupRequired: true })
+        if (url.includes('/keys/self')) return new Promise<Response>(resolve => { resolveMetadata = resolve })
+        return dashboardFallback(url)
+      })
+
+      render(<AuthGate />)
+      await screen.findByRole('heading', { name: 'Create a dashboard password' })
+      fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'long-enough' } })
+      fireEvent.change(screen.getByLabelText('Confirm password'), { target: { value: 'long-enough' } })
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Create password and continue' }))
+      })
+
+      expect(screen.getByText('Connecting to Canonry…')).toBeTruthy()
+      expect(screen.queryByLabelText('Password')).toBeNull()
+      expect(screen.queryByRole('heading', { name: 'Portfolio' })).toBeNull()
+      await act(async () => { resolveMetadata(dashboardFallback('/api/v1/keys/self')) })
+      expect(await screen.findByRole('heading', { name: 'Portfolio' })).toBeTruthy()
+    })
+
     test('gives the shared-password login browser metadata and an accessible error', async () => {
       mockFetch((url, init) => {
         const urlStr = String(url)

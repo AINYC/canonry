@@ -8,6 +8,7 @@ import { DashboardProvider } from '../src/contexts/dashboard-context.js'
 import { AccountProvider, type ApiKeyAccess } from '../src/contexts/account-context.js'
 import { heyClient } from '../src/api.js'
 import { createDashboardFixture } from '../src/mock-data.js'
+import { clearOnboardingRunLaunched } from '../src/lib/onboarding-telemetry.js'
 import { SetupPage } from '../src/pages/SetupPage.js'
 import { jsonResponse, mockFetch, pathOf } from './mock-fetch.js'
 
@@ -25,6 +26,7 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 afterEach(() => {
   cleanup()
   navigate.mockReset()
+  clearOnboardingRunLaunched()
 })
 
 function renderProjectSetup(options: {
@@ -79,6 +81,7 @@ function renderProjectSetup(options: {
     requests.push({ path: pathOf(url), method: init?.method, body: init?.body })
     if (pathOf(url) === '/api/v1/projects' || pathOf(url).split('?')[0] === '/api/v1/runs') return jsonResponse([])
     if (pathOf(url) === '/api/v1/settings') return jsonResponse({ providers: [] })
+    if (pathOf(url).endsWith('/measurement-setup')) return jsonResponse({ answerVisibilityProviderReady: options.providerReady !== false })
     if (pathOf(url) === '/api/v1/cdp/status') return options.cdpResponse?.() ?? jsonResponse(options.cdpStatus ?? {})
     if (pathOf(url).startsWith('/api/v1/settings/providers/')) return options.providerResponse?.() ?? jsonResponse({ name: 'gemini', configured: true })
     if (pathOf(url).endsWith('/queries')) {
@@ -207,6 +210,149 @@ test('switches Gemini free-tier guidance with the selected provider and preserve
   expect(screen.getByRole('link', { name: 'Get a free Gemini API key ↗' })).toBeTruthy()
   expect(screen.queryByRole('link', { name: 'Get API key ↗' })).toBeNull()
   expect(requests.filter(request => request.method === 'PUT')).toEqual([])
+})
+
+test('keeps provider-switch keyboard focus while resetting credentials and advanced fields', async () => {
+  const { requests } = renderProjectSetup({ onboarding: true, providerReady: false, includeLocalProvider: true })
+  const queries = await screen.findByLabelText('Queries (one per line)')
+  fireEvent.change(queries, { target: { value: 'keep this query draft' } })
+  fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'synthetic-gemini-key' } })
+  const advanced = screen.getByText('Advanced provider settings').closest('details')!
+  advanced.open = true
+  fireEvent.change(screen.getByLabelText('Model (optional)'), { target: { value: 'gemini-test-model' } })
+  fireEvent.change(screen.getByPlaceholderText('Concurrent'), { target: { value: '3' } })
+
+  const selector = screen.getByLabelText('Provider to connect') as HTMLSelectElement
+  selector.focus()
+  fireEvent.change(selector, { target: { value: 'Claude' } })
+  expect(document.activeElement).toBe(screen.getByLabelText('Provider to connect'))
+  expect((screen.getByLabelText('API key') as HTMLInputElement).value).toBe('')
+  expect((screen.getByLabelText('Model (optional)') as HTMLInputElement).value).toBe('')
+  expect((screen.getByPlaceholderText('Concurrent') as HTMLInputElement).value).toBe('')
+  expect(screen.getByText('Advanced provider settings').closest('details')?.open).toBe(false)
+  expect((screen.getByLabelText('Queries (one per line)') as HTMLTextAreaElement).value).toBe('keep this query draft')
+
+  fireEvent.change(screen.getByLabelText('Provider to connect'), { target: { value: 'local' } })
+  fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'http://localhost:11434/v1' } })
+  fireEvent.change(screen.getByLabelText('Provider to connect'), { target: { value: 'Gemini' } })
+  fireEvent.change(screen.getByLabelText('Provider to connect'), { target: { value: 'local' } })
+  expect(document.activeElement).toBe(screen.getByLabelText('Provider to connect'))
+  expect((screen.getByLabelText('Base URL') as HTMLInputElement).value).toBe('')
+  expect(requests.filter(request => request.method === 'PUT')).toEqual([])
+})
+
+function renderColdScopedSetup(readinessResponse: () => Response | Promise<Response>) {
+  const project = { ...createDashboardFixture().dashboard.projects[0]!.project, name: 'scoped-project', providers: ['gemini'] }
+  const requests: string[] = []
+  const telemetryEvents: Array<{ event: string }> = []
+  const run = { id: 'scoped-run', projectId: project.id, projectName: project.name, kind: 'answer-visibility', status: 'queued', createdAt: '2026-09-05T12:00:00Z' }
+  let queries = [{ id: 'saved-query', query: 'best local dentist' }]
+  const restore = mockFetch((url, init) => {
+    const path = pathOf(url)
+    requests.push(path)
+    if (path === '/api/v1/projects') return jsonResponse([project])
+    if (path.split('?')[0] === '/api/v1/runs') return jsonResponse([])
+    if (path === '/api/v1/settings') return jsonResponse({ providers: [{ name: 'gemini', configured: true }] })
+    if (path.endsWith('/measurement-setup')) return readinessResponse()
+    if (path === '/api/v1/projects/scoped-project/runs' && init?.method === 'POST') return jsonResponse(run, 202)
+    if (path === '/api/v1/runs/scoped-run') return jsonResponse(run)
+    if (path.endsWith('/queries')) {
+      if (init?.method === 'PUT') {
+        const body = JSON.parse(String(init.body)) as { queries: string[] }
+        queries = body.queries.map((query, index) => ({ id: `query-${index}`, query }))
+      }
+      return jsonResponse(queries)
+    }
+    if (path === '/health') return jsonResponse({ version: 'test', databaseUrlConfigured: true })
+    if (path.endsWith('/telemetry/onboarding')) {
+      telemetryEvents.push(JSON.parse(String(init?.body)) as { event: string })
+      return jsonResponse({ accepted: true })
+    }
+    return jsonResponse({ error: { code: 'NOT_FOUND', message: 'No stored overview' } }, 404)
+  })
+  onTestFinished(restore)
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(
+    <QueryClientProvider client={queryClient}>
+      <AccountProvider account={null} apiKey={{ id: 'scoped-writer', scopes: ['*'], projectId: project.id, readOnly: false }}>
+        <SetupPage visibilityProjectName={project.name} siteHealthOnboarding />
+      </AccountProvider>
+    </QueryClientProvider>,
+  )
+  onTestFinished(() => { queryClient.clear() })
+  return { requests, queryClient, telemetryEvents }
+}
+
+test('uses project-readable provider readiness for a cold scoped-writer setup', async () => {
+  const { requests, queryClient, telemetryEvents } = renderColdScopedSetup(() => jsonResponse({ answerVisibilityProviderReady: true }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Continue' }))
+  await waitFor(() => expect(queryClient.getQueryState(['health'])?.status).toBe('success'))
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Launch visibility sweep' }) as HTMLButtonElement).disabled).toBe(false))
+  expect(requests).toContain('/api/v1/projects/scoped-project/measurement-setup')
+  expect(requests).not.toContain('/api/v1/settings')
+  expect(requests).not.toContain('/api/v1/cdp/status')
+  expect(screen.queryByLabelText('API key')).toBeNull()
+  expect(screen.queryByLabelText('Provider to connect')).toBeNull()
+  expect(screen.queryByRole('link', { name: 'Open provider settings' })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Launch visibility sweep' }))
+  expect(await screen.findByText('Sweep running. This usually takes 30 to 60 seconds.')).toBeTruthy()
+  expect(requests).toContain('/api/v1/projects/scoped-project/runs')
+  expect(requests).not.toContain('/api/v1/settings')
+  expect(telemetryEvents.some(event => event.event === 'run.requested')).toBe(false)
+})
+
+test('keeps scoped-writer launch blocked while project provider readiness loads', async () => {
+  let resolveReadiness: ((response: Response) => void) | undefined
+  renderColdScopedSetup(() => new Promise(resolve => { resolveReadiness = resolve }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Continue' }))
+  const launch = screen.getByRole('button', { name: 'Launch visibility sweep' }) as HTMLButtonElement
+  expect(launch.disabled).toBe(true)
+  expect(launch.title).toBe('Checking provider readiness before launch.')
+  expect(screen.queryByText(/Launch is blocked until a provider allowed by this project/)).toBeNull()
+  await waitFor(() => expect(resolveReadiness).toBeTypeOf('function'))
+  resolveReadiness?.(jsonResponse({ answerVisibilityProviderReady: true }))
+  await waitFor(() => expect(launch.disabled).toBe(false))
+})
+
+test('retries a failed scoped-provider readiness read without losing the query draft', async () => {
+  let attempts = 0
+  const { requests } = renderColdScopedSetup(() => ++attempts === 1
+    ? jsonResponse({ error: { code: 'INTERNAL_ERROR', message: 'Temporary readiness failure' } }, 503)
+    : jsonResponse({ answerVisibilityProviderReady: true }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Edit queries' }))
+  fireEvent.change(screen.getByLabelText('Queries (one per line)'), { target: { value: 'keep this query draft' } })
+  expect(await screen.findByText('Provider readiness could not be checked. Try again.')).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Retry provider check' }))
+  expect(await screen.findByText('An answer engine is available for this project.')).toBeTruthy()
+  expect((screen.getByLabelText('Queries (one per line)') as HTMLTextAreaElement).value).toBe('keep this query draft')
+  expect(attempts).toBe(2)
+  expect(requests).not.toContain('/api/v1/settings')
+})
+
+test('does not keep a stale ready result after a scoped-provider refresh fails', async () => {
+  let attempts = 0
+  renderColdScopedSetup(() => ++attempts === 1
+    ? jsonResponse({ answerVisibilityProviderReady: true })
+    : jsonResponse({ error: { code: 'INTERNAL_ERROR', message: 'Temporary readiness failure' } }, 503))
+  fireEvent.click(await screen.findByRole('button', { name: 'Continue' }))
+  const launch = screen.getByRole('button', { name: 'Launch visibility sweep' }) as HTMLButtonElement
+  await waitFor(() => expect(launch.disabled).toBe(false))
+  fireEvent.click(screen.getByRole('button', { name: 'Check again' }))
+  const providerSection = within(screen.getByRole('region', { name: 'Answer engine provider' }))
+  expect(await providerSection.findByText('Provider readiness could not be checked. Try again.')).toBeTruthy()
+  expect(launch.disabled).toBe(true)
+  expect(launch.title).toBe('Provider readiness could not be checked. Try again.')
+})
+
+test('keeps a confirmed missing provider blocked for scoped writers without credential controls', async () => {
+  renderColdScopedSetup(() => jsonResponse({ answerVisibilityProviderReady: false }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Continue' }))
+  const launch = screen.getByRole('button', { name: 'Launch visibility sweep' }) as HTMLButtonElement
+  await waitFor(() => expect(launch.title).toBe('Launch is blocked until a provider allowed by this project is configured.'))
+  expect(launch.disabled).toBe(true)
+  expect(screen.getByText('Ask an administrator to connect an answer engine for this project. You can save queries now.')).toBeTruthy()
+  expect(screen.queryByLabelText('API key')).toBeNull()
+  expect(screen.queryByRole('link', { name: 'Open provider settings' })).toBeNull()
 })
 
 test('keeps a stale project-list handoff scoped to the exact onboarding project', async () => {

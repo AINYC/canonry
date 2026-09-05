@@ -11,6 +11,7 @@ import {
   RunStatuses,
   RunTriggers,
   normalizeSiteAuditRunRequest,
+  nextScheduleUpdatedAt,
   siteAuditRequestIdentity,
   describeError,
 } from '@ainyc/canonry-contracts'
@@ -286,6 +287,24 @@ export class Scheduler {
     log.info(`task.${verb.toLowerCase()}`, { key })
   }
 
+  /** Runtime timing writes must not restore a version already issued to a settings caller. */
+  private updateScheduleTiming(
+    scheduleId: string,
+    timing: Pick<typeof schedules.$inferInsert, 'nextRunAt' | 'lastRunAt'>,
+  ): void {
+    this.db.transaction((tx) => {
+      // Read at the write boundary rather than using the row captured before
+      // cron registration or run queueing. A newer persisted version wins.
+      const current = tx.select({ updatedAt: schedules.updatedAt }).from(schedules)
+        .where(eq(schedules.id, scheduleId)).get()
+      if (!current) return
+      tx.update(schedules).set({
+        ...timing,
+        updatedAt: nextScheduleUpdatedAt(current.updatedAt),
+      }).where(eq(schedules.id, scheduleId)).run()
+    })
+  }
+
   private registerCronTask(schedule: typeof schedules.$inferSelect): void {
     const { id: scheduleId, projectId, cronExpr, timezone } = schedule
     const kind = schedule.kind as SchedulableRunKind
@@ -302,10 +321,9 @@ export class Scheduler {
     })
 
     this.tasks.set(taskKey(projectId, kind), task)
-    this.db.update(schedules).set({
+    this.updateScheduleTiming(scheduleId, {
       nextRunAt: nextRunFromCron(cronExpr, timezone),
-      updatedAt: new Date().toISOString(),
-    }).where(eq(schedules.id, scheduleId)).run()
+    })
 
     const label = schedule.preset ?? cronExpr
     log.info('cron.registered', { projectId, kind, schedule: label, timezone })
@@ -345,11 +363,10 @@ export class Scheduler {
           log.warn('traffic-sync.no-callback', { scheduleId, projectId, msg: 'host did not register onTrafficSyncRequested' })
           return
         }
-        this.db.update(schedules).set({
+        this.updateScheduleTiming(currentSchedule.id, {
           lastRunAt: now,
           nextRunAt,
-          updatedAt: now,
-        }).where(eq(schedules.id, currentSchedule.id)).run()
+        })
         log.info('traffic-sync.triggered', { projectName: project.name, sourceId })
         this.callbacks.onTrafficSyncRequested(project.name, sourceId)
         return
@@ -374,11 +391,10 @@ export class Scheduler {
           trigger: RunTriggers.scheduled,
           createdAt: now,
         }).run()
-        this.db.update(schedules).set({
+        this.updateScheduleTiming(currentSchedule.id, {
           lastRunAt: now,
           nextRunAt,
-          updatedAt: now,
-        }).where(eq(schedules.id, currentSchedule.id)).run()
+        })
         log.info('gbp-sync.triggered', { runId, projectName: project.name })
         this.callbacks.onGbpSyncRequested(runId, projectId)
         return
@@ -408,7 +424,7 @@ export class Scheduler {
           .get()
         if (activeAdsRun) {
           log.info('ads-sync.skipped-active', { projectName: project.name, activeRunId: activeAdsRun.id })
-          this.db.update(schedules).set({ nextRunAt, updatedAt: now }).where(eq(schedules.id, currentSchedule.id)).run()
+          this.updateScheduleTiming(currentSchedule.id, { nextRunAt })
           return
         }
         const runId = crypto.randomUUID()
@@ -420,11 +436,10 @@ export class Scheduler {
           trigger: RunTriggers.scheduled,
           createdAt: now,
         }).run()
-        this.db.update(schedules).set({
+        this.updateScheduleTiming(currentSchedule.id, {
           lastRunAt: now,
           nextRunAt,
-          updatedAt: now,
-        }).where(eq(schedules.id, currentSchedule.id)).run()
+        })
         log.info('ads-sync.triggered', { runId, projectName: project.name })
         this.callbacks.onAdsSyncRequested(runId, projectId)
         return
@@ -438,11 +453,10 @@ export class Scheduler {
           log.warn('data-refresh.no-callback', { scheduleId, projectId, msg: 'host did not register onDataRefreshRequested' })
           return
         }
-        this.db.update(schedules).set({
+        this.updateScheduleTiming(currentSchedule.id, {
           lastRunAt: now,
           nextRunAt,
-          updatedAt: now,
-        }).where(eq(schedules.id, currentSchedule.id)).run()
+        })
         log.info('data-refresh.triggered', { projectName: project.name })
         this.callbacks.onDataRefreshRequested(project.name)
         return
@@ -456,11 +470,10 @@ export class Scheduler {
           log.warn('doctor.no-callback', { scheduleId, projectId, msg: 'host did not register onDoctorRequested' })
           return
         }
-        this.db.update(schedules).set({
+        this.updateScheduleTiming(currentSchedule.id, {
           lastRunAt: now,
           nextRunAt,
-          updatedAt: now,
-        }).where(eq(schedules.id, currentSchedule.id)).run()
+        })
         log.info('doctor.triggered', { projectName: project.name })
         this.callbacks.onDoctorRequested(project.name)
         return
@@ -476,11 +489,10 @@ export class Scheduler {
           log.warn('backlinks-sync.no-callback', { scheduleId, projectId, msg: 'host did not register onBacklinksSyncRequested' })
           return
         }
-        this.db.update(schedules).set({
+        this.updateScheduleTiming(currentSchedule.id, {
           lastRunAt: now,
           nextRunAt,
-          updatedAt: now,
-        }).where(eq(schedules.id, currentSchedule.id)).run()
+        })
         log.info('backlinks-sync.triggered', { projectName: project.name })
         this.callbacks.onBacklinksSyncRequested(project.name)
         return
@@ -506,7 +518,7 @@ export class Scheduler {
           .get()
         if (active) {
           log.info('site-audit.skipped-active', { projectName: project.name, activeRunId: active.id })
-          this.db.update(schedules).set({ nextRunAt, updatedAt: now }).where(eq(schedules.id, currentSchedule.id)).run()
+          this.updateScheduleTiming(currentSchedule.id, { nextRunAt })
           return
         }
         const runId = crypto.randomUUID()
@@ -528,11 +540,10 @@ export class Scheduler {
             createdAt: now,
           }).run()
         })
-        this.db.update(schedules).set({
+        this.updateScheduleTiming(currentSchedule.id, {
           lastRunAt: now,
           nextRunAt,
-          updatedAt: now,
-        }).where(eq(schedules.id, currentSchedule.id)).run()
+        })
         log.info('site-audit.triggered', { runId, projectName: project.name })
         this.callbacks.onSiteAuditRequested(runId, projectId)
         return
@@ -570,19 +581,17 @@ export class Scheduler {
 
       if (queueResult.conflict) {
         log.info('run.skipped-active', { projectName: project.name, activeRunId: queueResult.activeRunId })
-        this.db.update(schedules).set({
+        this.updateScheduleTiming(currentSchedule.id, {
           nextRunAt,
-          updatedAt: now,
-        }).where(eq(schedules.id, currentSchedule.id)).run()
+        })
         return
       }
 
       const runId = queueResult.runId
-      this.db.update(schedules).set({
+      this.updateScheduleTiming(currentSchedule.id, {
         lastRunAt: now,
         nextRunAt,
-        updatedAt: now,
-      }).where(eq(schedules.id, currentSchedule.id)).run()
+      })
 
       log.info('run.triggered', { runId, projectName: project.name, providers: providers ?? 'all' })
       this.callbacks.onRunCreated(runId, projectId, providers, resolvedLocation)

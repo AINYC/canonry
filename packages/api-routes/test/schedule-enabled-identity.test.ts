@@ -68,6 +68,23 @@ function projectId(db: ReturnType<typeof createClient>, name: string): string {
 }
 
 describe('schedule enabled state — POST /apply', () => {
+  it('advances the current schedule version when an apply runs behind its persisted clock', async () => {
+    const { app, db } = buildApp()
+    await app.inject({ method: 'POST', url: '/api/v1/apply', payload: applyBody('demo', { preset: 'daily' }) })
+    const id = projectId(db, 'demo')
+    const futureVersion = '2100-01-01T00:00:00.000Z'
+    db.update(schedules).set({ updatedAt: futureVersion }).where(eq(schedules.projectId, id)).run()
+
+    const applied = await app.inject({ method: 'POST', url: '/api/v1/apply', payload: applyBody('demo', { preset: 'weekly' }) })
+    expect(applied.statusCode).toBe(200)
+    expect(avSchedule(db, id)).toMatchObject({ preset: 'weekly', updatedAt: '2100-01-01T00:00:00.001Z' })
+    const stale = await app.inject({
+      method: 'PUT', url: '/api/v1/projects/demo/schedule',
+      payload: { preset: 'daily', expectedUpdatedAt: futureVersion },
+    })
+    expect(stale.statusCode).toBe(409)
+  })
+
   it('leaves a paused schedule paused when the spec omits enabled', async () => {
     const { app, db } = buildApp()
 

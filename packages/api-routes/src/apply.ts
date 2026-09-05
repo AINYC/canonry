@@ -2,7 +2,7 @@ import crypto from 'node:crypto'
 import { and, eq } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { projects, competitors, schedules, notifications } from '@ainyc/canonry-db'
-import { forbidden, normalizeProjectAliases, normalizeProjectDomain, projectConfigSchema, registrableDomain, resolveConfigSpecQueries, SchedulableRunKinds, validationError, describeError } from '@ainyc/canonry-contracts'
+import { forbidden, nextScheduleUpdatedAt, normalizeProjectAliases, normalizeProjectDomain, projectConfigSchema, registrableDomain, resolveConfigSpecQueries, SchedulableRunKinds, validationError, describeError } from '@ainyc/canonry-contracts'
 import type { ProviderAdapterInfo } from './settings.js'
 import { pruneProviderModelsForProviders, validateProviderModels } from './provider-models.js'
 import { writeAuditLog } from './helpers.js'
@@ -285,7 +285,7 @@ export async function applyRoutes(app: FastifyInstance, opts?: ApplyRoutesOption
             timezone: resolvedSchedule.timezone,
             providers: config.spec.schedule?.providers ?? [],
             ...(specEnabled === undefined ? {} : { enabled: specEnabled }),
-            updatedAt: now,
+            updatedAt: nextScheduleUpdatedAt(existingSched.updatedAt, Date.parse(now)),
           }).where(eq(schedules.id, existingSched.id)).run()
         } else {
           tx.insert(schedules).values({

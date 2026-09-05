@@ -8,6 +8,7 @@ import {
   type SchedulableRunKind,
   SchedulableRunKinds,
   schedulableRunKindSchema,
+  nextScheduleUpdatedAt,
   scheduleExpectedUpdatedAtSchema,
   scheduleUpsertRequestSchema,
   scheduleVersionConflict,
@@ -37,13 +38,6 @@ function parseExpectedUpdatedAtParam(raw: unknown): string | undefined {
   const parsed = scheduleExpectedUpdatedAtSchema.safeParse(raw)
   if (!parsed.success) throw validationError('Invalid expectedUpdatedAt timestamp')
   return parsed.data
-}
-
-function nextScheduleUpdatedAt(previous: string | undefined): string {
-  const previousMs = previous === undefined ? Number.NaN : Date.parse(previous)
-  return new Date(Number.isFinite(previousMs)
-    ? Math.max(Date.now(), previousMs + 1)
-    : Date.now()).toISOString()
 }
 
 export interface ScheduleRoutesOptions {

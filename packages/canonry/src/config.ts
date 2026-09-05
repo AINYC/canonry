@@ -527,8 +527,10 @@ export function loadConfig(): CanonryConfig {
     ].filter(Boolean).join(', ')
     throw new Error(
       `Invalid config at ${configPath} — missing: ${missing}.\n` +
-      'These fields are auto-generated. Run "canonry bootstrap" to create a valid local runtime.\n' +
-      'Do not write config.yaml by hand; use "canonry init", "canonry settings", or "canonry bootstrap" instead.',
+      'Back up this config privately before you repair it.\n' +
+      'Restore the missing values from a known-good backup. If none exists, recover the original values before you retry.\n' +
+      'Keep the original API key and database path. Do not share secrets.\n' +
+      'Do not use "canonry init --force" for recovery. It replaces credentials without a backup.',
     )
   }
 

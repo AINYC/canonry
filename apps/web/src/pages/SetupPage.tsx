@@ -27,6 +27,7 @@ import {
 } from '../api.js'
 import {
   getApiV1CdpStatusOptions,
+  getApiV1ProjectsByNameMeasurementSetupOptions,
   getApiV1ProjectsByNameQueriesQueryKey,
   getApiV1RunsByIdOptions,
 } from '@ainyc/canonry-api-client/react-query'
@@ -169,9 +170,13 @@ export function SetupPage({
 
 function SetupPageBody({ visibilityProjectName, siteHealthOnboarding }: SetupPageProps) {
   const contextDashboard = useInitialDashboard()
+  const { isAdmin } = useAccount()
   // RootLayout and this page are separate observers of the same project query.
   // Both must pause the zero-project interval while setup owns project creation.
-  const { dashboard, isLoading, refetch } = useDashboard(undefined, { pauseProjectPolling: true })
+  const { dashboard, isLoading, refetch } = useDashboard(undefined, {
+    pauseProjectPolling: true,
+    includeSettings: isAdmin,
+  })
   const safeDashboard = dashboard ?? contextDashboard?.dashboard
   const navigate = useNavigate()
   const visibilityHeadingRef = useCallback<RefCallback<HTMLHeadingElement>>((node) => {
@@ -393,9 +398,29 @@ function ReadySetupPage({
   const configuredApiProviders = readyProviders.map(provider => normalizeProviderName(provider.name))
   const selectedApiProviderReady = runnableApiProviders.length > 0
   const selectionCanUseCdp = projectProviders.length === 0 || projectProviders.includes(CDP_PROVIDER_NAME)
+  // Scoped writers cannot read the administrator's provider catalog. The
+  // project-readable setup response exposes readiness without credentials or
+  // instance capability inventory, using the server's exact run preflight.
+  const usesProjectProviderReadiness = isProjectScoped && !isAdmin
+  const projectProviderQuery = useQuery({
+    ...getApiV1ProjectsByNameMeasurementSetupOptions({
+      client: heyClient,
+      path: { name: resumeProjectName ?? '' },
+    }),
+    enabled: usesProjectProviderReadiness && Boolean(resumeProjectName),
+    staleTime: 0,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: 'always',
+    retry: false,
+  })
+  const projectProviderReady = projectProviderQuery.data?.answerVisibilityProviderReady
+  const providerReadinessFailed = usesProjectProviderReadiness && (
+    projectProviderQuery.isError
+    || (projectProviderQuery.isSuccess && typeof projectProviderReady !== 'boolean')
+  )
   const cdpStatusQuery = useQuery({
     ...getApiV1CdpStatusOptions({ client: heyClient }),
-    enabled: selectionCanUseCdp && !selectedApiProviderReady,
+    enabled: !usesProjectProviderReadiness && selectionCanUseCdp && !selectedApiProviderReady,
     staleTime: 60_000,
     retry: false,
   })
@@ -407,17 +432,29 @@ function ReadySetupPage({
     : cdpStatusQuery.isSuccess
       ? typeof cdpStatusQuery.data.browserVersion === 'string'
       : cdpStatusQuery.isError ? false : undefined
-  const providerReadiness = resolveAiVisibilityProviderReadiness({
-    projectProviders,
-    configuredApiProviders,
-    cdpConfigured,
-  })
+  const providerReadiness = usesProjectProviderReadiness
+    ? projectProviderQuery.isSuccess && projectProviderQuery.isFetchedAfterMount && !projectProviderQuery.isFetching
+      ? projectProviderReady
+      : undefined
+    : resolveAiVisibilityProviderReadiness({
+      projectProviders,
+      configuredApiProviders,
+      cdpConfigured,
+    })
   const runnableProviderCount = runnableApiProviders.length + (cdpConfigured === true ? 1 : 0)
   const [selectedProvider, setSelectedProvider] = useState(runnableApiProviders[0]?.name ?? '')
   const [generateCount, setGenerateCount] = useState(5)
   const [generatingQueries, setGeneratingQueries] = useState(false)
   const [generateError, setGenerateError] = useState<string | null>(null)
   const [configuringProvider, setConfiguringProvider] = useState('')
+  const restoreProviderFocus = useRef(false)
+  const providerSelectorRef = useCallback<RefCallback<HTMLSelectElement>>((node) => {
+    if (!node || !restoreProviderFocus.current) return
+    // The keyed form must reset credentials and advanced fields on switch.
+    // Restore only focus the user already had, not focus after background reads.
+    restoreProviderFocus.current = false
+    node.focus({ preventScroll: true })
+  }, [])
   const [showProviderConfig, setShowProviderConfig] = useState(false)
   const [researchPromptCopied, setResearchPromptCopied] = useState(false)
   const [researchCopyError, setResearchCopyError] = useState(false)
@@ -517,7 +554,9 @@ function ReadySetupPage({
   })
   const readinessBlockedReason = systemBlockReason && systemBlockReason !== 'no_provider'
     ? model.launchState.blockedReason
-    : providerReadiness === undefined
+    : providerReadinessFailed
+      ? 'Provider readiness could not be checked. Try again.'
+      : providerReadiness === undefined
       ? 'Checking provider readiness before launch.'
       : systemBlockReason === 'no_provider'
         ? 'Launch is blocked until a provider allowed by this project is configured.'
@@ -848,16 +887,19 @@ function ReadySetupPage({
       setRunError(launchBlockedReason ?? 'Complete setup before launching the first sweep.')
       const reasonCode = systemBlockReason
         ?? (!createdProjectName ? 'unknown' : effectiveQueryCount === 0 ? 'no_queries' : 'run_rejected')
-      emitOnboardingEvent({
-        flowVersion: ONBOARDING_FLOW_VERSION,
-        onboardingSessionId,
-        event: 'run.requested',
-        origin: 'dashboard_setup',
-        result: 'rejected',
-        providerCountBucket: bucketOnboardingCount(runnableProviderCount),
-        queryCountBucket: bucketOnboardingCount(effectiveQueryCount),
-        reasonCode,
-      })
+      // Project-readable readiness is a boolean, not an inventory we can count.
+      if (!usesProjectProviderReadiness) {
+        emitOnboardingEvent({
+          flowVersion: ONBOARDING_FLOW_VERSION,
+          onboardingSessionId,
+          event: 'run.requested',
+          origin: 'dashboard_setup',
+          result: 'rejected',
+          providerCountBucket: bucketOnboardingCount(runnableProviderCount),
+          queryCountBucket: bucketOnboardingCount(effectiveQueryCount),
+          reasonCode,
+        })
+      }
       return
     }
     setRunSaving(true)
@@ -872,28 +914,32 @@ function ReadySetupPage({
       setRunTriggered(true)
       markOnboardingRunLaunched(createdProjectName, run.id)
       launchedThisSessionRunId.current = run.id
-      emitOnboardingEvent({
-        flowVersion: ONBOARDING_FLOW_VERSION,
-        onboardingSessionId,
-        event: 'run.requested',
-        origin: 'dashboard_setup',
-        result: 'queued',
-        providerCountBucket: bucketOnboardingCount(runnableProviderCount),
-        queryCountBucket: bucketOnboardingCount(effectiveQueryCount),
-      })
+      if (!usesProjectProviderReadiness) {
+        emitOnboardingEvent({
+          flowVersion: ONBOARDING_FLOW_VERSION,
+          onboardingSessionId,
+          event: 'run.requested',
+          origin: 'dashboard_setup',
+          result: 'queued',
+          providerCountBucket: bucketOnboardingCount(runnableProviderCount),
+          queryCountBucket: bucketOnboardingCount(effectiveQueryCount),
+        })
+      }
       await refetch()
     } catch (err) {
       setRunError(err instanceof Error ? err.message : 'Failed to queue the visibility sweep. Retry when the instance is ready.')
-      emitOnboardingEvent({
-        flowVersion: ONBOARDING_FLOW_VERSION,
-        onboardingSessionId,
-        event: 'run.requested',
-        origin: 'dashboard_setup',
-        result: 'rejected',
-        providerCountBucket: bucketOnboardingCount(runnableProviderCount),
-        queryCountBucket: bucketOnboardingCount(effectiveQueryCount),
-        reasonCode: onboardingErrorReason(err, 'run_rejected'),
-      })
+      if (!usesProjectProviderReadiness) {
+        emitOnboardingEvent({
+          flowVersion: ONBOARDING_FLOW_VERSION,
+          onboardingSessionId,
+          event: 'run.requested',
+          origin: 'dashboard_setup',
+          result: 'rejected',
+          providerCountBucket: bucketOnboardingCount(runnableProviderCount),
+          queryCountBucket: bucketOnboardingCount(effectiveQueryCount),
+          reasonCode: onboardingErrorReason(err, 'run_rejected'),
+        })
+      }
     } finally {
       setRunSaving(false)
     }
@@ -962,8 +1008,29 @@ function ReadySetupPage({
       <section aria-labelledby="setup-provider-heading" className="space-y-2 border-b border-default pb-6 mb-6">
         <h2 id="setup-provider-heading" className="text-lg font-semibold text-heading">Answer engine provider</h2>
         <p className="max-w-prose text-sm text-secondary">
-          Provider settings are managed by an administrator. Ask them to check or connect an answer engine for this project. You can save queries now.
+          Provider settings are managed by an administrator.
         </p>
+        {providerReadinessFailed ? (
+          <p role="alert" className="text-sm text-negative">Provider readiness could not be checked. Try again.</p>
+        ) : (
+          <p className="max-w-prose text-sm text-secondary" role="status">
+            {providerReadiness === true
+              ? 'An answer engine is available for this project.'
+              : providerReadiness === false
+                ? 'Ask an administrator to connect an answer engine for this project. You can save queries now.'
+                : 'Checking provider readiness. You can save queries now.'}
+          </p>
+        )}
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="min-h-11"
+          disabled={projectProviderQuery.isFetching}
+          onClick={() => { void projectProviderQuery.refetch() }}
+        >
+          {providerReadinessFailed ? 'Retry provider check' : 'Check again'}
+        </Button>
       </section>
     ) : (
     <section aria-labelledby="setup-provider-heading" className="space-y-3 border-b border-default pb-6 mb-6">
@@ -994,10 +1061,15 @@ function ReadySetupPage({
                 <div className="min-w-0 space-y-1.5">
                   <label className="block text-sm font-medium text-secondary" htmlFor="setup-provider">Provider to connect</label>
                   <select
+                    ref={providerSelectorRef}
                     id="setup-provider"
                     className="setup-input"
                     value={providerToConfigure.name}
-                    onChange={event => setConfiguringProvider(event.target.value)}
+                    onChange={event => {
+                      if (event.target.value === providerToConfigure.name) return
+                      restoreProviderFocus.current = document.activeElement === event.currentTarget
+                      setConfiguringProvider(event.target.value)
+                    }}
                   >
                     {configurableProviders.map(provider => (
                       <option key={provider.name} value={provider.name}>{provider.displayName ?? provider.name}</option>

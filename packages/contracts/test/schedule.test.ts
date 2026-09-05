@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { schedulableRunKindSchema, scheduleUpsertRequestSchema, SchedulableRunKinds } from '../src/schedule.js'
+import { nextScheduleUpdatedAt, schedulableRunKindSchema, scheduleUpsertRequestSchema, SchedulableRunKinds } from '../src/schedule.js'
 
 describe('schedulableRunKindSchema', () => {
   it('accepts answer-visibility, traffic-sync, gbp-sync, data-refresh, backlinks-sync, and ads-sync', () => {
@@ -31,5 +31,20 @@ describe('scheduleUpsertRequestSchema', () => {
     expect(scheduleUpsertRequestSchema.safeParse({ preset: 'daily', expectedUpdatedAt: '2026-09-02T12:00:00.000Z' }).success).toBe(true)
     expect(scheduleUpsertRequestSchema.safeParse({ preset: 'daily', expectedUpdatedAt: null }).success).toBe(true)
     expect(scheduleUpsertRequestSchema.safeParse({ preset: 'daily', expectedUpdatedAt: 'yesterday' }).success).toBe(false)
+  })
+})
+
+describe('nextScheduleUpdatedAt', () => {
+  const current = '2026-09-05T12:00:00.000Z'
+  const currentMs = Date.parse(current)
+
+  it('uses wall time when creating a schedule or advancing past the current version', () => {
+    expect(nextScheduleUpdatedAt(undefined, currentMs)).toBe(current)
+    expect(nextScheduleUpdatedAt(current, currentMs + 10)).toBe('2026-09-05T12:00:00.010Z')
+  })
+
+  it('advances the version on equal ticks and clock rollback', () => {
+    expect(nextScheduleUpdatedAt(current, currentMs)).toBe('2026-09-05T12:00:00.001Z')
+    expect(nextScheduleUpdatedAt(current, currentMs - 60_000)).toBe('2026-09-05T12:00:00.001Z')
   })
 })
