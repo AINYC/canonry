@@ -6,7 +6,9 @@
 
 Canonry is an agent-first, open-source AEO operating platform. Connect the agent you already use through the [Agent Plugin](docs/plugins.md), [MCP](docs/mcp.md), CLI, or REST API. Canonry gives it the project evidence, tools, and skills to measure AI visibility, investigate problems, and carry out the work.
 
-Your agent can combine AI answers and citations with search analytics, server-side traffic, and technical audits. It can plan content, update WordPress pages, deploy structured data, submit sitemaps, and prepare paused ChatGPT Ads campaigns for approval.
+Your agent can compare competitors, see which domains and pages get cited, and measure complex portfolios across properties, markets, and answer engines. It can combine that evidence with search analytics, server-side traffic, and technical audits.
+
+Your agent can then plan content, update WordPress pages, deploy structured data, submit sitemaps, and prepare paused ChatGPT Ads campaigns for approval.
 
 Run Canonry on your infrastructure with your own provider keys. Use the dashboard to review the same evidence and recommendations as your agent.
 
@@ -16,16 +18,22 @@ Run Canonry on your infrastructure with your own provider keys. Use the dashboar
 
 **Give your agent a job:**
 
-> Find a weak page using our site audit and search data. Propose a content update for review. After I approve it, publish through WordPress, submit the sitemap, and rerun the checks.
+> Find a question where competitors get cited and we don't. Compare their cited pages with our relevant page, using our search data, server-side traffic, and site audit. Propose a content update for review. After I approve it, publish through WordPress, submit the sitemap, and rerun the checks.
 
 Your agent coordinates the steps using Canonry's tools and returns the results for review.
+
+### Compare competitors and measure complex portfolios
+
+- **Competitor comparisons:** Compare brand mentions and citations across tracked questions and answer engines. Find questions where competitors are cited and your site is absent.
+- **Who gets cited:** [Rank cited domains](skills/canonry/references/canonry-cli.md#cited-source-rankings-cnry-sources) and inspect exact URLs, including your pages, competitors, aggregators, and publishers.
+- **Advanced Measurement:** Build [versioned measurement plans](docs/mcp.md#tool-surface) for portfolios of locations, products, or site sections. Assign questions, engines, models, and locations per property, separate branded and non-brand coverage, and organize overlapping market groups with their own competitors. Compare results across properties, groups, answer engines, and locations, then drill down to exact answers and cited sources.
 
 ### Built-in integrations and workflows
 
 - **Answer engines:** Canonry measures Gemini, ChatGPT, Claude, Perplexity, and OpenAI-compatible local models.
 - **Agent workflows:** Use the [MCP adapter](docs/mcp.md), [Agent Plugin](docs/plugins.md), [external webhooks](skills/canonry/references/canonry-cli.md#agent), or built-in [Aero](skills/aero/SKILL.md).
 - **Search and analytics:** Connect [Google Search Console](docs/google-search-console-setup.md), [Google Analytics 4](docs/google-analytics-setup.md), and [Bing Webmaster Tools](docs/bing-webmaster-setup.md).
-- **Server traffic:** Capture events from [Cloudflare, Cloud Run, Vercel, and WordPress](skills/canonry/references/server-side-traffic.md).
+- **Server traffic:** Inspect recorded crawler visits, AI page fetches, and referral arrivals from [Cloudflare, Cloud Run, Vercel, and WordPress](skills/canonry/references/server-side-traffic.md).
 - **Backlinks:** Query [Common Crawl hyperlink releases](skills/canonry/references/canonry-cli.md#backlinks-common-crawl) locally with DuckDB, and sync new releases on a schedule.
 - **Paid media:** Connect [OpenAI Ads Manager](docs/mcp.md#tool-surface) for account, conversion, campaign, and performance workflows.
 - **Conversion measurement:** Audit [Google Ads and Google Tag Manager](docs/google-marketing.md) with read-only snapshots and declared conversion contracts.
