@@ -4,13 +4,17 @@
 
 **Give your agent the evidence, tools, and skills to run AEO.**
 
-Canonry is an agent-first, open-source AEO operating platform. Connect the agent you already use through the [Agent Plugin](docs/plugins.md), [MCP](docs/mcp.md), CLI, or REST API. Canonry gives it the project evidence, tools, and skills to measure AI visibility, investigate problems, and carry out the work.
+Canonry is an **agent-first, open-source AEO operating platform.**
 
-Your agent can compare competitors, see which domains and pages get cited, and measure complex portfolios across properties, markets, and answer engines. It can combine that evidence with search analytics, server-side traffic, and technical audits.
+**Connect your agent:** [Agent Plugin](docs/plugins.md) · [MCP](docs/mcp.md) · CLI · REST API
 
-Your agent can then plan content, update WordPress pages, deploy structured data, submit sitemaps, and prepare paused ChatGPT Ads campaigns for approval.
+- **Track AI visibility:** Brand mentions and citations across answer engines.
+- **Compare competitors:** Citation gaps and the domains and pages getting cited.
+- **Measure complex portfolios:** Properties and market groups, with questions, engines, models, and locations tailored per property.
+- **Investigate site activity:** Search analytics, server-side crawler visits, AI page fetches, referrals, and technical audits.
+- **Act on the evidence:** Plan content, update WordPress pages, deploy structured data, submit sitemaps, and prepare paused ChatGPT Ads campaigns for approval.
 
-Run Canonry on your infrastructure with your own provider keys. Use the dashboard to review the same evidence and recommendations as your agent.
+**Self-hosted, with your own provider keys.** Use the dashboard to review the same evidence and recommendations as your agent.
 
 `npm install -g @canonry/canonry`
 
