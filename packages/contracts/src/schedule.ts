@@ -51,6 +51,16 @@ export const scheduleDtoSchema = z.object({
 
 export type ScheduleDto = z.infer<typeof scheduleDtoSchema>
 
+export const scheduleExpectedUpdatedAtSchema = z.string().datetime()
+
+/** Advance the schedule's compare-and-swap version even when wall time stalls or moves backwards. */
+export function nextScheduleUpdatedAt(previous: string | undefined, nowMs = Date.now()): string {
+  const previousMs = previous === undefined ? Number.NaN : Date.parse(previous)
+  return new Date(Number.isFinite(previousMs)
+    ? Math.max(nowMs, previousMs + 1)
+    : nowMs).toISOString()
+}
+
 export const scheduleUpsertRequestSchema = z.object({
   /** Run kind. Defaults to 'answer-visibility' so existing callers don't have to change. */
   kind: schedulableRunKindSchema.optional(),
@@ -61,6 +71,11 @@ export const scheduleUpsertRequestSchema = z.object({
   providers: z.array(providerNameSchema).optional().default([]),
   /** Required when kind === 'traffic-sync'. Forbidden for other kinds. Validated server-side. */
   sourceId: z.string().optional(),
+  /**
+   * Optimistic concurrency guard. A timestamp updates only that exact version;
+   * null creates only while the schedule is absent. Omit for legacy behavior.
+   */
+  expectedUpdatedAt: scheduleExpectedUpdatedAtSchema.nullable().optional(),
 }).refine(
   (data) => (data.preset && !data.cron) || (!data.preset && data.cron),
   { message: 'Exactly one of "preset" or "cron" must be provided' },

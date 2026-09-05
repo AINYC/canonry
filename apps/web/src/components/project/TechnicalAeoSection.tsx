@@ -6,6 +6,7 @@ import { RunKinds, type SiteAuditFactorSummaryDto, type SiteAuditPageDto } from 
 
 import { heyClient, isEmbed } from '../../api.js'
 import {
+  getApiV1ProjectsByNameTechnicalAeoCrawlPagesAuditOptions,
   getApiV1ProjectsByNameTechnicalAeoOptions,
   getApiV1ProjectsByNameTechnicalAeoPagesOptions,
   getApiV1ProjectsByNameTechnicalAeoTrendOptions,
@@ -43,6 +44,7 @@ import { ToneBadge } from '../shared/ToneBadge.js'
 import { InfoTooltip } from '../shared/InfoTooltip.js'
 import { useTriggerSiteAudit } from '../../queries/mutations.js'
 import { getRunTrackerState, subscribeRunTracker } from '../../lib/run-tracker-store.js'
+import { PageAuditEvidence } from './PageAuditEvidence.js'
 
 const PAGES_FETCH_LIMIT = 100
 const FACTOR_DRILLDOWN_PAGE_CAP = 12
@@ -95,7 +97,7 @@ export function TechnicalAeoSection({
   runId,
   integrated = false,
   compactCopy = false,
-  footer,
+  afterSummary,
   unavailableFooter,
 }: {
   projectName: string
@@ -106,8 +108,8 @@ export function TechnicalAeoSection({
   integrated?: boolean
   /** Use concise findings copy in the explicit onboarding flow. */
   compactCopy?: boolean
-  /** Rendered only after persisted Page health evidence has loaded successfully. */
-  footer?: ReactNode
+  /** Next action below the loaded score summary, before the detailed checks. */
+  afterSummary?: ReactNode
   /** Rendered after an unavailable/error state so a parent flow can recover. */
   unavailableFooter?: ReactNode
 }) {
@@ -235,6 +237,27 @@ export function TechnicalAeoSection({
 
   const score = scoreQuery.data
   const allPages = pagesQuery.data?.pages ?? EMPTY_SITE_AUDIT_PAGES
+  const onboardingEvidencePage = compactCopy
+    ? allPages.find((page) => page.status === 'success' && page.overallScore < 70)
+      ?? allPages.find((page) => page.status === 'success')
+    : undefined
+  const onboardingEvidenceNeedsFix = Boolean(
+    onboardingEvidencePage && onboardingEvidencePage.overallScore < 70,
+  )
+  const onboardingPageAuditQuery = useQuery({
+    ...getApiV1ProjectsByNameTechnicalAeoCrawlPagesAuditOptions({
+      client: heyClient,
+      path: { name: projectName },
+      query: {
+        ...(effectiveRunId ? { runId: effectiveRunId } : {}),
+        url: onboardingEvidencePage?.url ?? '',
+      },
+    }),
+    // Onboarding needs one concrete proof, not the full graph and inventory.
+    // The pages read is already worst-first, so this bounded request opens the
+    // first actionable page without enabling the heavy Site Health explorer.
+    enabled: compactCopy && Boolean(onboardingEvidencePage),
+  })
   const hasErrors = (score?.pagesErrored ?? 0) > 0
   const showErrorsOnly = errorsOnly && hasErrors
   const tableSourcePages = useMemo(
@@ -252,8 +275,9 @@ export function TechnicalAeoSection({
 
   useEffect(() => {
     setErrorsOnly(false)
-    setExpandedFactor(integrated ? primaryFactorId : null)
-  }, [effectiveRunId, integrated, primaryFactorId])
+    // Onboarding uses the same closed-by-default disclosures as page findings.
+    setExpandedFactor(integrated && !compactCopy ? primaryFactorId : null)
+  }, [compactCopy, effectiveRunId, integrated, primaryFactorId])
 
   if (scoreQuery.isLoading) {
     return (
@@ -472,6 +496,8 @@ export function TechnicalAeoSection({
       </section>
       )}
 
+      {afterSummary}
+
       {/* Trend */}
       {!integrated && trendRows.length >= 2 ? (
         <section className="page-section-divider">
@@ -534,7 +560,13 @@ export function TechnicalAeoSection({
             </h3>
             <p className="mt-1 max-w-2xl text-sm text-secondary">
               {compactCopy
-                ? 'Open a check to see affected pages and fixes.'
+                ? hasAnyRecommendations
+                  ? 'Open a check to see affected pages and recommended fixes.'
+                  : onboardingEvidencePage
+                    ? onboardingEvidenceNeedsFix
+                      ? 'Open a check to see affected pages. Page-level evidence for the first page to fix appears below.'
+                      : 'Open a check to see affected pages. Page-level evidence for one audited page appears below.'
+                    : 'Open a check to see affected pages and score details.'
                 : hasAnyRecommendations
                   ? 'Select a check to see affected pages and recommended fixes.'
                   : 'Select a check to see affected pages and score details.'}
@@ -698,6 +730,36 @@ export function TechnicalAeoSection({
         </div>
       </section>
 
+      {compactCopy && onboardingEvidencePage ? (
+        <section className="border-t border-default pt-5" aria-labelledby="onboarding-page-evidence-heading">
+          <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
+            <div className="min-w-0">
+              <h3 id="onboarding-page-evidence-heading" className="text-base font-semibold text-heading">
+                {onboardingEvidenceNeedsFix ? 'First page to fix' : 'Example audited page'}
+              </h3>
+              <a
+                href={onboardingEvidencePage.url}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-1 block max-w-2xl truncate font-mono text-sm text-link outline-none hover:text-heading focus-visible:ring-2 focus-visible:ring-mono-400"
+                title={onboardingEvidencePage.url}
+              >
+                {onboardingEvidencePage.url}
+              </a>
+            </div>
+            <ToneBadge tone={scoreTone(onboardingEvidencePage.overallScore)}>
+              {Math.round(onboardingEvidencePage.overallScore)}/100
+            </ToneBadge>
+          </div>
+          <PageAuditEvidence
+            audit={onboardingPageAuditQuery.data}
+            isLoading={onboardingPageAuditQuery.isLoading}
+            error={onboardingPageAuditQuery.error}
+            onRetry={() => { void onboardingPageAuditQuery.refetch() }}
+          />
+        </section>
+      ) : null}
+
       {/* Opportunities — one structured block per cross-cutting factor */}
       {!integrated && score.crossCuttingIssues.length > 0 ? (
         <section className="page-section-divider">
@@ -834,7 +896,6 @@ export function TechnicalAeoSection({
         )}
       </section>
       ) : null}
-      {footer}
     </div>
   )
 }

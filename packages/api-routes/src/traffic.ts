@@ -27,6 +27,7 @@ import {
 } from '@ainyc/canonry-db'
 import {
   aiReferralClassCounts,
+  nextScheduleUpdatedAt,
   notFound,
   operationInProgress,
   providerError,
@@ -994,7 +995,7 @@ function bindTrafficSyncSchedule(
   )).get()
   if (schedule) {
     if (schedule.sourceId === sourceId) return { changed: false, created: false }
-    tx.update(schedules).set({ sourceId, updatedAt: now })
+    tx.update(schedules).set({ sourceId, updatedAt: nextScheduleUpdatedAt(schedule.updatedAt, Date.parse(now)) })
       .where(eq(schedules.id, schedule.id)).run()
     return { changed: true, created: false }
   }

@@ -1981,6 +1981,48 @@
     @apply max-w-3xl;
   }
 
+  /* One rail owns the focused visibility flow, from progress to form actions. */
+  .visibility-setup {
+    @apply max-w-4xl space-y-6;
+  }
+
+  .visibility-setup .page-header {
+    @apply gap-4 pb-0;
+  }
+
+  .visibility-setup .page-title {
+    @apply text-2xl;
+  }
+
+  .visibility-setup .page-subtitle {
+    @apply mt-2 max-w-prose text-sm leading-6;
+  }
+
+  .visibility-setup .setup-wizard {
+    @apply max-w-none;
+  }
+
+  .visibility-setup-section .section-head h2 {
+    @apply text-lg font-semibold text-heading;
+  }
+
+  .visibility-setup .setup-label {
+    @apply text-sm font-normal normal-case tracking-normal text-secondary;
+  }
+
+  .visibility-setup .setup-input,
+  .visibility-setup .setup-textarea {
+    @apply w-full min-w-0;
+  }
+
+  .visibility-setup .setup-input {
+    @apply min-h-11;
+  }
+
+  .visibility-setup .setup-nav {
+    @apply border-t border-default pt-4;
+  }
+
   .setup-steps {
     @apply flex items-center gap-2 mb-6 overflow-x-auto pb-1;
   }
