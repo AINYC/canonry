@@ -3,6 +3,7 @@ import { Plus } from 'lucide-react'
 import { useNavigate } from '@tanstack/react-router'
 
 import { Button } from '../components/ui/button.js'
+import { shouldNavigateFromRowClick } from '../lib/row-navigation.js'
 import { Card } from '../components/ui/card.js'
 import { StatusBadge } from '../components/shared/StatusBadge.js'
 import { ToneBadge } from '../components/shared/ToneBadge.js'
@@ -221,13 +222,19 @@ export function ProjectsPage() {
               {projects.map((p) => {
                 const latestRun = p.recentRuns[0]
                 return (
-                  <tr key={p.project.id} className="cursor-pointer" onClick={() => { void navigate({ to: '/projects/$projectName', params: { projectName: p.project.name } }) }}>
+                  <tr
+                    key={p.project.id}
+                    className="cursor-pointer"
+                    onClick={(event) => {
+                      if (!shouldNavigateFromRowClick(event)) return
+                      void navigate({ to: '/projects/$projectName', params: { projectName: p.project.name } })
+                    }}
+                  >
                     <td>
                       <Link
                         to="/projects/$projectName"
                         params={{ projectName: p.project.name }}
                         className="text-heading font-medium hover:underline"
-                        onClick={(e) => e.stopPropagation()}
                       >
                         {p.project.displayName || p.project.name}
                       </Link>
