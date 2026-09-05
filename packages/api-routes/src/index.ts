@@ -101,6 +101,11 @@ declare module 'fastify' {
 
 export { registerOAuthRoutes, registerOAuthAdminRoutes, resolveOAuthAccessToken } from './oauth.js'
 export { hashApiKey } from './auth.js'
+export {
+  mergeGscQueryTotalsWithFallback,
+  readGscQueryDailyRows,
+  readLatestGscDataDate,
+} from './gsc-totals.js'
 export type { OAuthRoutesOptions } from './oauth.js'
 export type { CredentialChecker } from './user-session.js'
 export * from './notifications/alert.js'

@@ -109,17 +109,48 @@ function emptyAiCounts() {
 }
 
 /**
- * Collapse raw rows to one entry per (date, source, medium), summing landing
- * pages inside each attribution dimension and then keeping only the winning
+ * GA4's session-scoped lens is the one whose totals match its own channel
+ * report, so it wins a tie. Without an explicit rule the winner depended on map
+ * insertion order, which is row order out of SQLite, so an equal-sessions tie
+ * could silently change the reported medium between runs.
+ */
+export const AI_ATTRIBUTION_PREFERRED_DIMENSION = 'session'
+
+export function pickWinningAttributionDimension(
+  sessionsByDimension: ReadonlyMap<string, number>,
+): string | undefined {
+  let winner: string | undefined
+  let winnerSessions = -1
+  for (const [dimension, sessions] of sessionsByDimension) {
+    const beatsOnCount = sessions > winnerSessions
+    const winsTie = sessions === winnerSessions && dimension === AI_ATTRIBUTION_PREFERRED_DIMENSION
+    if (beatsOnCount || winsTie) {
+      winnerSessions = sessions
+      winner = dimension
+    }
+  }
+  return winner
+}
+
+/**
+ * Collapse raw rows to one entry per (date, source), summing landing pages
+ * inside each attribution dimension and then keeping only the winning
  * dimension. This is the single primitive every AI session number is folded
  * from.
  *
- * Traffic class deliberately does NOT join the tuple key. A visit counted paid
- * under one lens and organic under another would then survive twice and
- * inflate the combined total. Instead each dimension keeps its own paid vs
- * organic split, and the winner's total is partitioned by class: the rows
- * within one dimension are disjoint by class, so paid + organic always equals
- * that tuple's total.
+ * Neither traffic class NOR medium joins the tuple key, for the same reason:
+ * both are labels the lens assigns, not properties of the visit. A visit
+ * counted paid under one lens and organic under another, or carrying medium
+ * 'ai-assistant' under sessionSource and '(not set)' under a manual UTM, would
+ * otherwise land in two groups and survive twice. That medium case is real and
+ * common: GA4 reports the manual-UTM lens with no medium, so one ChatGPT visit
+ * produced two surviving rows and doubled every AI total on the report.
+ *
+ * Each dimension keeps its own paid vs organic split, and the winner's total is
+ * partitioned by class: rows within one dimension are disjoint by class, so
+ * paid + organic always equals that tuple's total. The winner reports the
+ * medium that carried most of its sessions, so the label still describes the
+ * lens the number came from.
  */
 export function resolveWinningDimensions(
   rows: readonly AiReferralAggregationRow[],
@@ -127,17 +158,17 @@ export function resolveWinningDimensions(
   interface TupleGroup {
     date: string
     source: string
-    medium: string
     byDimension: Map<string, DimensionSessionCounts>
+    mediumSessions: Map<string, Map<string, number>>
   }
 
   const groups = new Map<string, TupleGroup>()
 
   for (const row of rows) {
-    const key = `${row.date}\0${row.source}\0${row.medium}`
+    const key = `${row.date}\0${row.source}`
     let group = groups.get(key)
     if (!group) {
-      group = { date: row.date, source: row.source, medium: row.medium, byDimension: new Map() }
+      group = { date: row.date, source: row.source, byDimension: new Map(), mediumSessions: new Map() }
       groups.set(key, group)
     }
     let dim = group.byDimension.get(row.sourceDimension)
@@ -152,19 +183,35 @@ export function resolveWinningDimensions(
     } else {
       dim.organicSessions += sessions
     }
+    let mediums = group.mediumSessions.get(row.sourceDimension)
+    if (!mediums) {
+      mediums = new Map()
+      group.mediumSessions.set(row.sourceDimension, mediums)
+    }
+    mediums.set(row.medium, (mediums.get(row.medium) ?? 0) + sessions)
   }
 
   const winners: AiReferralWinningTuple[] = []
   for (const group of groups.values()) {
-    const dims = [...group.byDimension.values()]
-    const bestSessions = dims.reduce((best, d) =>
-      d.paidSessions + d.organicSessions > best.paidSessions + best.organicSessions ? d : best)
+    const winningDimension = pickWinningAttributionDimension(
+      new Map([...group.byDimension].map(([d, c]) => [d, c.paidSessions + c.organicSessions])),
+    )
+    if (winningDimension === undefined) continue
+    const best = group.byDimension.get(winningDimension)!
+    let medium = ''
+    let mediumBest = -1
+    for (const [candidate, sessions] of group.mediumSessions.get(winningDimension) ?? []) {
+      if (sessions > mediumBest) {
+        mediumBest = sessions
+        medium = candidate
+      }
+    }
     winners.push({
       date: group.date,
       source: group.source,
-      medium: group.medium,
-      paidSessions: bestSessions.paidSessions,
-      organicSessions: bestSessions.organicSessions,
+      medium,
+      paidSessions: best.paidSessions,
+      organicSessions: best.organicSessions,
     })
   }
   return winners

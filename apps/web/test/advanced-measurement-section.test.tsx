@@ -587,9 +587,31 @@ async function advancePropertiesToQuestions() {
   await advanceGroupsToQuestions()
 }
 
+/**
+ * Wait for an assignment button to be enabled, then click the LIVE node.
+ *
+ * The node must be re-queried after the wait. Holding a reference across an
+ * await is unsafe here because the flows these tests drive re-render the tree
+ * while waiting: after a 409 or 412 the section reloads the draft, and React may
+ * replace the button rather than reuse it. A detached node keeps whatever
+ * `disabled` value it had when it was captured, so the wait passes against a
+ * stale element and `fireEvent.click` then dispatches into a node that is no
+ * longer in the document. No handler runs, and the failure surfaces much later
+ * as "expected 2 calls, got 1", which reads like a product bug rather than a
+ * test defect.
+ *
+ * The `isConnected` check keeps that failure honest: if the node ever is
+ * detached, the test says so instead of silently clicking nothing.
+ */
 async function clickReadyAssignment(name: RegExp): Promise<void> {
+  await waitFor(() => {
+    // Strict: `.not.toHaveProperty('disabled', true)` also passes when the
+    // property is absent entirely, so it cannot tell "enabled" from "not a
+    // button".
+    expect(screen.getByRole('button', { name })).toHaveProperty('disabled', false)
+  })
   const button = screen.getByRole('button', { name })
-  await waitFor(() => expect(button).not.toHaveProperty('disabled', true))
+  expect(button.isConnected).toBe(true)
   fireEvent.click(button)
 }
 
@@ -1160,7 +1182,7 @@ describe('AdvancedMeasurementSection server draft controller', () => {
       'This setup changed in another session. The latest draft is loaded; review your changes again.',
     )).toBeTruthy()
     expect(fake.service.applyAssignments).toHaveBeenCalledTimes(1)
-    await waitFor(() => expect(screen.getByRole('button', { name: /Assign 1 query to all 1 Property/ })).not.toHaveProperty('disabled', true))
+    await waitFor(() => expect(screen.getByRole('button', { name: /Assign 1 query to all 1 Property/ })).toHaveProperty('disabled', false))
 
     await clickReadyAssignment(/Assign 1 query to all 1 Property/)
     await waitFor(() => expect(fake.service.applyAssignments).toHaveBeenCalledTimes(2))

@@ -1,6 +1,7 @@
 import { loadConfig } from '../config.js'
 import { createClient, migrate } from '@ainyc/canonry-db'
 import { createServer, isLoopbackBindHost, waitForServerRuntimeStartup } from '../server.js'
+import { closeWithIdleSweep } from '../server-shutdown.js'
 import { trackEvent, setTelemetrySource } from '../telemetry.js'
 import { CliError, type CliFormat, isMachineFormat } from '../cli-error.js'
 import { backfillAiReferralPaths, backfillNormalizedPaths } from './backfill.js'
@@ -100,7 +101,7 @@ export async function serveCommand(format: CliFormat = 'text'): Promise<void> {
       if (format === 'text') {
         console.log(`\nReceived ${signal}, stopping server...`)
       }
-      app.close().then(() => {
+      closeWithIdleSweep(app).then(() => {
         process.exit(0)
       }).catch((err) => {
         console.error('Error during shutdown:', err)
@@ -152,7 +153,7 @@ export async function serveCommand(format: CliFormat = 'text'): Promise<void> {
       return
     }
     try {
-      await app.close()
+      await closeWithIdleSweep(app)
     } catch (closeErr) {
       process.stderr.write(`warning: failed to close server after startup error: ${describeError(closeErr)}\n`)
     }

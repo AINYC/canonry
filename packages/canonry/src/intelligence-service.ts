@@ -4,7 +4,12 @@ import { competitors, groupRunsByCreatedAt, gscSearchData, healthSnapshots, insi
 import { analyzeRuns, analyzeGbp, classifyRegressionSeverity, compileCompetitiveSignalResolver, PERSISTENT_GAP_THRESHOLD, GBP_INSIGHT_PROVIDER } from '@ainyc/canonry-intelligence'
 import type { RunData, Snapshot, AnalysisResult, Insight, GbpLocationSignals, GbpKeywordPoint } from '@ainyc/canonry-intelligence'
 import { extractPlaceAmenities, type PlaceDetails } from '@ainyc/canonry-integration-google-places'
-import { buildGbpSummary } from '@ainyc/canonry-api-routes'
+import {
+  buildGbpSummary,
+  mergeGscQueryTotalsWithFallback,
+  readGscQueryDailyRows,
+  readLatestGscDataDate,
+} from '@ainyc/canonry-api-routes'
 import { CitationStates, RunKinds, RunStatuses, RunTriggers, effectiveDomains } from '@ainyc/canonry-contracts'
 import crypto from 'node:crypto'
 import { createLogger } from './logger.js'
@@ -82,6 +87,20 @@ function parseGbpInsightId(id: string): { location: string; slot: string } | nul
   const parts = id.split('::')
   if (parts.length !== 4 || parts[1] !== 'gbp') return null
   return { location: parts[2]!, slot: gbpInsightSlot(parts[3]!) }
+}
+
+/**
+ * Severity is a statement about the regression being reported, so its demand
+ * signal covers the same recent span the reader is looking at rather than the
+ * project's whole history. Anchored on the newest day GSC has published, since
+ * Google finalises a day two to three days late.
+ */
+const SEVERITY_GSC_WINDOW_DAYS = 30
+
+function severityGscWindow(endDate: string): { startDate: string, endDate: string } {
+  const end = new Date(`${endDate}T00:00:00Z`)
+  end.setUTCDate(end.getUTCDate() - (SEVERITY_GSC_WINDOW_DAYS - 1))
+  return { startDate: end.toISOString().slice(0, 10), endDate }
 }
 
 export class IntelligenceService {
@@ -834,6 +853,50 @@ export class IntelligenceService {
   }
 
   /**
+   * Per-(date, query) rows folded from the page-keyed table, for days the
+   * accurate per-query table has not backfilled. Impressions here are a page
+   * fanout sum and therefore an over-count; this exists only so an un-backfilled
+   * day reads as "some demand" rather than "none".
+   */
+  private readGscPageSummedFallback(
+    projectId: string,
+    window: { startDate: string, endDate: string },
+  ): { date: string, query: string, clicks: number, impressions: number, position: number }[] {
+    const rows = this.db
+      .select({
+        date: gscSearchData.date,
+        query: gscSearchData.query,
+        clicks: gscSearchData.clicks,
+        impressions: gscSearchData.impressions,
+        position: gscSearchData.position,
+      })
+      .from(gscSearchData)
+      .where(and(
+        eq(gscSearchData.projectId, projectId),
+        gte(gscSearchData.date, window.startDate),
+        lte(gscSearchData.date, window.endDate),
+      ))
+      .all()
+    const byDay = new Map<string, { date: string, query: string, clicks: number, impressions: number, weighted: number }>()
+    for (const r of rows) {
+      if (!r.query) continue
+      const key = `${r.date}\u0000${r.query}`
+      const acc = byDay.get(key) ?? { date: r.date, query: r.query, clicks: 0, impressions: 0, weighted: 0 }
+      acc.clicks += r.clicks
+      acc.impressions += r.impressions
+      acc.weighted += (Number(r.position) || 0) * r.impressions
+      byDay.set(key, acc)
+    }
+    return [...byDay.values()].map(a => ({
+      date: a.date,
+      query: a.query,
+      clicks: a.clicks,
+      impressions: a.impressions,
+      position: a.impressions > 0 ? a.weighted / a.impressions : 0,
+    }))
+  }
+
+  /**
    * Apply severity tiering to the insights of an AnalysisResult and return a
    * new result. Wraps `applySeverityTiering` so callers (analyzeAndPersist,
    * analyzeRunWithPrevious) can pass the same tiered shape both into the DB
@@ -858,18 +921,39 @@ export class IntelligenceService {
     const regressions = rawInsights.filter((i) => i.type === 'regression')
     if (regressions.length === 0) return rawInsights
 
-    // GSC impressions per query (case-insensitive).
-    // GSC impressions per query. Distinguish "GSC not connected" (no rows
-    // at all → undefined per query) from "connected but zero impressions
-    // for this query" (returns 0 — a real measurement).
-    const gscRows = this.db
-      .select({ query: gscSearchData.query, impressions: gscSearchData.impressions })
-      .from(gscSearchData)
-      .where(eq(gscSearchData.projectId, projectId))
-      .all()
-    const gscConnected = gscRows.length > 0
+    // GSC impressions per query (case-insensitive), over the severity window.
+    // Distinguish "GSC not connected" (no rows at all → undefined per query)
+    // from "connected but zero impressions for this query" (0, a real
+    // measurement).
+    //
+    // Read gsc_query_daily_totals, not gsc_search_data. The latter is keyed
+    // (date, query, page, country, device), so one SERP impression fans out
+    // into a row per ranking page and summing it over-counts; on a live
+    // property a single query summed to 151,571 against a true 26,477. It also
+    // had no date bound while SeveritySignals.gscImpressions is documented as
+    // "over the report window", so lifetime demand was being compared against
+    // the fixed 100 and 10 thresholds in classifyRegressionSeverity. Both
+    // errors pushed queries UP a tier, never down.
+    const gscEnd = readLatestGscDataDate(this.db, projectId)
+    const gscWindow = gscEnd ? severityGscWindow(gscEnd) : null
+    // The fallback is NOT empty. readLatestGscDataDate anchors on the watermark,
+    // the property table or the dimensioned table, none of which is
+    // gsc_query_daily_totals, so a project can be "connected" while the accurate
+    // table lags the window. Passing [] there would report zero impressions for
+    // every query and silently tier every regression DOWN, which is the failure
+    // the thresholds are least able to survive. Days the accurate table covers
+    // still win; only uncovered days fall back to the page-summed figure, which
+    // over-counts but is far closer than zero. Same degradation content-data.ts
+    // uses, so the two cannot drift.
+    const gscTotals = gscWindow
+      ? mergeGscQueryTotalsWithFallback(
+          readGscQueryDailyRows(this.db, projectId, gscWindow.startDate, gscWindow.endDate),
+          this.readGscPageSummedFallback(projectId, gscWindow),
+        )
+      : []
+    const gscConnected = gscEnd !== null
     const gscImpressionsByQuery = new Map<string, number>()
-    for (const row of gscRows) {
+    for (const row of gscTotals) {
       const key = row.query.toLowerCase()
       gscImpressionsByQuery.set(key, (gscImpressionsByQuery.get(key) ?? 0) + row.impressions)
     }

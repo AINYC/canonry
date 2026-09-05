@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQueries, useQuery } from '@tanstack/react-query'
-import { Link } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { ArrowRight, Plus } from 'lucide-react'
 
 import type { TrafficSourceDto } from '@ainyc/canonry-contracts'
@@ -13,6 +13,7 @@ import {
 import { Button } from '../components/ui/button.js'
 import { Card } from '../components/ui/card.js'
 import { ToneBadge } from '../components/shared/ToneBadge.js'
+import { shouldNavigateFromRowClick } from '../lib/row-navigation.js'
 import { ConnectSourceDrawer } from '../components/server-traffic/ConnectSourceDrawer.js'
 import {
   toneFromTrafficSourceStatus,
@@ -132,6 +133,7 @@ export function TrafficPage() {
 }
 
 function SourcesTable({ projectName, sources }: { projectName: string; sources: TrafficSourceDto[] }) {
+  const navigate = useNavigate()
   // UI/CLI parity: this view shows last-24h totals + latest run, the same shape `canonry traffic status`
   // returns. Rather than denormalize the totals onto the list endpoint, fan out to /traffic/sources/:id.
   const detailQueries = useQueries({
@@ -167,9 +169,27 @@ function SourcesTable({ projectName, sources }: { projectName: string; sources: 
         </thead>
         <tbody className="divide-y divide-mono-800/60">
           {rows.map(({ source, detail, isLoading }) => (
-            <tr key={source.id} className="hover:bg-bg-elevated/40 transition-colors">
+            <tr
+              key={source.id}
+              className="cursor-pointer transition-colors hover:bg-bg-elevated/40 focus-within:bg-bg-elevated/40"
+              onClick={(event) => {
+                if (!shouldNavigateFromRowClick(event)) return
+                void navigate({
+                  to: '/traffic/$projectName/$sourceId',
+                  params: { projectName, sourceId: source.id },
+                })
+              }}
+            >
               <td className="px-4 py-3">
-                <div className="font-medium text-heading">{source.displayName}</div>
+                {/* The real anchor. The row's onClick is a mouse convenience on
+                    top of this; keyboard and assistive tech use the link. */}
+                <Link
+                  to="/traffic/$projectName/$sourceId"
+                  params={{ projectName, sourceId: source.id }}
+                  className="font-medium text-heading hover:underline"
+                >
+                  {source.displayName}
+                </Link>
               </td>
               <td className="px-4 py-3">
                 <ToneBadge tone={toneFromTrafficSourceStatus(source.status)}>
