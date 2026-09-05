@@ -2,24 +2,19 @@
 
 [![npm version](https://img.shields.io/npm/v/@canonry/canonry)](https://www.npmjs.com/package/@canonry/canonry) [![Node.js >= 22.14](https://img.shields.io/badge/node-%3E%3D22.14-brightgreen)](https://nodejs.org)
 
-Your entire AEO/GEO/AI Visibility, technical SEO + web analytics stack. **Agent-first. Self-hosted. Local.**
+**Measure your presence in AI search. Act on the evidence.**
 
-Think PostHog, for AI search visibility. Canonry tracks what ChatGPT, Claude, Gemini, and Perplexity say about you, joins it with your search, server side traffic data and paid media, and gives your agent the tools + skills to fix what it finds.
+Canonry is an open-source AEO operating platform. It connects AI answers and citations with search analytics, website traffic, and technical audits. Your agent can use that evidence to plan content, update WordPress pages, deploy structured data, submit sitemaps, and prepare paused ChatGPT Ads campaigns for approval.
+
+Run it on your infrastructure with your own provider keys. Work through the CLI, REST API, or MCP, with a dashboard for reviewing evidence and recommendations.
 
 `npm install -g @canonry/canonry`
 
-![Canonry AI Visibility mention share trend across answer engines](https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/ai-visibility-trend.png)
+![Canonry connects AI visibility, search analytics, and traffic evidence to content, indexing, and ChatGPT Ads actions through CLI, REST API, MCP, and webhooks. Rerun measurements to check what changed.](https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/measure-act.svg)
 
-*Track your share of answer-engine brand mentions over time.*
+**Example workflow:** Find a weak page → review a content change → publish through WordPress → submit the sitemap → rerun checks.
 
-**Measure → diagnose → approve action → measure change**
-
-| Phase | What Canonry does |
-|---|---|
-| **Measure** | Track mentions and citations across Gemini, ChatGPT, Claude, Perplexity, and local models. Join them with GSC, GA4, Bing, server side traffic, Business Profile, and backlink data. |
-| **Diagnose** | Crawl the site, score Page Health, inspect evidence, compare competitors, and explain regressions. |
-| **Act** | Give your agent the context + skills to make surgical on-site technical SEO changes and coordinate content, indexing, analytics, and paid media. |
-| **Operate** | Create automation workflows, schedule checks, sync data, send webhooks, and generate client-ready reports. |
+Use the connected tools to investigate and carry out each step. Review content before publishing; activating ChatGPT Ads requires explicit approval of the prepared campaign tree.
 
 ### Built-in integrations and workflows
 
@@ -113,6 +108,10 @@ If a Canonry installation or connected plugin/MCP is available, use it. Do not c
 </details>
 
 ## Add AI Visibility when you need it
+
+![Canonry AI Visibility mention share trend across answer engines](https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/ai-visibility-trend.png)
+
+*Track your share of answer-engine brand mentions over time.*
 
 ![Canonry AI Visibility citation map across queries and answer engines](https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/ai-visibility-diagnostics.png)
 
