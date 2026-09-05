@@ -105,13 +105,11 @@ test('project route renders a concise visibility summary with progressive detail
   expect(html).toMatch(/Mentioned/)
   expect(html).toMatch(/Cited/)
   expect(html).toMatch(/1 query added · 8 comparable queries\./)
-  expect(html).toMatch(/Latest signals/)
-  expect(html).toMatch(/Lost citation on 1 query/)
-  expect(html).toMatch(/Emergency-intent prompts stopped grounding Citypoint/)
-  expect(html).toMatch(/Evidence · 1 affected query/)
-  expect(html).toMatch(/Suggested query/)
-  expect(html).toMatch(/emergency dentist near me/)
-  expect(html).toMatch(/aria-label="Track query &quot;emergency dentist near me&quot;"/)
+  expect(html).not.toMatch(/Latest signals/)
+  expect(html).not.toMatch(/Emergency-intent prompts stopped grounding Citypoint/)
+  expect(html).not.toMatch(/Suggested query/)
+  expect(html).not.toMatch(/aria-label="Track query &quot;emergency dentist near me&quot;"/)
+  expect(html).not.toMatch(/more signals/)
   expect(html).not.toMatch(/Next action/)
   expect(html).not.toMatch(/Action queue/)
   expect(html).not.toMatch(/What needs your attention/)
@@ -260,7 +258,7 @@ test('runs route renders failed runs clearly', async () => {
   expect(html).toMatch(/Worker could not reach the provider after repeated retry exhaustion/)
 })
 
-test('project route renders server attention without restoring the action queue', async () => {
+test('project route keeps server insights out of the Simple overview', async () => {
   const html = await renderApp('/projects/project_citypoint', { visibilityDropProjectId: 'project_citypoint' }, (fixture) => {
     fixture.dashboard.projects[0]!.insights.unshift({
       id: 'stale_visibility',
@@ -273,9 +271,10 @@ test('project route renders server attention without restoring the action queue'
     })
   })
 
-  expect(html).toMatch(/Sharp citation drop detected/)
-  expect(html).toMatch(/Visibility data needs refresh/)
-  expect(html).toMatch(/A newer integration sync landed after the latest visibility sweep/)
+  expect(html).not.toMatch(/Latest signals/)
+  expect(html).not.toMatch(/Sharp citation drop detected/)
+  expect(html).not.toMatch(/Visibility data needs refresh/)
+  expect(html).not.toMatch(/A newer integration sync landed after the latest visibility sweep/)
   expect(html).not.toMatch(/Action queue/)
   expect(html).not.toMatch(/What needs your attention/)
 })
