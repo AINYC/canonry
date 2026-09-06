@@ -15,6 +15,7 @@ import {
   adsPauseRequestSchema,
   adsUnresolvedOperationListQuerySchema,
   competitorBatchRequestSchema,
+  competitorLandscapeQuerySchema,
   DISCOVERY_MAX_PROBES_CAP,
   DISCOVERY_PROBE_CONCURRENCY_CAP,
   discoveryBucketSchema,
@@ -706,6 +707,9 @@ const competitorsInputSchema = z.object({
   project: projectNameSchema,
   request: competitorBatchRequestSchema,
 })
+const competitorLandscapeInputSchema = competitorLandscapeQuerySchema.safeExtend({
+  project: projectNameSchema,
+}).strict()
 
 const projectUpsertInputSchema = z.object({
   project: projectNameSchema,
@@ -1190,6 +1194,20 @@ export const canonryMcpTools = [
     annotations: readAnnotations(),
     openApiOperations: ['GET /api/v1/projects/{name}/analytics/sources'],
     handler: (client, input) => client.getAnalyticsSources(input.project, { window: input.window, limit: input.limit }),
+  }),
+  defineTool({
+    name: 'canonry_competitor_landscape',
+    title: 'Get historical competitor landscape',
+    description: 'Returns pinned competitors first, then observed direct competitors and other cited sources from stored answer/source evidence only. Mention share is percentage points (0..100) from answer text; citations are independent. Share of voice needs ONE query class: `queryClass=all`, and omitting it, pool branded and non-brand, so every `shareOfVoice` comes back null and only the counts are published. Pass `queryClass=non-brand` (or `branded`) for a ratio, exactly as visibility-stats does. A project with no brand name or alias cannot be split by class, so a class-scoped read on one is refused rather than answered empty. Optional groupBy: model adds provider/requested-model groups with separate served-model evidence and sample counts. Optional model filters one exact requested model ID and requires provider. Unknown historical models remain explicit. Groups are not a matched-query or equal-weight comparison. Advanced reads support one market group or explicit scope: all-markets. No provider, discovery, or classifier work runs. Ranked lists are capped at 100 observed/other-source rows per group; pins remain complete. Model groups are capped at 50 and disclose truncation.',
+    access: 'read',
+    tier: 'monitoring',
+    inputSchema: competitorLandscapeInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/analytics/competitors'],
+    handler: (client, input) => {
+      const { project, ...query } = input
+      return client.getCompetitorLandscape(project, query)
+    },
   }),
   defineTool({
     name: 'canonry_search',

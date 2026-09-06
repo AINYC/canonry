@@ -24,6 +24,7 @@ const expectedToolNames = [
   'canonry_organic_evidence',
   'canonry_analytics_metrics',
   'canonry_analytics_sources',
+  'canonry_competitor_landscape',
   'canonry_search',
   'canonry_doctor',
   'canonry_project_export',
@@ -225,6 +226,22 @@ const expectedToolNames = [
 ] as const
 
 describe('MCP tool registry', () => {
+  it('exposes optional requested-model competitor groups without widening read-only access', () => {
+    const tool = canonryMcpTools.find(candidate => candidate.name === 'canonry_competitor_landscape')!
+    expect(tool).toMatchObject({ access: 'read', tier: 'monitoring', annotations: { readOnlyHint: true } })
+    expect(getCanonryMcpTools('read-only').map(candidate => candidate.name)).toContain(tool.name)
+    const input = {
+      project: 'acme', groupBy: 'model', provider: 'openai', model: 'gpt-test',
+      groupKey: 'north', queryClass: 'non-brand', location: 'nyc',
+    }
+    expect(tool.inputSchema.parse(input)).toEqual(input)
+    expect(tool.inputSchema.safeParse({ project: 'acme', groupBy: 'model', scope: 'all-markets' }).success).toBe(true)
+    expect(tool.inputSchema.safeParse({ project: 'acme', model: 'gpt-test' }).success).toBe(false)
+    expect(tool.inputSchema.safeParse({ project: 'acme', groupBy: 'served-model' }).success).toBe(false)
+    expect(tool.description).toContain('exact requested model ID')
+    expect(schemaProperty(inputSchemaFor(tool.name), 'groupBy')).toMatchObject({ const: 'model' })
+  })
+
   it('defers Cloudflare connect to the local secret-safe CLI workflow', () => {
     expect(canonryMcpTools.some(tool => tool.name === 'canonry_traffic_connect_cloudflare')).toBe(false)
     expect(MCP_OPENAPI_OPERATION_CLASSIFICATIONS[
@@ -577,8 +594,8 @@ describe('MCP tool registry', () => {
   })
 
   it('ships the curated v1 surface', () => {
-    expect(CANONRY_MCP_TOOL_COUNT).toBe(206)
-    expect(CANONRY_MCP_READ_TOOL_COUNT).toBe(140)
+    expect(CANONRY_MCP_TOOL_COUNT).toBe(207)
+    expect(CANONRY_MCP_READ_TOOL_COUNT).toBe(141)
     expect(canonryMcpTools.map(tool => tool.name)).toEqual(expectedToolNames)
     const readNames = canonryMcpTools.filter(tool => tool.access === 'read').map(tool => tool.name)
     expect(getCanonryMcpTools('read-only').map(tool => tool.name)).toEqual(readNames)
@@ -614,7 +631,7 @@ describe('MCP tool registry', () => {
     for (const tool of canonryMcpTools) {
       counts.set(tool.tier, (counts.get(tool.tier) ?? 0) + 1)
     }
-    expect(counts.get('monitoring')).toBe(45)
+    expect(counts.get('monitoring')).toBe(46)
     expect(counts.get('setup')).toBe(51)
     expect(counts.get('gsc')).toBe(10)
     expect(counts.get('ga')).toBe(11)
@@ -1180,6 +1197,18 @@ const handlerCases: HandlerCase[] = [
   { tool: 'canonry_project_get', input: projectInput, methods: ['getProject'] },
   { tool: 'canonry_project_overview', input: projectInput, methods: ['getProjectOverview'] },
   { tool: 'canonry_analytics_metrics', input: { project: 'acme', window: '30d' }, methods: ['getAnalyticsMetrics'] },
+  {
+    tool: 'canonry_competitor_landscape',
+    input: { project: 'acme', window: '30d', scope: 'all-markets', provider: 'openai', queryClass: 'non-brand' },
+    methods: ['getCompetitorLandscape'],
+    expectedArgs: [['acme', { window: '30d', scope: 'all-markets', provider: 'openai', queryClass: 'non-brand' }]],
+  },
+  {
+    tool: 'canonry_competitor_landscape',
+    input: { project: 'acme', scope: 'all-markets', provider: 'openai', groupBy: 'model', model: 'gpt-test', queryClass: 'non-brand' },
+    methods: ['getCompetitorLandscape'],
+    expectedArgs: [['acme', { scope: 'all-markets', provider: 'openai', groupBy: 'model', model: 'gpt-test', queryClass: 'non-brand' }]],
+  },
   { tool: 'canonry_search', input: { project: 'acme', q: 'rival' }, methods: ['searchProject'] },
   { tool: 'canonry_project_export', input: projectInput, methods: ['getExport'] },
   {

@@ -22,6 +22,7 @@ import type { ProjectData } from '../build-dashboard.js'
 import type { ProjectCommandCenterVm } from '../view-models.js'
 import { useInitialDashboard } from '../contexts/dashboard-context.js'
 import { RUNS_STALE_MS, STATIC_VISIBILITY_STALE_MS } from './query-client.js'
+import { competitorEvidenceRevision } from './competitor-landscape-refresh.js'
 
 const DASHBOARD_TIMELINE_RUN_LIMIT = 20
 
@@ -212,6 +213,7 @@ export function useProjectDashboard(projectName: string | null | undefined) {
     isLoading,
     isError: projectQuery.isError || runsQuery.isError || detailQuery.isError,
     latestVisibilityRevision,
+    competitorHistoryRevision: competitorEvidenceRevision(projectRuns),
     refetch,
   }
 }

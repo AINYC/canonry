@@ -14,6 +14,10 @@ import {
   surfaceClassCountSchema,
   rankedSourceListSchema,
   sourceBreakdownDtoSchema,
+  competitorLandscapeQuerySchema,
+  competitorLandscapeResponseSchema,
+  competitorLandscapeModelComparisonSchema,
+  COMPETITOR_LANDSCAPE_MODEL_GROUP_LIMIT,
   parseWindow,
   resolveDateRange,
 } from '../src/analytics.js'
@@ -498,5 +502,135 @@ describe('resolveDateRange', () => {
 
   it('rejects an unrecognised window even when dates are also supplied', () => {
     expect(() => resolveDateRange({ startDate: '2026-05-01', window: '60d' })).toThrow(AppError)
+  })
+})
+
+describe('competitor landscape DTO schemas', () => {
+  const row = {
+    domain: 'rival.example',
+    label: 'Rival',
+    surfaceClass: 'direct-competitor' as const,
+    pinned: false,
+    mentionCount: 3,
+    shareOfVoice: 37.5,
+    citationCount: 4,
+    answeredResults: 8,
+    firstSeenAt: '2026-08-01T00:00:00.000Z',
+    lastSeenAt: '2026-08-10T00:00:00.000Z',
+    sampleUrls: ['https://rival.example/review'],
+  }
+
+  it('round-trips a stored-evidence landscape with an explicit percentage denominator', () => {
+    const parsed = competitorLandscapeResponseSchema.parse({
+      window: '30d',
+      scope: { kind: 'project' },
+      project: { ...row, domain: 'acme.example', label: 'Acme', surfaceClass: 'own', pinned: false },
+      pinned: [{ ...row, pinned: true }],
+      observed: [row],
+      otherSources: [{ ...row, domain: 'news.example', surfaceClass: 'editorial-media', mentionCount: 0, shareOfVoice: null }],
+      evidence: {
+        answeredResults: 8,
+        sourceResults: 9,
+        missingAnswerTextResults: 1,
+        mentionCredits: 8,
+        incompleteSourceResults: 2,
+        excludedProbeResults: 0,
+        excludedNonCompletedResults: 0,
+      },
+      marketState: null,
+      filters: { scope: 'project', groupKey: null, provider: null, queryClass: 'all', location: null, runId: null },
+      truncated: false,
+    })
+    expect(parsed.observed[0]!.shareOfVoice).toBe(37.5)
+    expect(parsed.evidence.mentionCredits).toBe(8)
+    expect(parsed).not.toHaveProperty('modelComparison')
+    expect(parsed.filters).not.toHaveProperty('groupBy')
+    expect(parsed.filters).not.toHaveProperty('model')
+  })
+
+  it('accepts opt-in requested-model grouping and provider-qualified model filters', () => {
+    expect(competitorLandscapeQuerySchema.parse({ groupBy: 'model' })).toEqual({ groupBy: 'model' })
+    expect(competitorLandscapeQuerySchema.parse({
+      provider: ' openai ', model: ' gpt-test ', groupBy: 'model', groupKey: 'north',
+    })).toEqual({ provider: 'openai', model: 'gpt-test', groupBy: 'model', groupKey: 'north' })
+    expect(competitorLandscapeQuerySchema.parse({
+      provider: 'openai', model: 'gpt-test', scope: 'all-markets',
+    })).toEqual({ provider: 'openai', model: 'gpt-test', scope: 'all-markets' })
+  })
+
+  it.each([
+    { model: 'gpt-test' },
+    { provider: '', model: 'gpt-test' },
+    { provider: 'openai', model: ' ' },
+    { groupBy: 'provider' },
+    { groupBy: 'served-model' },
+    { groupBy: 'model', groupKey: 'north', scope: 'all-markets' },
+    { byModel: true },
+  ])('rejects invalid or ambiguous model selection %j', input => {
+    expect(competitorLandscapeQuerySchema.safeParse(input).success).toBe(false)
+  })
+
+  it('preserves requested-model unknowns and separate raw served-model evidence', () => {
+    const group = {
+      provider: 'openai',
+      model: null,
+      servedModels: { status: 'mixed', models: ['gpt-test-2026-08-01'], includesUnknown: true },
+      snapshotCount: 2,
+      project: { ...row, surfaceClass: 'own', mentionCount: 1, citationCount: 0, answeredResults: 2, shareOfVoice: 50 },
+      pinned: [],
+      observed: [{ ...row, mentionCount: 1, citationCount: 1, answeredResults: 2, shareOfVoice: 50 }],
+      otherSources: [],
+      evidence: {
+        answeredResults: 2, sourceResults: 1, missingAnswerTextResults: 0, mentionCredits: 2,
+        incompleteSourceResults: 0, excludedProbeResults: 0, excludedNonCompletedResults: 0,
+      },
+      truncated: false,
+    }
+    const comparison = { basis: 'requested-model', groups: [group], totalGroups: 1, truncated: false }
+    const parsed = competitorLandscapeModelComparisonSchema.parse(comparison)
+    expect(parsed.groups[0]!.model).toBeNull()
+    expect(parsed.groups[0]!.servedModels).toEqual(group.servedModels)
+    expect(competitorLandscapeModelComparisonSchema.safeParse({
+      ...comparison, groups: [{ ...group, model: 'gpt-test', servedModels: { status: 'unknown' } }],
+    }).success).toBe(true)
+    expect(competitorLandscapeModelComparisonSchema.safeParse({
+      ...comparison, groups: [{ ...group, snapshotCount: 0 }],
+    }).success).toBe(false)
+    expect(competitorLandscapeModelComparisonSchema.safeParse({
+      ...comparison, basis: 'served-model',
+    }).success).toBe(false)
+    expect(competitorLandscapeModelComparisonSchema.safeParse({
+      ...comparison, groups: Array.from({ length: COMPETITOR_LANDSCAPE_MODEL_GROUP_LIMIT + 1 }, () => group),
+    }).success).toBe(false)
+    expect(competitorLandscapeModelComparisonSchema.parse({
+      basis: 'requested-model', groups: [], totalGroups: 0, truncated: false,
+    }).groups).toEqual([])
+  })
+
+  it('accepts a market/group filter and rejects an ambiguous share scale', () => {
+    expect(competitorLandscapeQuerySchema.parse({ window: '7d', groupKey: 'new-york' })).toEqual({
+      window: '7d',
+      groupKey: 'new-york',
+    })
+    expect(() => competitorLandscapeResponseSchema.parse({
+      window: 'all',
+      scope: { kind: 'project' },
+      project: { ...row, domain: 'acme.example', label: 'Acme', surfaceClass: 'own', shareOfVoice: 101 },
+      pinned: [],
+      observed: [],
+      otherSources: [],
+      evidence: {
+        answeredResults: 0,
+        sourceResults: 0,
+        missingAnswerTextResults: 0,
+        mentionCredits: 0,
+        incompleteSourceResults: 0,
+        excludedProbeResults: 0,
+        excludedNonCompletedResults: 0,
+      },
+      marketState: null,
+      filters: { scope: 'project', groupKey: null, provider: null, queryClass: 'all', location: null, runId: null },
+      truncated: false,
+    })).toThrow()
   })
 })

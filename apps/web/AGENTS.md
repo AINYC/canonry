@@ -29,6 +29,19 @@ constraints; `DESIGN.md` owns hierarchy, copy, typography, and control choices.
 
 ## Patterns
 
+### Simple query evidence
+
+Keep the Latest signals block and suggested queries out of the Simple overview.
+The underlying insights and suggestions remain available through the API.
+
+Use `compileQueryClassifier(effectiveBrandNames(project))` for Simple query labels.
+Apply the same classifier to measured and pending queries.
+If no usable brand identity exists, show `Unclassified`, never `Non-brand`.
+Keep the query-class filter separate from the Mentions/Citations control.
+Preserve provider and location grouping within each class.
+Advanced Measurement uses its own evidence components and frozen Target assignment classes.
+Do not replace those classes with the Simple project classifier.
+
 ### API calls (Critical)
 
 **Every web call into the canonry API MUST flow through the generated
@@ -254,6 +267,17 @@ Token migration guardrails:
 - Pills are status/tag indicators only. Use tabs, selects, segmented controls,
   checkboxes, or shared rectangular buttons for interactive choices.
 
+### Competitor landscapes
+
+- `CompetitorLandscape` reads the windowed stored-evidence endpoint. Never send
+  a historical row into the latest-only `EvidenceTable`; use its returned
+  `sampleUrls` when showing source evidence.
+- Show project/user pins before observed competitors. Advanced Measurement
+  reads must pass the selected `groupKey`, or explicit `scope=all-markets`.
+- Stored landscape GETs are embed-safe. Every competitor mutation requires
+  `canWrite && !isEmbed()`; market pins create/update a draft and never publish.
+- History fallback pins show unavailable metrics, never latest-only counts under
+  a historical window.
 ## Common Mistakes
 
 - **Importing `recharts` directly** — use `ChartPrimitives.tsx` exports.

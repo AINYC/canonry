@@ -7,11 +7,17 @@ import {
   MEASUREMENT_GROUP_MEMBERSHIP_CSV_MAX_BYTES,
   alreadyExists,
   canonicalMeasurementPlanV2Json,
+  brandKeyFromText,
+  brandLabelFromDomain,
   effectiveBrandNames,
   MEASUREMENT_PAGE_DEFAULT_LIMIT,
   MEASUREMENT_PAGE_MAX_LIMIT,
+  MIN_DOMAIN_BRAND_KEY_LENGTH,
   measurementCompiledChecksumConflict,
   measurementDraftCreateRequestSchema,
+  measurementDraftCompetitorSchema,
+  measurementDraftPinCompetitorRequestSchema,
+  measurementDraftPinCompetitorResponseSchema,
   measurementDraftApplyGroupMembershipRequestSchema,
   measurementDraftEtag,
   measurementDraftEtagStale,
@@ -31,11 +37,15 @@ import {
   type MeasurementDraftAssignment,
   type MeasurementDraftAuthoring,
   type MeasurementDraftGroup,
+  type MeasurementDraftPinCompetitorRequest,
+  type MeasurementDraftPinCompetitorResponse,
   type MeasurementDraftTarget,
   type MeasurementDraftWarning,
   type MeasurementPlanV2,
+  type MeasurementV2Competitor,
   type MeasurementV2UrlMatcher,
   type StoredMeasurementPlan,
+  hostOf,
 } from '@ainyc/canonry-contracts'
 import {
   measurementPlanDrafts,
@@ -223,12 +233,34 @@ function seedAuthoring(
 
   if (active.schemaVersion === 2) {
     const assignments = new Map<string, MeasurementDraftAssignment>()
+    const nodesByKey = new Map(active.executionNodes.map(node => [node.stableKey, node]))
     for (const assignment of active.assignments) {
-      assignments.set(`${assignment.targetKey} ${assignment.queryId}`, {
+      const node = nodesByKey.get(assignment.executionNodeKey)
+      if (!node) throw validationError(`The published assignment references missing execution node "${assignment.executionNodeKey}".`)
+      const key = `${assignment.targetKey} ${assignment.queryId}`
+      const existing = assignments.get(key)
+      const providers = [...node.context.providers].sort(compareText)
+      const models = { ...node.context.models }
+      const locations = node.context.location ? [node.context.location.label] : []
+      if (existing) {
+        const prior = existing.contextOverride!
+        if (existing.queryClass !== assignment.queryClass
+          || canonicalJson({ providers: prior.providers, models: prior.models }) !== canonicalJson({ providers, models })
+          || (prior.locations!.length === 0) !== (locations.length === 0)) {
+          throw validationError(
+            `Published Target "${assignment.targetKey}" uses incompatible contexts for query "${assignment.queryId}". A draft cannot merge these into one assignment.`,
+          )
+        }
+        prior.locations = [...new Set([...prior.locations!, ...locations])].sort(compareText)
+        continue
+      }
+      assignments.set(key, {
         targetKey: assignment.targetKey,
         queryId: assignment.queryId,
         queryClass: assignment.queryClass,
         classificationSource: 'operator',
+        // Explicit fields prevent current project defaults from rewriting a frozen assignment.
+        contextOverride: { providers, models, locations },
       })
     }
     return {
@@ -299,6 +331,63 @@ function seedAuthoring(
       })),
     })),
   }
+}
+
+function assertPinLocationsPreserved(project: ProjectRow, plan: MeasurementPlanV2): void {
+  const currentByLabel = new Map(project.locations.map(location => [location.label, location]))
+  for (const node of plan.executionNodes) {
+    const frozen = node.context.location
+    if (!frozen) continue
+    const current = currentByLabel.get(frozen.label)
+    if (current && canonicalJson(current) === canonicalJson(frozen)) continue
+    throw validationError(
+      `Published location "${frozen.label}" differs from the project's configured locations. Create and review a measurement draft before pinning a competitor.`,
+    )
+  }
+}
+
+function pinCompetitorInAuthoring(
+  authoring: MeasurementDraftAuthoring,
+  input: MeasurementDraftPinCompetitorRequest,
+): { authoring: MeasurementDraftAuthoring; competitor: MeasurementV2Competitor } {
+  const domain = hostOf(input.domain)
+  if (!domain) throw validationError('A competitor domain must be a valid hostname.')
+  const groupIndex = authoring.groups.findIndex(group => group.stableKey === input.groupKey)
+  if (groupIndex === -1) {
+    throw validationError(`Advanced Measurement group "${input.groupKey}" is absent from the current draft.`)
+  }
+  const sourceGroup = authoring.groups[groupIndex]!
+  const existingIndex = sourceGroup.competitors.findIndex(competitor => hostOf(competitor.domain) === domain)
+  const existing = existingIndex === -1 ? null : sourceGroup.competitors[existingIndex]!
+  const domainLabel = brandLabelFromDomain(domain)
+  // Domain-only pinning approves the competitor, not an ambiguous short
+  // word as its brand. Preserve previously curated identities and aliases.
+  const generatedLabel = brandKeyFromText(domainLabel).length >= MIN_DOMAIN_BRAND_KEY_LENGTH ? domainLabel : domain
+  const label = input.label ?? existing?.label ?? generatedLabel
+  const aliases = input.aliases ?? existing?.aliases ?? (input.label ? [input.label] : [])
+  const stableKey = existing?.stableKey ?? nextCompetitorStableKey(sourceGroup, domain)
+  const competitor: MeasurementV2Competitor = measurementDraftCompetitorSchema.parse({ stableKey, label, domain, aliases })
+  const competitors = existingIndex === -1
+    ? [...sourceGroup.competitors, competitor]
+    : sourceGroup.competitors.map((candidate, index) => index === existingIndex ? competitor : candidate)
+  const group: MeasurementDraftGroup = { ...sourceGroup, competitors }
+  const groups = groupIndex === -1
+    ? [...authoring.groups, group]
+    : authoring.groups.map((candidate, index) => index === groupIndex ? group : candidate)
+  return { authoring: { ...authoring, groups }, competitor }
+}
+
+function nextCompetitorStableKey(group: MeasurementDraftGroup, domain: string): string {
+  const rawBase = `competitor-${domain}`
+  const digest = crypto.createHash('sha256').update(domain).digest('hex').slice(0, 12)
+  const base = rawBase.length <= 128
+    ? rawBase
+    : `${rawBase.slice(0, 128 - digest.length - 1)}-${digest}`
+  const used = new Set(group.competitors.map(competitor => competitor.stableKey))
+  if (!used.has(base)) return base
+  let suffix = 2
+  while (used.has(`${base.slice(0, 128 - String(suffix).length - 1)}-${suffix}`)) suffix++
+  return `${base.slice(0, 128 - String(suffix).length - 1)}-${suffix}`
 }
 
 /**
@@ -618,6 +707,108 @@ export async function measurementDraftRoutes(app: FastifyInstance, opts: Measure
       }))
     })
     reply.header('etag', response.etag)
+    return settled
+  })
+
+  /**
+   * Convenience market mutation for an observed competitor. Unlike generic
+   * draft actions it is safe without If-Match: it only upserts one domain and
+   * preserves every unrelated draft edit. The active revision is still an
+   * explicit CAS boundary, and the published plan is never changed here.
+   */
+  app.post<{ Params: { name: string } }>('/projects/:name/measurement-plan/draft/actions/pin-competitor', async (request, reply) => {
+    const gate = beginMutation(request, reply, 'pin-competitor')
+    if (gate.replay !== null) return gate.replay
+    const parsed = measurementDraftPinCompetitorRequestSchema.safeParse(request.body)
+    if (!parsed.success) throw validationError('Invalid "pin-competitor" payload', { issues: parsed.error.issues })
+    const input = parsed.data
+    const now = new Date()
+    const settled = app.db.transaction(tx => {
+      const active = activePlanVersionRow(tx, gate.project.id)
+      if (!active || active.schemaVersion !== 2) {
+        throw validationError('Pinning a market competitor requires an active v2 measurement plan.')
+      }
+      if (active.revision !== input.expectedActiveRevision) {
+        throw measurementPlanRevisionConflict(input.expectedActiveRevision, active.revision)
+      }
+      const activePlan = parseV2Plan(active)
+      const activeGroup = activePlan.groups.find(group => group.stableKey === input.groupKey)
+      if (!activeGroup) throw validationError(`Unknown Advanced Measurement group "${input.groupKey}".`)
+      const row = draftRow(tx, gate.project.id)
+      const draftCreated = row === null
+      if (draftCreated) assertPinLocationsPreserved(gate.project, activePlan)
+      const before = row
+        ? parseStoredAuthoring(row.authoringJson)
+        : seedAuthoring(gate.project, activePlan, actionContextFor(app.db, gate.project), opts)
+      const result = pinCompetitorInAuthoring(before, input)
+      assertMeasurementDraftAuthoringLimits(before, result.authoring)
+      const changed = authoringIdentity(result.authoring) !== authoringIdentity(before)
+      const etagVersion = row ? (changed ? row.etagVersion + 1 : row.etagVersion) : 1
+      const response: MeasurementDraftPinCompetitorResponse = measurementDraftPinCompetitorResponseSchema.parse({
+        ...mutationResponse(etagVersion, changed || draftCreated, [], result.authoring),
+        groupKey: input.groupKey,
+        competitor: result.competitor,
+        draftCreated,
+        published: { revision: active.revision, competitorsChanged: false },
+      })
+      if (row === null) {
+        const draftId = crypto.randomUUID()
+        tx.insert(measurementPlanDrafts).values({
+          id: draftId,
+          projectId: gate.project.id,
+          schemaVersion: 2,
+          baseActiveVersionId: active.id,
+          baseActiveRevision: active.revision,
+          authoringJson: JSON.stringify(result.authoring),
+          etagVersion,
+          createdBy: serializeActor(gate.actor),
+          updatedBy: serializeActor(gate.actor),
+          createdAt: now.toISOString(),
+          updatedAt: now.toISOString(),
+        }).run()
+        writeAuditLog(tx, auditFromRequest(request, {
+          projectId: gate.project.id,
+          actor: 'api',
+          action: 'measurement-draft.created',
+          entityType: 'measurement-draft',
+          entityId: draftId,
+          diff: { baseActiveRevision: active.revision, via: 'pin-competitor' },
+        }))
+        writeAuditLog(tx, auditFromRequest(request, {
+          projectId: gate.project.id,
+          actor: 'api',
+          action: 'measurement-draft.pin-competitor',
+          entityType: 'measurement-draft',
+          entityId: draftId,
+          diff: { groupKey: input.groupKey, domain: result.competitor.domain, etag: response.etag },
+        }))
+      } else if (changed) {
+        const updated = tx.update(measurementPlanDrafts).set({
+          authoringJson: JSON.stringify(result.authoring),
+          etagVersion,
+          updatedBy: serializeActor(gate.actor),
+          updatedAt: now.toISOString(),
+        }).where(and(
+          eq(measurementPlanDrafts.id, row.id),
+          eq(measurementPlanDrafts.etagVersion, row.etagVersion),
+        )).run()
+        if (updated.changes !== 1) {
+          throw measurementDraftEtagStale(measurementDraftEtag(row.etagVersion), measurementDraftEtag(draftRow(tx, gate.project.id)?.etagVersion ?? 0))
+        }
+        writeAuditLog(tx, auditFromRequest(request, {
+          projectId: gate.project.id,
+          actor: 'api',
+          action: 'measurement-draft.pin-competitor',
+          entityType: 'measurement-draft',
+          entityId: row.id,
+          diff: { groupKey: input.groupKey, domain: result.competitor.domain, etag: response.etag },
+        }))
+      }
+      sweepExpiredMeasurementReceipts(tx, now)
+      writeReceipt(tx, gate.project.id, gate.lookup, response, 200, now)
+      return response
+    })
+    reply.header('etag', settled.etag)
     return settled
   })
 

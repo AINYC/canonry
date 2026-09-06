@@ -54,9 +54,103 @@ describe('truncateToolResult (OSS-C)', () => {
     expect(parsed.items.length + parsed.__omittedRows).toBe(rows.length)
   })
 
+  it('keeps nested model identities and denominators while marking omitted evidence per group', () => {
+    const rows = Array.from({ length: 300 }, (_, i) => ({ ...evidenceRow(i), sampleUrls: [`https://example.com/${i}`] }))
+    const groups = ['model-a', 'model-b'].map(model => ({
+      provider: 'openai', model, servedModels: { status: 'unknown' }, snapshotCount: 300,
+      evidence: { answeredResults: 300, mentionCredits: 450 },
+      project: { mentionCount: 150, shareOfVoice: 100 / 3 },
+      observed: rows,
+    }))
+    const details = {
+      observed: rows,
+      evidence: { answeredResults: 600, mentionCredits: 900 },
+      modelComparison: { basis: 'requested-model', groups, totalGroups: 2, truncated: false },
+    }
+    const original = JSON.stringify(details)
+    const out = truncateToolResult(details)
+    const parsed = JSON.parse(out)
+
+    expect(out.length).toBeLessThanOrEqual(CAP)
+    expect(parsed.__truncated).toBe(true)
+    expect(parsed.evidence).toEqual(details.evidence)
+    expect(parsed.modelComparison.groups).toHaveLength(2)
+    expect(parsed.modelComparison.totalGroups).toBe(2)
+    for (const [index, group] of parsed.modelComparison.groups.entries()) {
+      expect(group.model).toBe(groups[index]!.model)
+      expect(group.servedModels).toEqual(groups[index]!.servedModels)
+      expect(group.evidence).toEqual(groups[index]!.evidence)
+      expect(group.project).toEqual(groups[index]!.project)
+      expect(group.snapshotCount).toBe(300)
+      expect(group.observed).toEqual(rows.slice(0, group.observed.length))
+      expect(group.observed.length + (group.__omittedRowsByField?.observed ?? 0)).toBe(300)
+    }
+    expect(parsed.observed.length + (parsed.__omittedRowsByField?.observed ?? 0)).toBe(300)
+    expect(JSON.stringify(details)).toBe(original)
+  })
+
+  it('handles nested-only and multiple oversized arrays with path-local counts', () => {
+    const rows = Array.from({ length: 300 }, (_, i) => evidenceRow(i))
+    const details = { result: { first: rows, second: rows, total: 600 } }
+    const out = truncateToolResult(details)
+    const parsed = JSON.parse(out)
+
+    expect(out.length).toBeLessThanOrEqual(CAP)
+    expect(parsed.result.total).toBe(600)
+    expect(parsed.result.__truncated).toBe(true)
+    for (const key of ['first', 'second']) {
+      expect(parsed.result[key]).toEqual(rows.slice(0, parsed.result[key].length))
+      expect(parsed.result[key].length + (parsed.result.__omittedRowsByField[key] ?? 0)).toBe(300)
+    }
+    expect(details.result.first).toHaveLength(300)
+    expect(details.result.second).toHaveLength(300)
+  })
+
+  it('does not trim served-model identity arrays before dropping evidence or whole groups', () => {
+    const models = Array.from({ length: 80 }, (_, i) => `model-${i}-${'x'.repeat(160)}`)
+    const groups = ['requested-a', 'requested-b'].map(model => ({
+      provider: 'openai', model,
+      servedModels: { status: 'mixed', models, includesUnknown: false },
+      snapshotCount: 80,
+      observed: Array.from({ length: 60 }, (_, i) => evidenceRow(i)),
+    }))
+    const details = { modelComparison: { basis: 'requested-model', groups, totalGroups: 2, truncated: false } }
+    const original = JSON.stringify(details)
+    const out = truncateToolResult(details)
+    const parsed = JSON.parse(out)
+
+    expect(out.length).toBeLessThanOrEqual(CAP)
+    expect(parsed.modelComparison.groups.length).toBeGreaterThan(0)
+    for (const [index, group] of parsed.modelComparison.groups.entries()) {
+      expect(group.servedModels).toEqual(groups[index]!.servedModels)
+      expect(group.model).toBe(groups[index]!.model)
+      expect(group.snapshotCount).toBe(80)
+    }
+    expect(parsed.modelComparison.groups.length + (parsed.modelComparison.__omittedRowsByField?.groups ?? 0)).toBe(2)
+    expect(JSON.stringify(details)).toBe(original)
+  })
+
+  it('drops whole nested groups only when their metadata alone exceeds the cap', () => {
+    const groups = Array.from({ length: 300 }, (_, i) => ({ ...evidenceRow(i), observed: [] }))
+    const out = truncateToolResult({ modelComparison: { groups, totalGroups: groups.length } })
+    const parsed = JSON.parse(out)
+
+    expect(out.length).toBeLessThanOrEqual(CAP)
+    expect(parsed.modelComparison.groups.length).toBeGreaterThan(0)
+    expect(parsed.modelComparison.groups).toEqual(groups.slice(0, parsed.modelComparison.groups.length))
+    expect(parsed.modelComparison.groups.length + parsed.modelComparison.__omittedRowsByField.groups).toBe(300)
+    expect(parsed.modelComparison.totalGroups).toBe(300)
+  })
+
   it('falls back to a marked string slice for an oversized scalar with nothing to drop', () => {
     const giant = 'y'.repeat(CAP + 5_000)
     const out = truncateToolResult(giant)
+    expect(out.length).toBeLessThanOrEqual(CAP + 50)
+    expect(out).toContain('truncated')
+  })
+
+  it('preserves the scalar fallback for objects with a scalar JSON representation', () => {
+    const out = truncateToolResult({ toJSON: () => 'x'.repeat(CAP + 1_000) })
     expect(out.length).toBeLessThanOrEqual(CAP + 50)
     expect(out).toContain('truncated')
   })

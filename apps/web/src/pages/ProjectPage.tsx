@@ -13,12 +13,15 @@ import { Card } from '../components/ui/card.js'
 import { WriteButton } from '../components/shared/AccessControls.js'
 import { InfoTooltip } from '../components/shared/InfoTooltip.js'
 import { MentionShare } from '../components/project/MentionShare.js'
-import { CitationBadge } from '../components/shared/CitationBadge.js'
+import {
+  CompetitorLandscape,
+  type CompetitorLandscapeRow,
+  type CompetitorLandscapeWindow,
+} from '../components/project/CompetitorLandscape.js'
 import { ProviderBadge } from '../components/shared/ProviderBadge.js'
 import { RunRow } from '../components/shared/RunRow.js'
 import { ToneBadge } from '../components/shared/ToneBadge.js'
 import { EvidenceTable } from '../components/project/EvidenceTable.js'
-import { CompetitorTable } from '../components/project/CompetitorTable.js'
 import { BingSummaryMetric } from '../components/project/BingSummaryMetric.js'
 import { ActivitySection } from '../components/project/ActivitySection.js'
 import { GscSection } from '../components/project/GscSection.js'
@@ -86,6 +89,8 @@ import {
   getApiV1ProjectsByNameBingPerformanceOptions,
   getApiV1ProjectsByNameBingSitesOptions,
   getApiV1ProjectsByNameBingStatusOptions,
+  getApiV1ProjectsByNameAnalyticsCompetitorsOptions,
+  postApiV1ProjectsByNameMeasurementPlanDraftActionsPinCompetitorMutation,
   getApiV1ProjectsByNameGoogleConnectionsOptions,
   getApiV1ProjectsByNameMeasurementOverviewInfiniteOptions,
   getApiV1ProjectsByNameMeasurementPlanOptions,
@@ -100,11 +105,11 @@ import {
 import { useAppendQueries, useTriggerRun } from '../queries/mutations.js'
 import { GSC_STALE_MS } from '../queries/query-client.js'
 import { invalidateProjectQueryDomain } from '../queries/query-invalidation.js'
-import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useInfiniteQuery, useMutation, useQuery } from '@tanstack/react-query'
 import { getApiV1ProjectsOptions } from '@ainyc/canonry-api-client/react-query'
 import { useProjectDashboard } from '../queries/use-project-dashboard.js'
+import { useCompetitorLandscapeRefresh } from '../queries/competitor-landscape-refresh.js'
 import { useInitialDashboard } from '../contexts/dashboard-context.js'
-import { useDrawer } from '../hooks/use-drawer.js'
 import { useAccount } from '../contexts/account-context.js'
 import {
   CDP_PROVIDER_NAME,
@@ -140,6 +145,11 @@ type SearchConsoleWorkspace = 'google' | 'bing'
  */
 const REFRESH_POLL_INTERVAL_MS = 2_000
 const REFRESH_POLL_TIMEOUT_MS = 300_000
+
+function competitorDraftIdempotencyKey(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  return `competitor-draft-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
 
 export function patchProjectDashboardCache(
   queryClient: ReturnType<typeof useQueryClient>,
@@ -1282,136 +1292,6 @@ function OverviewDisclosure({
   )
 }
 
-function OverviewSignals({
-  insights,
-  suggestedQueries,
-  projectName,
-}: {
-  insights: ProjectCommandCenterVm['insights']
-  suggestedQueries: ProjectCommandCenterVm['suggestedQueries']
-  projectName: string
-}) {
-  const { openEvidence } = useDrawer()
-  const appendQueries = useAppendQueries()
-  const [pendingQueries, setPendingQueries] = useState<Set<string>>(new Set())
-
-  if (insights.length === 0 && suggestedQueries.rows.length === 0) return null
-
-  const clearPending = (query: string) => {
-    setPendingQueries(current => {
-      const next = new Set(current)
-      next.delete(query)
-      return next
-    })
-  }
-
-  const handleTrackQuery = (query: string) => {
-    setPendingQueries(current => new Set(current).add(query))
-    appendQueries.mutate(
-      { projectName, queries: [query] },
-      {
-        onSuccess: () => {
-          addToast({ tone: 'positive', title: `Tracking "${query}"` })
-          clearPending(query)
-        },
-        onError: (error) => {
-          addToast({ tone: 'negative', title: `Could not track "${query}"`, detail: String(error) })
-          clearPending(query)
-        },
-      },
-    )
-  }
-
-  const renderInsight = (insight: ProjectCommandCenterVm['insights'][number]) => (
-    <div key={insight.id} className="py-3">
-      <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <p className="text-sm font-medium text-heading">{insight.title}</p>
-          {insight.detail ? <p className="mt-1 max-w-3xl text-sm leading-6 text-secondary">{insight.detail}</p> : null}
-        </div>
-        <ToneBadge tone={insight.tone}>{insight.actionLabel}</ToneBadge>
-      </div>
-
-      {insight.affectedPhrases.length > 0 ? (
-        <details className="mt-2">
-          <summary className="w-fit cursor-pointer text-sm font-medium text-secondary transition-colors hover:text-heading focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-500/60">
-            Evidence · {insight.affectedPhrases.length} affected {insight.affectedPhrases.length === 1 ? 'query' : 'queries'}
-          </summary>
-          <ul className="mt-2 divide-y divide-subtle border-y border-subtle">
-            {insight.affectedPhrases.map((phrase, index) => (
-              <li key={phrase.evidenceId || `${insight.id}-${index}`} className="flex flex-wrap items-center gap-2 py-2">
-                <CitationBadge state={phrase.citationState} />
-                <span className="min-w-0 flex-1 text-sm text-strong">{phrase.query}</span>
-                {phrase.provider ? <ProviderBadge provider={phrase.provider} /> : null}
-                {!isEmbed() && phrase.evidenceId ? (
-                  <Button type="button" variant="ghost" size="sm" onClick={() => { void openEvidence(phrase.evidenceId) }}>
-                    View evidence
-                  </Button>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        </details>
-      ) : null}
-    </div>
-  )
-
-  const renderSuggestion = (suggestion: ProjectCommandCenterVm['suggestedQueries']['rows'][number]) => {
-    const isPending = pendingQueries.has(suggestion.query)
-    return (
-      <div key={suggestion.query} className="flex items-center justify-between gap-4 py-3">
-        <div className="min-w-0">
-          <p className="text-xs font-medium uppercase tracking-wide text-muted">Suggested query</p>
-          <p className="mt-1 text-sm font-medium text-strong">{suggestion.query}</p>
-          <p className="mt-0.5 text-sm text-secondary">{suggestion.reason}</p>
-        </div>
-        {!isEmbed() ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={isPending}
-            aria-label={`Track query "${suggestion.query}"`}
-            onClick={() => handleTrackQuery(suggestion.query)}
-          >
-            {isPending ? 'Tracking…' : 'Track'}
-          </Button>
-        ) : null}
-      </div>
-    )
-  }
-
-  const primaryInsights = insights.slice(0, 1)
-  const primarySuggestions = suggestedQueries.rows.slice(0, 1)
-  const remainingInsights = insights.slice(1)
-  const remainingSuggestions = suggestedQueries.rows.slice(1)
-  const remainingCount = remainingInsights.length + remainingSuggestions.length
-
-  return (
-    <section className="page-section-divider" aria-labelledby="overview-signals-title">
-      <div className="section-head">
-        <h2 id="overview-signals-title">Latest signals</h2>
-      </div>
-
-      <div className="divide-y divide-default border-y border-default">
-        {primaryInsights.map(renderInsight)}
-        {primarySuggestions.map(renderSuggestion)}
-      </div>
-      {remainingCount > 0 ? (
-        <details className="mt-2">
-          <summary className="w-fit cursor-pointer text-sm font-medium text-secondary transition-colors hover:text-heading focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-500/60">
-            {remainingCount} more {remainingCount === 1 ? 'signal' : 'signals'}
-          </summary>
-          <div className="mt-2 divide-y divide-default border-y border-default">
-            {remainingInsights.map(renderInsight)}
-            {remainingSuggestions.map(renderSuggestion)}
-          </div>
-        </details>
-      ) : null}
-    </section>
-  )
-}
-
 /**
  * Thin shell that guards on project-dashboard readiness. The real
  * component (`ProjectPageContent`) declares all the page's ~60 hooks,
@@ -1445,6 +1325,7 @@ export function ProjectPage(props: { tab: ProjectPageTab }) {
     commandCenter: model,
     isLoading: dashboardLoading,
     latestVisibilityRevision,
+    competitorHistoryRevision,
     refetch,
   } = useProjectDashboard(lookupProjectName)
   const isLoading = (!nameFromContext && projectsListQuery.isLoading) || dashboardLoading
@@ -1503,6 +1384,7 @@ export function ProjectPage(props: { tab: ProjectPageTab }) {
     model={model}
     refetch={refetch}
     latestVisibilityRevision={latestVisibilityRevision}
+    competitorHistoryRevision={competitorHistoryRevision}
     {...props}
   />
 }
@@ -1575,11 +1457,13 @@ function ProjectPageContent({
   model,
   refetch,
   latestVisibilityRevision,
+  competitorHistoryRevision,
 }: {
   tab: ProjectPageTab
   model: ProjectCommandCenterVm
   refetch: () => Promise<void>
   latestVisibilityRevision: string
+  competitorHistoryRevision: string
 }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -1671,12 +1555,9 @@ function ProjectPageContent({
   const [newQueryText, setNewQueryText] = useState('')
   const [querySaving, setQuerySaving] = useState(false)
   const [removingQuery, setRemovingQuery] = useState<string | null>(null)
-  const [addingCompetitor, setAddingCompetitor] = useState(false)
-  const [newCompetitorDomain, setNewCompetitorDomain] = useState('')
-  const [competitorSaving, setCompetitorSaving] = useState(false)
+  const [competitorLandscapeWindow, setCompetitorLandscapeWindow] = useState<CompetitorLandscapeWindow>('30d')
   const [locationFilter, setLocationFilter] = useState<string | undefined>(undefined)
   const [compareLocations, setCompareLocations] = useState(false)
-  const [competitorFilter, setCompetitorFilter] = useState<string | null>(null)
   const [locationTimeline, setLocationTimeline] = useState<import('../api.js').ApiTimelineEntry[] | null>(null)
   const [_locationTimelineLoading, setLocationTimelineLoading] = useState(false)
   // Scope and query class come from the URL so a market is a place you can
@@ -1857,6 +1738,108 @@ function ProjectPageContent({
     measurementSetupQuery.data === undefined
     && activeMeasurementPlanQuery.data === undefined
     && (activeMeasurementPlanQuery.isLoading || measurementSetupQuery.isLoading)
+  // Advanced competitor reads are explicit. A market keeps its frozen market
+  // identities AND the project pins that the stored-evidence API unions into
+  // its denominator. All markets is a separate raw-evidence aggregate, never
+  // an average of market percentages.
+  const competitorLandscapeGroupKey = activeMeasurementPlanSchemaVersion === 2
+    && advancedMeasurementView.scope === 'group'
+    ? advancedMeasurementView.groupKey
+    : undefined
+  const isAdvancedAllMarkets = activeMeasurementPlanSchemaVersion === 2
+    && advancedMeasurementView.scope === 'all'
+  const selectedCompetitorLandscapeGroup = useMemo(() => {
+    if (activeMeasurementPlan?.plan.schemaVersion !== 2 || !competitorLandscapeGroupKey) return undefined
+    return activeMeasurementPlan.plan.groups.find(group => group.stableKey === competitorLandscapeGroupKey)
+  }, [activeMeasurementPlan, competitorLandscapeGroupKey])
+  const competitorLandscapeQueryInput = {
+    client: heyClient,
+    path: { name: projectName },
+    query: {
+      window: competitorLandscapeWindow,
+      // Simple projects have no class control, so the card asks for the one
+      // class a competitive reading can be built on. Pooling branded queries in
+      // would hand the project its own name back as market share.
+      queryClass: activeMeasurementPlanSchemaVersion === 2 ? advancedMeasurementView.queryClass : 'non-brand' as const,
+      ...(competitorLandscapeGroupKey ? { groupKey: competitorLandscapeGroupKey } : {}),
+      ...(isAdvancedAllMarkets ? { scope: 'all-markets' as const } : {}),
+    },
+  } as const
+  const competitorLandscapeReadEnabled = tab === 'overview'
+    && Boolean(projectName)
+    && !isMeasurementModeUnresolved
+  const competitorLandscapeQuery = useQuery({
+    ...getApiV1ProjectsByNameAnalyticsCompetitorsOptions(competitorLandscapeQueryInput),
+    enabled: competitorLandscapeReadEnabled,
+    staleTime: 0,
+    refetchOnMount: 'always',
+    // CLI/agent classification and pin changes do not emit browser mutations.
+    refetchOnWindowFocus: 'always',
+  })
+  useCompetitorLandscapeRefresh(projectName, JSON.stringify([
+    competitorHistoryRevision,
+    model.competitors.map(competitor => competitor.domain).sort(),
+    model.project.canonicalDomain, model.project.ownedDomains, model.project.aliases, model.project.displayName,
+    activeMeasurementRevision,
+    measurementSetupQuery.data?.draft?.etag ?? null,
+  ]), competitorLandscapeReadEnabled)
+  const competitorLandscapeError = !competitorLandscapeQuery.isError
+    ? undefined
+    : competitorLandscapeQuery.data === undefined
+      ? 'Could not load competitor history. Your pinned competitors remain available.'
+      : 'Could not refresh competitor history. Showing the last available data.'
+  const projectPinnedCompetitorFallback = useMemo<CompetitorLandscapeRow[]>(() => (
+    model.competitors.map(competitor => ({
+      domain: competitor.domain,
+      label: competitor.domain,
+      surfaceClass: 'direct-competitor',
+      pinned: true,
+      mentionCount: 0,
+      shareOfVoice: null,
+      citationCount: competitor.citationCount,
+      answeredResults: competitor.totalQueries,
+      firstSeenAt: null,
+      lastSeenAt: null,
+      sampleUrls: [],
+    }))
+  ), [model.competitors])
+  const advancedPinnedCompetitorFallback = useMemo<CompetitorLandscapeRow[]>(() => {
+    if (activeMeasurementPlan?.plan.schemaVersion !== 2) return projectPinnedCompetitorFallback
+    const marketCompetitors = competitorLandscapeGroupKey
+      ? (selectedCompetitorLandscapeGroup?.competitors ?? [])
+      : activeMeasurementPlan.plan.groups.flatMap(group => group.competitors)
+    const merged = new Map<string, CompetitorLandscapeRow>()
+    for (const competitor of marketCompetitors) {
+      const key = competitor.domain.trim().toLowerCase()
+      if (!key || merged.has(key)) continue
+      merged.set(key, {
+        domain: competitor.domain,
+        label: competitor.label,
+        surfaceClass: 'direct-competitor',
+        pinned: true,
+        mentionCount: 0,
+        shareOfVoice: null,
+        citationCount: 0,
+        answeredResults: 0,
+        firstSeenAt: null,
+        lastSeenAt: null,
+        sampleUrls: [],
+      })
+    }
+    for (const competitor of projectPinnedCompetitorFallback) {
+      const key = competitor.domain.trim().toLowerCase()
+      if (!key || merged.has(key)) continue
+      merged.set(key, competitor)
+    }
+    return [...merged.values()]
+  }, [activeMeasurementPlan, competitorLandscapeGroupKey, projectPinnedCompetitorFallback, selectedCompetitorLandscapeGroup])
+  const competitorLandscapePinnedFallback = activeMeasurementPlanSchemaVersion === 2
+    ? advancedPinnedCompetitorFallback
+    : projectPinnedCompetitorFallback
+  const pinAdvancedCompetitorMutation = useMutation({
+    ...postApiV1ProjectsByNameMeasurementPlanDraftActionsPinCompetitorMutation({ client: heyClient }),
+    meta: { skipGlobalErrorToast: true },
+  })
   const measurementSetupDisplayState = measurementSetupQuery.data !== undefined
     ? 'success' as const
     : measurementSetupQuery.isError
@@ -2047,23 +2030,16 @@ function ProjectPageContent({
   }, [locationTimeline])
 
   const filteredEvidence = useMemo(() => {
-    let filtered = locationFilter !== undefined
+    const filtered = locationFilter !== undefined
       ? visibilityEvidence.filter(e => locationFilter === '' ? !e.location : e.location === locationFilter)
       : visibilityEvidence
-    if (competitorFilter) {
-      const needle = competitorFilter.toLowerCase()
-      // Neutral navigation union: a competitor may be present in answer text,
-      // source links, or a legacy mixed row. Signal-labelled evidence views
-      // use the split fields and never infer one signal from this filter.
-      filtered = filtered.filter(e => e.competitorDomains.some(d => d.toLowerCase() === needle))
-    }
     if (!locationRunHistoryMap) return filtered
     return filtered.map(item => {
       const history = locationRunHistoryMap.get(`${item.query}::${item.provider}`)
         ?? locationRunHistoryMap.get(`${item.query}::`)
       return history ? { ...item, runHistory: history } : item
     })
-  }, [visibilityEvidence, locationFilter, competitorFilter, locationRunHistoryMap])
+  }, [visibilityEvidence, locationFilter, locationRunHistoryMap])
 
   // `if (!model)` branch removed — the wrapper guarantees `model` is set
   // by the time we render `ProjectPageContent`. The wrapper also owns the
@@ -2144,10 +2120,9 @@ function ProjectPageContent({
     }
   }
 
-  async function handleAddCompetitor() {
-    const domain = newCompetitorDomain.trim()
-    if (!domain) return
-    setCompetitorSaving(true)
+  async function handleAddCompetitor(domainInput: string) {
+    const domain = domainInput.trim()
+    if (!domain) return false
     try {
       await apiAppendCompetitors(projectName, [domain])
       // No `['analytics-metrics', projectName]` invalidation — same mechanism
@@ -2161,10 +2136,17 @@ function ProjectPageContent({
       // frame key moves. If `refetch()` fails, the project detail query polls
       // every PROJECT_DETAIL_REFRESH_MS, so the rotation still lands.
       void refetch()
-      setNewCompetitorDomain('')
-      setAddingCompetitor(false)
-    } finally {
-      setCompetitorSaving(false)
+      // The refreshed pin set changes the landscape revision above.
+      return true
+    } catch (err) {
+      addToast({
+        title: 'Could not add competitor',
+        detail: err instanceof Error ? err.message : `Failed to add ${domain}`,
+        tone: 'negative',
+        dedupeKey: 'competitor:add',
+        dedupeMode: 'replace',
+      })
+      return false
     }
   }
 
@@ -2178,13 +2160,15 @@ function ProjectPageContent({
         dedupeKey: 'competitor:remove',
         dedupeMode: 'replace',
       })
-      return
+      return false
     }
 
     try {
       await apiRemoveCompetitorById(projectName, competitor.id)
       // See handleAddCompetitor: the frame key rotation is the refetch.
       void refetch()
+      // The refreshed pin set changes the landscape revision above.
+      return true
     } catch (err) {
       addToast({
         title: 'Could not remove competitor',
@@ -2193,6 +2177,55 @@ function ProjectPageContent({
         dedupeKey: 'competitor:remove',
         dedupeMode: 'replace',
       })
+      return false
+    }
+  }
+
+  async function handlePinAdvancedCompetitor(domainInput: string) {
+    const domain = domainInput.trim()
+    if (
+      !domain
+      || !competitorLandscapeGroupKey
+      || activeMeasurementPlanSchemaVersion !== 2
+      || !canWrite
+      || isEmbed()
+      || pinAdvancedCompetitorMutation.isPending
+    ) return false
+
+    try {
+      const result = await pinAdvancedCompetitorMutation.mutateAsync({
+        client: heyClient,
+        path: { name: projectName },
+        headers: { 'Idempotency-Key': competitorDraftIdempotencyKey() },
+        body: {
+          expectedActiveRevision: activeMeasurementRevision,
+          groupKey: competitorLandscapeGroupKey,
+          domain,
+        },
+      })
+      // The active revision is deliberately frozen. The stored-evidence read
+      // exposes the pending draft pin straight away, and Setup picks up the
+      // draft state for the explicit publish step.
+      void Promise.allSettled([
+        measurementSetupQuery.refetch(),
+      ])
+      addToast({
+        title: result.draftCreated ? 'Competitor added to a market draft' : 'Market competitor updated',
+        detail: `Publish the Advanced Measurement draft before ${domain} is used in future market runs.`,
+        tone: 'positive',
+        dedupeKey: `competitor:market-pin:${competitorLandscapeGroupKey}:${domain}`,
+        dedupeMode: 'replace',
+      })
+      return true
+    } catch (err) {
+      addToast({
+        title: 'Could not add market competitor',
+        detail: err instanceof Error ? err.message : `Failed to add ${domain} to the market draft.`,
+        tone: 'negative',
+        dedupeKey: 'competitor:market-pin:error',
+        dedupeMode: 'replace',
+      })
+      return false
     }
   }
 
@@ -2258,20 +2291,6 @@ function ProjectPageContent({
   const projectSettingsTab = isEmbedProjectTabAllowed('settings', embedProjectTabs)
     ? { key: 'settings' as const, label: 'Settings', href: `${projectTabBase}/settings` }
     : null
-
-  function focusOverviewSection(id: string, openDetails = false) {
-    const section = document.getElementById(id)
-    if (!section) return
-    if (openDetails && section instanceof HTMLDetailsElement) section.open = true
-    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    window.requestAnimationFrame(() => {
-      section.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' })
-      const focusTarget = section instanceof HTMLDetailsElement
-        ? section.querySelector<HTMLElement>('summary')
-        : section
-      focusTarget?.focus({ preventScroll: true })
-    })
-  }
 
   return (
     <div className="page-container">
@@ -2437,25 +2456,12 @@ function ProjectPageContent({
             hasVisibilityBaseline={hasVisibilityBaseline}
           />
 
-          <OverviewSignals
-            insights={model.insights}
-            suggestedQueries={model.suggestedQueries}
-            projectName={model.project.name}
-          />
-
           <section className="page-section-divider">
             <div className="section-head section-head-inline">
               <div>
                 <p className="eyebrow eyebrow-soft">Competitive</p>
                 <h2>Where competitors are winning</h2>
-              </div>
-              <div className="flex items-center gap-3">
-                <p className="supporting-copy">{model.competitors.length} tracked</p>
-                {!isEmbed() && (
-                  <WriteButton type="button" variant="outline" size="sm" onClick={() => setAddingCompetitor(!addingCompetitor)}>
-                    {addingCompetitor ? 'Cancel' : '+ Add competitor'}
-                  </WriteButton>
-                )}
+                <p className="supporting-copy">Latest measured results against pinned competitors.</p>
               </div>
             </div>
 
@@ -2491,38 +2497,23 @@ function ProjectPageContent({
               </p>
             )}
 
-            {addingCompetitor && (
-              <div className="mt-4 mb-3 flex gap-2 rounded-lg border border-base bg-bg-elevated/40 p-3">
-                <input
-                  className="flex-1 rounded border border-strong bg-transparent px-2 py-1.5 text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none"
-                  type="text"
-                  placeholder="competitor.com"
-                  value={newCompetitorDomain}
-                  onChange={(e) => setNewCompetitorDomain(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') { void handleAddCompetitor() } }}
-                />
-                <WriteButton type="button" size="sm" disabled={!newCompetitorDomain.trim() || competitorSaving} onClick={asyncHandler(handleAddCompetitor)}>
-                  {competitorSaving ? 'Adding...' : 'Add'}
-                </WriteButton>
-              </div>
-            )}
+          </section>
 
-            {model.competitors.length > 0 && (
-              <details className="inline-disclosure mt-4">
-                <summary>Review tracked competitors</summary>
-                <div className="mt-3">
-                  <CompetitorTable
-                    competitors={model.competitors}
-                    onSelectCompetitor={(domain) => {
-                      setCompetitorFilter(domain)
-                      focusOverviewSection('evidence-section', true)
-                    }}
-                    onRemoveCompetitor={isEmbed() ? undefined : (domain) => { void handleRemoveCompetitor(domain) }}
-                    activeFilter={competitorFilter}
-                  />
-                </div>
-              </details>
-            )}
+          <section className="page-section-divider">
+            <CompetitorLandscape
+              window={competitorLandscapeWindow}
+              landscape={competitorLandscapeQuery.data}
+              pinnedFallback={projectPinnedCompetitorFallback}
+              canWrite={canWrite}
+              isEmbed={isEmbed()}
+              onWindowChange={setCompetitorLandscapeWindow}
+              onPin={canWrite && !isEmbed() ? handleAddCompetitor : undefined}
+              onUnpin={canWrite && !isEmbed() ? handleRemoveCompetitor : undefined}
+              onAddCompetitor={canWrite && !isEmbed() ? handleAddCompetitor : undefined}
+              error={competitorLandscapeError}
+              onRetry={competitorLandscapeReadEnabled ? () => { void competitorLandscapeQuery.refetch() } : undefined}
+              isLoading={competitorLandscapeReadEnabled && competitorLandscapeQuery.isPending && competitorLandscapeQuery.data === undefined}
+            />
           </section>
 
           <OverviewDisclosure
@@ -2530,7 +2521,7 @@ function ProjectPageContent({
             eyebrow="Tracked coverage"
             title="Query evidence"
             meta={`${model.queryCounts.total} ${model.queryCounts.total === 1 ? 'query' : 'queries'}`}
-            defaultOpen={isEmbed()}
+            defaultOpen
           >
             {!isEmbed() && (
               <div className="mb-3 flex items-center justify-end">
@@ -2619,19 +2610,6 @@ function ProjectPageContent({
                     Compare
                   </button>
                 )}
-              </div>
-            )}
-            {competitorFilter && (
-              <div className="mb-3 flex items-center gap-2 rounded-md border border-negative-900/40 bg-negative-950/20 px-3 py-2">
-                <span className="text-[11px] uppercase tracking-wide text-negative-400">Competitor filter</span>
-                <span className="text-sm text-strong">Showing queries where <span className="font-semibold">{competitorFilter}</span> surfaced</span>
-                <button
-                  type="button"
-                  className="ml-auto text-xs text-secondary hover:text-strong"
-                  onClick={() => setCompetitorFilter(null)}
-                >
-                  Clear filter ×
-                </button>
               </div>
             )}
             <EvidenceTable
@@ -2739,6 +2717,40 @@ function ProjectPageContent({
             isLoadMoreError={advancedMeasurementOverviewQuery.isFetchNextPageError}
             viewSearch={advancedMeasurementView.search ?? ''}
           />
+          {advancedMeasurementMode.surface !== 'simple-overview' ? (
+            <section className="page-section-divider">
+              <CompetitorLandscape
+                window={competitorLandscapeWindow}
+                landscape={competitorLandscapeQuery.data}
+                pinnedFallback={competitorLandscapePinnedFallback}
+                canWrite={canWrite}
+                isEmbed={isEmbed()}
+                onWindowChange={setCompetitorLandscapeWindow}
+                // A group write is an additive, revision-guarded draft action.
+                // All-markets has no single safe market target, so it stays
+                // read-only even for an operator.
+                onPin={competitorLandscapeGroupKey && canWrite && !isEmbed()
+                  ? handlePinAdvancedCompetitor
+                  : !isAdvancedAllMarkets && canWrite && !isEmbed()
+                    ? handleAddCompetitor
+                    : undefined}
+                onUnpin={competitorLandscapeGroupKey || isAdvancedAllMarkets || !canWrite || isEmbed()
+                  ? undefined
+                  : handleRemoveCompetitor}
+                onAddCompetitor={competitorLandscapeGroupKey && canWrite && !isEmbed()
+                  ? handlePinAdvancedCompetitor
+                  : !isAdvancedAllMarkets && canWrite && !isEmbed()
+                    ? handleAddCompetitor
+                    : undefined}
+                error={competitorLandscapeError}
+                onRetry={competitorLandscapeReadEnabled ? () => { void competitorLandscapeQuery.refetch() } : undefined}
+                isLoading={competitorLandscapeReadEnabled && competitorLandscapeQuery.isPending && competitorLandscapeQuery.data === undefined}
+                scopeLabel={competitorLandscapeGroupKey
+                  ? `${selectedCompetitorLandscapeGroup?.label ?? competitorLandscapeGroupKey} market`
+                  : isAdvancedAllMarkets ? 'All markets' : 'Project-wide'}
+              />
+            </section>
+          ) : null}
         </>
         )
       ) : tab === 'settings' ? (

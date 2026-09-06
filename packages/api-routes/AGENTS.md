@@ -169,6 +169,33 @@ incrementally.
 
 Routes fire lifecycle hooks via `opts` callbacks — `onRunCreated`, `onProviderUpdate`, `onScheduleUpdated`, `onProjectDeleted`. Fire these **after** the database transaction commits, not inside it.
 
+### Historical competitor landscapes
+
+- `GET /projects/:name/analytics/competitors` is a stored-evidence read. It
+  must never start discovery, classify a domain live, call a provider, or write.
+- Include only completed/partial answer-visibility snapshots; count excluded
+  probes and non-terminal results in the response.
+- A Simple pin reinterprets stored history at read time. An Advanced market
+  reads the frozen plan revision for each contributing run. Project pins plus
+  active and pending-draft competitors reinterpret the selected history.
+  Historical-only identities and aliases match only their frozen run revisions.
+- `scope=all-markets` recomputes from raw scoped evidence. Never average market
+  percentages. Compare draft pins with active pins per group. Combine all
+  market aliases when identities share a registrable domain.
+- Advanced pinning is a revision-guarded draft mutation. It never publishes.
+- Optional `groupBy=model` adds provider/requested-model groups to the same
+  stored evidence. Trim IDs and retain null/empty IDs as unknown. Never infer
+  requested identity from current settings or served models. Preserve raw
+  served IDs and unknown served evidence separately. `model` requires `provider`
+  and narrows totals and exclusions before grouping. Group only eligible
+  observations. Absent models are unmeasured, not zero. Cap groups at 50 and
+  ranked rows at 100 per group. Retain every pin and all frozen Advanced scopes.
+  This is descriptive, not a matched-query comparison.
+- Advanced query classes follow frozen execution nodes and scoped Target edges.
+  Do not combine classes by question text or query ID.
+- Generated domain labels use the shared minimum brand length. Do not convert
+  them into explicit aliases. Preserve curated names and existing identities.
+
 ### Derived row schemas (drizzle-zod)
 
 `src/db-derived-dtos.ts` exports `*RowSchema` Zod validators generated from the Drizzle table definitions via `drizzle-zod`'s `createSelectSchema()`. Per-column refinements narrow:

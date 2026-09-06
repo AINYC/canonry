@@ -19,6 +19,7 @@ Pure analysis library for computing intelligence insights from run data. Takes r
 | `src/insight-grouping.ts` | `groupInsights<T>(insights, keyFn?)` — generic dedup over `(query, provider, type)`. Consumed by report renderer + any future CLI/dashboard list view to collapse repeat alerts. |
 | `src/next-steps.ts` | `mapOpportunitiesToNextSteps()` — auto-fills `recommendedNextSteps` from scored content opportunities when the upstream insight-driven builder produced none. Pure mapper consumed by both `api-routes/report.ts` and `canonry/report-renderer.ts`. |
 | `src/query-categorize.ts` | `buildBrandTokens()` + `categorizeQueryByIntent()` — brand/lead-gen/industry/other classifier. Uses contracts' exact approved-alias matcher across spacing/hyphenation variants; suffix stripping and fuzzy/edit-distance attribution are forbidden. |
+| `src/competitor-landscape-history.ts` | Stored-evidence competitor aggregation. Global pins intentionally reinterpret history; competitors frozen only in an old Advanced revision match answer text only in snapshots from that revision. Stored classifications retain exact-host identity until deterministic registrable-domain aggregation. |
 | `src/trend-stability.ts` | `isTrendBaseline(points)` + `MIN_TREND_POINTS` — predicate any consumer (renderer, dashboard tile, Aero) calls before showing a trend chart. Suppresses misleading visualizations on small samples. |
 | `src/types.ts` | Shared types: `RunData`, `Snapshot`, `AnalysisResult`, `Insight` |
 | `src/index.ts` | Barrel re-export of all modules |

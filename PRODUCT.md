@@ -32,6 +32,17 @@ Users usually arrive to answer four questions, in this order:
   provider payload details, and IDs are advanced diagnostics.
 - Keep mention and citation signals independent. A brand named in answer text
   is not the same as a domain cited in the source list.
+- In Simple projects, keep suggested queries and the Latest signals block out
+  of the overview. Show query-class labels and a filter in Query evidence.
+- Classify Simple queries from the current project brand names. Preserve
+  Advanced Measurement classes from the published Target assignments.
+- Use direct provider adapters for API sweeps, with explicit model selection
+  and rules for answer mentions and citation evidence. See `docs/providers/model-selection.md`.
+- In competitor landscapes, show explicit operator pins first, then competitors
+  observed in the selected stored-history window. Keep other cited sources in
+  a disclosure; adding a pin reinterprets stored evidence without starting work.
+- Scope Advanced Measurement competitor landscapes to the selected market.
+  Aggregate all markets from raw evidence, never by averaging market rates.
 - Use truthful readiness, empty, loading, success, and failure states.
 - Prefer familiar product controls over invented interactions.
 

@@ -40,6 +40,87 @@ function trimRowsToFit(rows: readonly unknown[], render: (kept: unknown[]) => st
   return kept
 }
 
+interface NestedArrayCandidate {
+  owner: Record<string, unknown>
+  key: string
+  rows: unknown[]
+  size: number
+  hasRecordRows: boolean
+}
+
+/** Prefer evidence collections inside groups before dropping the groups themselves. */
+function nestedArrayCandidates(root: Record<string, unknown>): NestedArrayCandidate[] {
+  const candidates: NestedArrayCandidate[] = []
+  const visit = (object: Record<string, unknown>): boolean => {
+    let containsRecordCollection = false
+    for (const [key, value] of Object.entries(object)) {
+      if (Array.isArray(value)) {
+        let hasNestedRecords = false
+        let hasRecordRows = false
+        for (const row of value) {
+          if (row && typeof row === 'object' && !Array.isArray(row)) {
+            hasRecordRows = true
+            hasNestedRecords = visit(row as Record<string, unknown>) || hasNestedRecords
+          }
+        }
+        if (value.length > 0 && !hasNestedRecords) {
+          candidates.push({ owner: object, key, rows: value, size: serializeResult(value).length, hasRecordRows })
+        }
+        containsRecordCollection = hasRecordRows || hasNestedRecords || containsRecordCollection
+      } else if (value && typeof value === 'object') {
+        containsRecordCollection = visit(value as Record<string, unknown>) || containsRecordCollection
+      }
+    }
+    return containsRecordCollection
+  }
+  visit(root)
+  // Scalar arrays can carry identity metadata (for example served model IDs).
+  // Drop evidence rows or whole groups first, preserving metadata on every
+  // retained group. Scalar-only payloads still have a bounded fallback.
+  return candidates.sort((left, right) =>
+    Number(right.hasRecordRows) - Number(left.hasRecordRows) || right.size - left.size,
+  )
+}
+
+/** Fallback for nested/multiple collections; only a serialized copy is changed. */
+function trimNestedArrays(full: string): string | undefined {
+  const parsed: unknown = JSON.parse(full)
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined
+  const copy = parsed as Record<string, unknown>
+  copy.__truncated = true
+  let out = serializeResult(copy)
+  while (out.length > MAX_TOOL_RESULT_CHARS) {
+    const candidate = nestedArrayCandidates(copy).at(0)
+    if (!candidate) return undefined
+    const { owner, key, rows } = candidate
+    const previous = owner.__omittedRowsByField
+    const omitted = previous && typeof previous === 'object' && !Array.isArray(previous)
+      ? { ...previous as Record<string, unknown> }
+      : {}
+    const priorCount = typeof omitted[key] === 'number' ? omitted[key] : 0
+    owner.__truncated = true
+    owner.__omittedRowsByField = omitted
+    const keep = (count: number): string => {
+      owner[key] = rows.slice(0, count)
+      omitted[key] = priorCount + rows.length - count
+      return serializeResult(copy)
+    }
+    out = keep(0)
+    if (out.length > MAX_TOOL_RESULT_CHARS) continue
+    // Retain the largest whole-row prefix that fits without repeatedly
+    // serializing a large result once per omitted row.
+    let low = 0
+    let high = rows.length - 1
+    while (low < high) {
+      const middle = Math.ceil((low + high) / 2)
+      if (keep(middle).length <= MAX_TOOL_RESULT_CHARS) low = middle
+      else high = middle - 1
+    }
+    out = keep(low)
+  }
+  return out
+}
+
 /**
  * Render a tool result as JSON text under the size cap WITHOUT cutting a row
  * mid-structure. The previous behavior blind-sliced the serialized string,
@@ -48,11 +129,13 @@ function trimRowsToFit(rows: readonly unknown[], render: (kept: unknown[]) => st
  *  - object whose largest field is an array: drop WHOLE trailing rows from that
  *    array until it fits, stamping `__truncated` + `__omittedRows` on the object;
  *  - top-level array: same, wrapped as `{ items, __truncated, __omittedRows }`;
+ *  - nested/multiple arrays: trim whole evidence rows, with each owning object
+ *    carrying `__truncated` and per-field counts in `__omittedRowsByField`;
  *  - any other still-oversized value (a giant scalar / string with nothing
  *    structured to drop): a marked string slice, the last resort.
- * Every RETAINED row stays byte-intact and the structured output stays parseable
- * JSON. Only the model-facing text is trimmed; the programmatic `details`
- * envelope is never touched.
+ * Retained evidence rows stay byte-intact; grouping envelopes carry their own
+ * omission markers. The structured output stays parseable JSON. Only the
+ * model-facing text is trimmed; the programmatic `details` is never touched.
  */
 export function truncateToolResult(details: unknown): string {
   const full = serializeResult(details)
@@ -87,6 +170,8 @@ export function truncateToolResult(details: unknown): string {
       // already blow the cap (nothing structured left to drop).
       if (out.length <= MAX_TOOL_RESULT_CHARS) return out
     }
+    const nested = trimNestedArrays(full)
+    if (nested !== undefined) return nested
   }
 
   return full.slice(0, MAX_TOOL_RESULT_CHARS) + '\n' + TRUNCATION_NOTE

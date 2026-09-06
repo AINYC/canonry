@@ -2,6 +2,8 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { QueryClient } from '@tanstack/react-query'
 
 import { RunKinds } from '@ainyc/canonry-contracts'
+import { getApiV1ProjectsByNameAnalyticsCompetitorsQueryKey } from '@ainyc/canonry-api-client/react-query'
+import { heyClient } from '../src/api.js'
 
 import { invalidateQueriesForRunKind } from '../src/queries/run-invalidations.js'
 
@@ -58,6 +60,18 @@ test('invalidates the project-scoped runs list so the project page refreshes aft
   // a quiet project's page would never pick up its new sweep.
   invalidateQueriesForRunKind(queryClient, RunKinds['answer-visibility'], 'demo')
   expect(predicateMatches('getApiV1ProjectsByNameRuns')).toBe(true)
+})
+
+test('marks every competitor history scope stale only for the completed sweep project', () => {
+  const queries = [{ window: '30d' as const }, { window: '7d' as const, groupKey: 'north' }, { scope: 'all-markets' as const, queryClass: 'branded' as const }]
+  const keys = queries.map(query => getApiV1ProjectsByNameAnalyticsCompetitorsQueryKey({
+    client: heyClient, path: { name: 'demo' }, query,
+  }))
+  const otherKey = getApiV1ProjectsByNameAnalyticsCompetitorsQueryKey({ client: heyClient, path: { name: 'other' } })
+  for (const key of [...keys, otherKey]) queryClient.setQueryData(key, { observed: [] })
+  invalidateQueriesForRunKind(queryClient, RunKinds['answer-visibility'], 'demo')
+  for (const key of keys) expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true)
+  expect(queryClient.getQueryState(otherKey)?.isInvalidated).toBe(false)
 })
 
 test('does not prefix-invalidate the analytics trend after an answer-visibility run', () => {
