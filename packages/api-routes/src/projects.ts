@@ -5,6 +5,7 @@ import { projects, queries, competitors, schedules, notifications, runs, querySn
 import type { InferSelectModel } from 'drizzle-orm'
 import {
   alreadyExists,
+  defaultSweepProviderNames,
   forbidden,
   hostOf,
   validationError,
@@ -34,6 +35,8 @@ export interface ProjectRoutesOptions {
   onProjectDeleting?: (projectId: string) => void | (() => void)
   onProjectDeleted?: (projectId: string) => void
   onProjectUpserted?: (projectId: string, projectName: string) => void
+  /** Post-commit lifecycle hook; failures must not turn a committed create into an HTTP 500. */
+  onProjectCreated?: (projectId: string, projectName: string) => void
   /**
    * Fires when a project's normalized alias set changes (add, remove, or
    * reorder after canonicalization). Receivers should run a fire-and-forget
@@ -69,6 +72,14 @@ function validateResearchProvider(
 }
 
 export async function projectRoutes(app: FastifyInstance, opts: ProjectRoutesOptions) {
+  const notifyProjectCreated = (projectId: string, projectName: string): void => {
+    try {
+      opts.onProjectCreated?.(projectId, projectName)
+    } catch (error) {
+      app.log.error({ error, projectId, projectName }, 'Project-created callback failed after commit')
+    }
+  }
+
   // POST /projects — create only. The launchpad cannot race a CLI/API create
   // and overwrite the project the other caller already configured.
   app.post<{ Body: ProjectCreateRequest }>('/projects', async (request, reply) => {
@@ -97,9 +108,11 @@ export async function projectRoutes(app: FastifyInstance, opts: ProjectRoutesOpt
       throw validationError('canonicalDomain must be a valid hostname or http(s) URL.')
     }
 
-    // Validate provider names against registered adapters.
-    const validNames = opts.providerAdapters?.map(adapter => adapter.name) ?? []
-    if (validNames.length && body.providers?.length) {
+    // Generic text routes are intentionally absent from this measurement
+    // catalog even when they are available to research callers.
+    const validNames = defaultSweepProviderNames(opts.providerAdapters?.map(adapter => adapter.name) ?? [])
+    const validatesProviderNames = opts.providerAdapters !== undefined
+    if (validatesProviderNames && body.providers?.length) {
       const invalid = body.providers.filter(p => !validNames.includes(p))
       if (invalid.length) {
         throw validationError(`Invalid provider(s): ${invalid.join(', ')}. Must be one of: ${validNames.join(', ')}`, {
@@ -178,6 +191,7 @@ export async function projectRoutes(app: FastifyInstance, opts: ProjectRoutesOpt
     })
     if (!inserted) throw alreadyExists('Project', name)
 
+    notifyProjectCreated(id, name)
     opts.onProjectUpserted?.(id, name)
     const created = app.db.select().from(projects).where(eq(projects.id, id)).get()!
     return reply.status(201).send(formatProject(created))
@@ -217,9 +231,10 @@ export async function projectRoutes(app: FastifyInstance, opts: ProjectRoutesOpt
     }
     const body = parsedBody.data
 
-    // Validate provider names against registered adapters
-    const validNames = opts.providerAdapters?.map(adapter => adapter.name) ?? []
-    if (validNames.length && body.providers?.length) {
+    // Validate provider names against native measurement adapters.
+    const validNames = defaultSweepProviderNames(opts.providerAdapters?.map(adapter => adapter.name) ?? [])
+    const validatesProviderNames = opts.providerAdapters !== undefined
+    if (validatesProviderNames && body.providers?.length) {
       const invalid = body.providers.filter(p => !validNames.includes(p))
       if (invalid.length) {
         throw validationError(`Invalid provider(s): ${invalid.join(', ')}. Must be one of: ${validNames.join(', ')}`, {
@@ -346,6 +361,7 @@ export async function projectRoutes(app: FastifyInstance, opts: ProjectRoutesOpt
       })
     })
 
+    notifyProjectCreated(id, name)
     opts.onProjectUpserted?.(id, name)
 
     const created = app.db.select().from(projects).where(eq(projects.id, id)).get()!

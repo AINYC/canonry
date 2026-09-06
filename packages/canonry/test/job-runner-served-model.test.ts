@@ -53,6 +53,8 @@ interface StubOptions {
   baseUrl?: string
   /** Queue-time provenance must survive execution without recomputation. */
   measurementExecutionIdentity?: MeasurementExecutionIdentity
+  /** Current worker policy used to validate a queue-stamped v2 identity. */
+  providerRouteDescriptors?: Record<string, { routeId: string; routeRevision: number; policyFingerprint: string }>
 }
 
 function stubAdapter(opts: StubOptions): ProviderAdapter {
@@ -146,7 +148,9 @@ async function runWithStub(prefix: string, opts: StubOptions) {
     createdAt: now,
   }).run()
 
-  await new JobRunner(db, registry).executeRun(runId, projectId)
+  await new JobRunner(db, registry, opts.providerRouteDescriptors
+    ? { getProviderRouteDescriptors: () => opts.providerRouteDescriptors! }
+    : undefined).executeRun(runId, projectId)
 
   const [snapshot] = db.select().from(querySnapshots).where(eq(querySnapshots.runId, runId)).all()
   const run = db.select().from(runs).where(eq(runs.id, runId)).get()!
@@ -239,7 +243,7 @@ test('JobRunner leaves an undisclosed served provider NULL rather than copying t
   expect(snapshot.servedProvider).toBeNull()
 })
 
-test('JobRunner preserves queue-stamped native endpoint provenance after the live adapter endpoint moves', async () => {
+test('JobRunner fails closed when a queue-stamped native endpoint policy moved', async () => {
   const route = buildImplicitNativeEngineRoute({
     provider: 'openai', displayName: 'OpenAI', defaultModel: CONFIGURED_MODEL,
     capabilities: { kind: 'verified-measurement', fallback: 'disabled', retrieval: true, citations: true, location: true, servedModel: true },
@@ -260,15 +264,25 @@ test('JobRunner preserves queue-stamped native endpoint provenance after the liv
     crypto.createHash('sha256').update(canonicalMeasurementExecutionIdentityJson(identityInput)).digest('hex'),
   )
 
-  const { run } = await runWithStub('canonry-queued-native-endpoint-', {
+  const { run, snapshot } = await runWithStub('canonry-queued-native-endpoint-', {
     servedModel: SERVED_MODEL,
     baseUrl: 'https://gateway-after.example/v1',
     measurementExecutionIdentity: queuedIdentity,
+    providerRouteDescriptors: {
+      openai: {
+        routeId: route.id,
+        routeRevision: route.revision,
+        policyFingerprint: livePolicy,
+      },
+    },
   })
 
   expect(queuePolicy).not.toBe(livePolicy)
   expect(run.measurementExecutionIdentity).toEqual(queuedIdentity)
   expect(run.measurementExecutionIdentity!.routes.openai!.policyFingerprint).toBe(queuePolicy)
+  expect(snapshot).toBeUndefined()
+  expect(run.status).toBe('failed')
+  expect(run.error).toMatch(/route policy for openai no longer matches/)
 })
 
 test('JobRunner persists a route-capable query when Vertex resolution fails', async () => {

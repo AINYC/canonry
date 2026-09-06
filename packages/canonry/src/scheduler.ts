@@ -11,6 +11,7 @@ import {
   RunStatuses,
   RunTriggers,
   normalizeSiteAuditRunRequest,
+  nextScheduleUpdatedAt,
   siteAuditRequestIdentity,
   describeError,
 } from '@ainyc/canonry-contracts'
@@ -18,8 +19,36 @@ import { createLogger } from './logger.js'
 
 const log = createLogger('Scheduler')
 
-/** Default cadence for the health schedule seeded on first start. */
-const DEFAULT_HEALTH_CRON = '0 */6 * * *'
+/** Default cadence for the health schedule seeded for each project. */
+export const DEFAULT_HEALTH_CRON = '0 */6 * * *'
+
+/**
+ * Ensure one default doctor schedule exists for a project.
+ *
+ * This is deliberately callable from the project-created lifecycle hook so a
+ * new project receives its schedule when it is created, not as a side effect
+ * of constructing a server that may never bind. The unique project/kind index
+ * makes concurrent create/startup reconciliation idempotent.
+ */
+export function ensureDefaultHealthSchedule(
+  db: DatabaseClient,
+  projectId: string,
+  now = new Date().toISOString(),
+): boolean {
+  const result = db.insert(schedules).values({
+    id: crypto.randomUUID(),
+    projectId,
+    kind: SchedulableRunKinds.doctor,
+    cronExpr: DEFAULT_HEALTH_CRON,
+    timezone: 'UTC',
+    enabled: true,
+    providers: [],
+    nextRunAt: nextRunFromCron(DEFAULT_HEALTH_CRON, 'UTC'),
+    createdAt: now,
+    updatedAt: now,
+  }).onConflictDoNothing().run()
+  return result.changes === 1
+}
 
 export interface SchedulerCallbacks {
   /** Fired when an answer-visibility schedule triggers. Existing canonry callsites wire this to the JobRunner. */
@@ -141,21 +170,13 @@ export class Scheduler {
       .all()
     if (projectsWithoutHealth.length === 0) return
     const now = new Date().toISOString()
+    let seeded = 0
     for (const project of projectsWithoutHealth) {
-      this.db.insert(schedules).values({
-        id: crypto.randomUUID(),
-        projectId: project.id,
-        kind: SchedulableRunKinds.doctor,
-        cronExpr: DEFAULT_HEALTH_CRON,
-        timezone: 'UTC',
-        enabled: true,
-        providers: [],
-        nextRunAt: nextRunFromCron(DEFAULT_HEALTH_CRON, 'UTC'),
-        createdAt: now,
-        updatedAt: now,
-      }).run()
+      if (ensureDefaultHealthSchedule(this.db, project.id, now)) seeded += 1
     }
-    log.info('health-schedule.seeded', { projectCount: projectsWithoutHealth.length, cron: DEFAULT_HEALTH_CRON })
+    if (seeded > 0) {
+      log.info('health-schedule.seeded', { projectCount: seeded, cron: DEFAULT_HEALTH_CRON })
+    }
   }
 
   /**
@@ -268,6 +289,24 @@ export class Scheduler {
     log.info(`task.${verb.toLowerCase()}`, { key })
   }
 
+  /** Runtime timing writes must not restore a version already issued to a settings caller. */
+  private updateScheduleTiming(
+    scheduleId: string,
+    timing: Pick<typeof schedules.$inferInsert, 'nextRunAt' | 'lastRunAt'>,
+  ): void {
+    this.db.transaction((tx) => {
+      // Read at the write boundary rather than using the row captured before
+      // cron registration or run queueing. A newer persisted version wins.
+      const current = tx.select({ updatedAt: schedules.updatedAt }).from(schedules)
+        .where(eq(schedules.id, scheduleId)).get()
+      if (!current) return
+      tx.update(schedules).set({
+        ...timing,
+        updatedAt: nextScheduleUpdatedAt(current.updatedAt),
+      }).where(eq(schedules.id, scheduleId)).run()
+    })
+  }
+
   private registerCronTask(schedule: typeof schedules.$inferSelect): void {
     const { id: scheduleId, projectId, cronExpr, timezone } = schedule
     const kind = schedule.kind as SchedulableRunKind
@@ -284,10 +323,9 @@ export class Scheduler {
     })
 
     this.tasks.set(taskKey(projectId, kind), task)
-    this.db.update(schedules).set({
+    this.updateScheduleTiming(scheduleId, {
       nextRunAt: nextRunFromCron(cronExpr, timezone),
-      updatedAt: new Date().toISOString(),
-    }).where(eq(schedules.id, scheduleId)).run()
+    })
 
     const label = schedule.preset ?? cronExpr
     log.info('cron.registered', { projectId, kind, schedule: label, timezone })
@@ -327,11 +365,10 @@ export class Scheduler {
           log.warn('traffic-sync.no-callback', { scheduleId, projectId, msg: 'host did not register onTrafficSyncRequested' })
           return
         }
-        this.db.update(schedules).set({
+        this.updateScheduleTiming(currentSchedule.id, {
           lastRunAt: now,
           nextRunAt,
-          updatedAt: now,
-        }).where(eq(schedules.id, currentSchedule.id)).run()
+        })
         log.info('traffic-sync.triggered', { projectName: project.name, sourceId })
         this.callbacks.onTrafficSyncRequested(project.name, sourceId)
         return
@@ -356,11 +393,10 @@ export class Scheduler {
           trigger: RunTriggers.scheduled,
           createdAt: now,
         }).run()
-        this.db.update(schedules).set({
+        this.updateScheduleTiming(currentSchedule.id, {
           lastRunAt: now,
           nextRunAt,
-          updatedAt: now,
-        }).where(eq(schedules.id, currentSchedule.id)).run()
+        })
         log.info('gbp-sync.triggered', { runId, projectName: project.name })
         this.callbacks.onGbpSyncRequested(runId, projectId)
         return
@@ -390,7 +426,7 @@ export class Scheduler {
           .get()
         if (activeAdsRun) {
           log.info('ads-sync.skipped-active', { projectName: project.name, activeRunId: activeAdsRun.id })
-          this.db.update(schedules).set({ nextRunAt, updatedAt: now }).where(eq(schedules.id, currentSchedule.id)).run()
+          this.updateScheduleTiming(currentSchedule.id, { nextRunAt })
           return
         }
         const runId = crypto.randomUUID()
@@ -402,11 +438,10 @@ export class Scheduler {
           trigger: RunTriggers.scheduled,
           createdAt: now,
         }).run()
-        this.db.update(schedules).set({
+        this.updateScheduleTiming(currentSchedule.id, {
           lastRunAt: now,
           nextRunAt,
-          updatedAt: now,
-        }).where(eq(schedules.id, currentSchedule.id)).run()
+        })
         log.info('ads-sync.triggered', { runId, projectName: project.name })
         this.callbacks.onAdsSyncRequested(runId, projectId)
         return
@@ -420,11 +455,10 @@ export class Scheduler {
           log.warn('data-refresh.no-callback', { scheduleId, projectId, msg: 'host did not register onDataRefreshRequested' })
           return
         }
-        this.db.update(schedules).set({
+        this.updateScheduleTiming(currentSchedule.id, {
           lastRunAt: now,
           nextRunAt,
-          updatedAt: now,
-        }).where(eq(schedules.id, currentSchedule.id)).run()
+        })
         log.info('data-refresh.triggered', { projectName: project.name })
         this.callbacks.onDataRefreshRequested(project.name)
         return
@@ -438,11 +472,10 @@ export class Scheduler {
           log.warn('doctor.no-callback', { scheduleId, projectId, msg: 'host did not register onDoctorRequested' })
           return
         }
-        this.db.update(schedules).set({
+        this.updateScheduleTiming(currentSchedule.id, {
           lastRunAt: now,
           nextRunAt,
-          updatedAt: now,
-        }).where(eq(schedules.id, currentSchedule.id)).run()
+        })
         log.info('doctor.triggered', { projectName: project.name })
         this.callbacks.onDoctorRequested(project.name)
         return
@@ -458,11 +491,10 @@ export class Scheduler {
           log.warn('backlinks-sync.no-callback', { scheduleId, projectId, msg: 'host did not register onBacklinksSyncRequested' })
           return
         }
-        this.db.update(schedules).set({
+        this.updateScheduleTiming(currentSchedule.id, {
           lastRunAt: now,
           nextRunAt,
-          updatedAt: now,
-        }).where(eq(schedules.id, currentSchedule.id)).run()
+        })
         log.info('backlinks-sync.triggered', { projectName: project.name })
         this.callbacks.onBacklinksSyncRequested(project.name)
         return
@@ -488,7 +520,7 @@ export class Scheduler {
           .get()
         if (active) {
           log.info('site-audit.skipped-active', { projectName: project.name, activeRunId: active.id })
-          this.db.update(schedules).set({ nextRunAt, updatedAt: now }).where(eq(schedules.id, currentSchedule.id)).run()
+          this.updateScheduleTiming(currentSchedule.id, { nextRunAt })
           return
         }
         const runId = crypto.randomUUID()
@@ -510,11 +542,10 @@ export class Scheduler {
             createdAt: now,
           }).run()
         })
-        this.db.update(schedules).set({
+        this.updateScheduleTiming(currentSchedule.id, {
           lastRunAt: now,
           nextRunAt,
-          updatedAt: now,
-        }).where(eq(schedules.id, currentSchedule.id)).run()
+        })
         log.info('site-audit.triggered', { runId, projectName: project.name })
         this.callbacks.onSiteAuditRequested(runId, projectId)
         return
@@ -553,19 +584,17 @@ export class Scheduler {
 
       if (queueResult.conflict) {
         log.info('run.skipped-active', { projectName: project.name, activeRunId: queueResult.activeRunId })
-        this.db.update(schedules).set({
+        this.updateScheduleTiming(currentSchedule.id, {
           nextRunAt,
-          updatedAt: now,
-        }).where(eq(schedules.id, currentSchedule.id)).run()
+        })
         return
       }
 
       const runId = queueResult.runId
-      this.db.update(schedules).set({
+      this.updateScheduleTiming(currentSchedule.id, {
         lastRunAt: now,
         nextRunAt,
-        updatedAt: now,
-      }).where(eq(schedules.id, currentSchedule.id)).run()
+      })
 
       log.info('run.triggered', { runId, projectName: project.name, providers: providers ?? 'all' })
       this.callbacks.onRunCreated(runId, projectId, providers, resolvedLocation)

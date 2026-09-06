@@ -1,5 +1,5 @@
 import type { ProviderAdapter, ProviderConfig, ProviderName, ProviderHealthcheckResult } from '@ainyc/canonry-contracts'
-import { isBrowserProvider } from '@ainyc/canonry-contracts'
+import { defaultSweepProviderNames, isBrowserProvider } from '@ainyc/canonry-contracts'
 
 export interface RegisteredProvider {
   adapter: ProviderAdapter
@@ -45,7 +45,15 @@ export class ProviderRegistry {
   }
 
   getMeasurableForProject(projectProviders: ProviderName[]): RegisteredProvider[] {
-    return this.getForProject(projectProviders).filter(provider => provider.config.measurementReady !== false)
+    const selected = projectProviders.length > 0
+      ? projectProviders
+      : defaultSweepProviderNames(this.getMeasurableAll().map(provider => provider.adapter.name))
+    // Do not pass an empty default roster through getForProject's text-work
+    // fallback, which includes every configured gateway.
+    return selected.flatMap(name => {
+      const provider = this.get(name)
+      return provider && provider.config.measurementReady !== false ? [provider] : []
+    }).filter((provider, index, providers) => providers.indexOf(provider) === index)
   }
 
   isMeasurementReady(name: ProviderName): boolean {

@@ -7,6 +7,7 @@ import type { LocationContext, MeasurementExecutionIdentity, MeasurementRunScope
 import {
   AppError as AppErrorClass,
   type AppError,
+  defaultSweepProviderNames,
   measurementRunScopeIsEmpty,
   RunKinds,
   RunTriggers,
@@ -29,6 +30,7 @@ import {
   buildPlanlessMeasurementExecutionIdentity,
   hasActiveMeasurementPlan,
   queueRunIfProjectIdle,
+  resolveRunnableProviderSelection,
 } from './run-queue.js'
 
 export interface RunRoutesOptions {
@@ -63,8 +65,13 @@ export async function runRoutes(app: FastifyInstance, opts: RunRoutesOptions) {
     const rawProviders = body.providers
     if (rawProviders?.length) {
       const normalized = rawProviders.map(p => p.trim().toLowerCase()).filter(Boolean)
-      const validNames = opts.validProviderNames ?? []
-      if (validNames.length) {
+      const validNames = [...new Set(defaultSweepProviderNames([
+        ...(opts.validProviderNames ?? []),
+        ...(opts.getRunnableProviderNames?.() ?? []),
+      ]))]
+      const validatesProviderNames = opts.validProviderNames !== undefined
+        || opts.getRunnableProviderNames !== undefined
+      if (validatesProviderNames) {
         const invalid = normalized.filter(p => !validNames.includes(p))
         if (invalid.length) {
           throw validationError(`Invalid provider(s): ${invalid.join(', ')}. Must be one of: ${validNames.join(', ')}`, {
@@ -429,8 +436,13 @@ export async function runRoutes(app: FastifyInstance, opts: RunRoutesOptions) {
     const rawProviders = request.body?.providers
     if (rawProviders?.length) {
       const normalized = rawProviders.map(p => p.trim().toLowerCase()).filter(Boolean)
-      const validNames = opts.validProviderNames ?? []
-      if (validNames.length) {
+      const validNames = [...new Set(defaultSweepProviderNames([
+        ...(opts.validProviderNames ?? []),
+        ...(opts.getRunnableProviderNames?.() ?? []),
+      ]))]
+      const validatesProviderNames = opts.validProviderNames !== undefined
+        || opts.getRunnableProviderNames !== undefined
+      if (validatesProviderNames) {
         const invalid = normalized.filter(p => !validNames.includes(p))
         if (invalid.length) {
           throw validationError(`Invalid provider(s): ${invalid.join(', ')}. Must be one of: ${validNames.join(', ')}`, {
@@ -626,32 +638,19 @@ export function answerVisibilityPreflightError(input: {
     return noQueries(input.projectName)
   }
 
-  const availableProviders = normalizeProviderNames(input.runnableProviderNames)
-  const requestedProviders = normalizeProviderNames(input.requestedProviders ?? [])
-  const projectProviders = normalizeProviderNames(input.projectProviders)
-  const selectedProviders = requestedProviders.length > 0
-    ? requestedProviders
-    : projectProviders.length > 0
-      ? projectProviders
-      : availableProviders
-  const available = new Set(availableProviders)
-  const runnableProviders = selectedProviders.filter(provider => available.has(provider))
+  const selection = resolveRunnableProviderSelection({
+    requestedProviders: input.requestedProviders,
+    projectProviders: input.projectProviders,
+    runnableProviders: input.runnableProviderNames,
+  })
 
-  if (runnableProviders.length > 0) return null
+  if (selection.runnableProviders.length > 0) return null
 
   return noProvider(input.projectName, {
-    availableProviders,
-    selectedProviders,
-    selectionSource: requestedProviders.length > 0
-      ? 'request'
-      : projectProviders.length > 0
-        ? 'project'
-        : 'instance',
+    availableProviders: selection.availableProviders,
+    selectedProviders: selection.selectedProviders,
+    selectionSource: selection.selectionSource,
   })
-}
-
-function normalizeProviderNames(providerNames: readonly string[]): string[] {
-  return [...new Set(providerNames.map(name => name.trim().toLowerCase()).filter(Boolean))]
 }
 
 function parseRunTriggerRequest(value: unknown) {

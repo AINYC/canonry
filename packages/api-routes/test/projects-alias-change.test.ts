@@ -133,6 +133,41 @@ describe('PUT /projects/:name — onAliasesChanged trigger', () => {
 })
 
 describe('project researchProvider persistence', () => {
+  it('uses explicit configured-provider summaries for project and YAML research defaults', async () => {
+    const adapter = {
+      name: 'openai', displayName: 'OpenAI', mode: 'api' as const, modelConfigurable: true,
+      defaultModel: 'gpt-test', knownModels: [], modelValidationPattern: /./, modelValidationHint: 'model id',
+    }
+    const summary = { name: 'openai', configured: false }
+    const { app, tmpDir } = buildApp({ providerAdapters: [adapter], providerSummary: [summary] })
+    try {
+      await app.ready()
+      const unavailable = await putProject(app, 'unconfigured-default', { researchProvider: 'openai' })
+      expect(unavailable.statusCode, unavailable.body).toBe(400)
+      const unavailableCreate = await app.inject({
+        method: 'POST', url: '/api/v1/projects',
+        payload: { name: 'unconfigured-create', displayName: 'Acme', canonicalDomain: 'example.com', country: 'US', language: 'en', researchProvider: 'openai' },
+      })
+      expect(unavailableCreate.statusCode, unavailableCreate.body).toBe(400)
+      const unavailableApply = await app.inject({
+        method: 'POST', url: '/api/v1/apply',
+        payload: { apiVersion: 'canonry/v1', kind: 'Project', metadata: { name: 'unconfigured-apply' }, spec: { displayName: 'Acme', canonicalDomain: 'example.com', country: 'US', language: 'en', researchProvider: 'openai' } },
+      })
+      expect(unavailableApply.statusCode, unavailableApply.body).toBe(400)
+      summary.configured = true
+      const available = await putProject(app, 'configured-default', { researchProvider: 'openai' })
+      expect(available.statusCode, available.body).toBe(201)
+      const availableApply = await app.inject({
+        method: 'POST', url: '/api/v1/apply',
+        payload: { apiVersion: 'canonry/v1', kind: 'Project', metadata: { name: 'configured-apply' }, spec: { displayName: 'Acme', canonicalDomain: 'example.com', country: 'US', language: 'en', researchProvider: 'openai' } },
+      })
+      expect(availableApply.statusCode, availableApply.body).toBe(200)
+    } finally {
+      await app.close()
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
   it('preserves a stale saved route on an unrelated update, but validates an explicit reselection', async () => {
     let routeAvailable = true
     const adapter = {

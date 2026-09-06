@@ -5,7 +5,38 @@ import { describe, it, expect, onTestFinished } from 'vitest'
 import { createClient, migrate, projects, runs } from '@ainyc/canonry-db'
 import { eq } from 'drizzle-orm'
 import { RunKinds, RunStatuses, RunTriggers } from '@ainyc/canonry-contracts'
-import { queueRunIfProjectIdle } from '../src/run-queue.js'
+import { queueRunIfProjectIdle, resolveRunnableProviderSelection, resolveRunProviderSelection } from '../src/run-queue.js'
+
+describe('configured text route exclusion', () => {
+  const route = 'route:custom-gateway'
+  const runnableProviders = ['openai', route]
+
+  it('excludes configured routes from the instance fallback', () => {
+    expect(resolveRunProviderSelection({ runnableProviders })).toEqual(['openai'])
+    expect(resolveRunProviderSelection({ runnableProviders: [route] })).toEqual([])
+  })
+
+  it('does not admit configured routes through explicit project or run selections', () => {
+    expect(resolveRunProviderSelection({ runnableProviders, projectProviders: [route] })).toEqual([])
+    expect(resolveRunProviderSelection({ runnableProviders, requestedProviders: [route] })).toEqual([])
+    expect(resolveRunProviderSelection({ runnableProviders, requestedProviders: [route, 'openai'] })).toEqual(['openai'])
+  })
+
+  it('keeps readiness and run selection aligned without replacing an explicit text-only roster', () => {
+    expect(resolveRunnableProviderSelection({ runnableProviders, projectProviders: [route] })).toEqual({
+      availableProviders: ['openai'], selectedProviders: [], runnableProviders: [], selectionSource: 'project',
+    })
+    expect(resolveRunnableProviderSelection({ runnableProviders, projectProviders: ['openai'], requestedProviders: [route] })).toEqual({
+      availableProviders: ['openai'], selectedProviders: [], runnableProviders: [], selectionSource: 'request',
+    })
+    expect(resolveRunnableProviderSelection({ runnableProviders: [route] })).toEqual({
+      availableProviders: [], selectedProviders: [], runnableProviders: [], selectionSource: 'instance',
+    })
+    expect(resolveRunnableProviderSelection({ runnableProviders, projectProviders: [route, ' OPENAI '] })).toEqual({
+      availableProviders: ['openai'], selectedProviders: ['openai'], runnableProviders: ['openai'], selectionSource: 'project',
+    })
+  })
+})
 
 function createTempDb() {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'canonry-run-queue-test-'))

@@ -344,6 +344,13 @@ const scheduleKindQueryParameter: OpenApiParameter = {
   schema: { $ref: '#/components/schemas/SchedulableRunKind' },
 }
 
+const scheduleExpectedUpdatedAtQueryParameter: OpenApiParameter = {
+  name: 'expectedUpdatedAt',
+  in: 'query',
+  description: 'Delete only the schedule version carrying this exact updatedAt timestamp. A mismatch returns 409.',
+  schema: { type: 'string', format: 'date-time' },
+}
+
 const runsListKindQueryParameter: OpenApiParameter = {
   name: 'kind',
   in: 'query',
@@ -2480,9 +2487,9 @@ const routeCatalog: OpenApiOperation[] = [
     method: 'put',
     path: '/api/v1/settings/engine-connections/{id}',
     summary: 'Create or update a generic gateway connection',
-    description: 'Stores an instance-global OpenAI-compatible connection. The credential may be supplied on write, is never returned, and an omitted apiKey preserves the stored credential.',
+    description: 'Stores an instance-global OpenAI-compatible connection. The credential may be supplied on write, is never returned, and an omitted apiKey preserves the stored credential. Send If-None-Match: * to create without replacing an existing connection.',
     tags: ['settings', 'engine-routes'],
-    parameters: [engineConnectionIdParameter],
+    parameters: [engineConnectionIdParameter, { name: 'If-None-Match', in: 'header', required: false, schema: { type: 'string', enum: ['*'] }, description: 'Create only; fail if the connection ID already exists.' }],
     requestBody: {
       required: true,
       content: {
@@ -2494,6 +2501,7 @@ const routeCatalog: OpenApiOperation[] = [
     responses: {
       200: jsonResponse('Credential-redacted connection metadata returned.', 'EngineConnectionPublicDto'),
       400: errorResponse('Invalid connection configuration.'),
+      412: errorResponse('The connection ID already exists.'),
       501: errorResponse('Engine connection updates are not supported.'),
     },
   },
@@ -2501,9 +2509,9 @@ const routeCatalog: OpenApiOperation[] = [
     method: 'put',
     path: '/api/v1/settings/engine-routes/{id}',
     summary: 'Create or update a generic text route',
-    description: 'The host owns route id, revision, source, and evidence capabilities. Configured generic routes remain text-only until a server-owned evidence adapter is implemented.',
+    description: 'The host owns route id, revision, source, and evidence capabilities. Configured generic routes remain text-only until a server-owned evidence adapter is implemented. Send If-None-Match: * to create without replacing an existing route.',
     tags: ['settings', 'engine-routes'],
-    parameters: [engineRouteIdParameter],
+    parameters: [engineRouteIdParameter, { name: 'If-None-Match', in: 'header', required: false, schema: { type: 'string', enum: ['*'] }, description: 'Create only; fail if the route ID already exists.' }],
     requestBody: {
       required: true,
       content: {
@@ -2515,6 +2523,7 @@ const routeCatalog: OpenApiOperation[] = [
     responses: {
       200: jsonResponse('Server-owned route configuration returned.', 'EngineRouteConfig'),
       400: errorResponse('Invalid route configuration or unknown connection.'),
+      412: errorResponse('The route ID already exists.'),
       501: errorResponse('Engine route updates are not supported.'),
     },
   },
@@ -2828,6 +2837,12 @@ const routeCatalog: OpenApiOperation[] = [
               providers: stringArraySchema,
               enabled: booleanSchema,
               sourceId: stringSchema,
+              expectedUpdatedAt: {
+                type: 'string',
+                format: 'date-time',
+                nullable: true,
+                description: 'Update only this exact version; null creates only while absent. Omit for legacy unconditional behavior.',
+              },
             },
           },
         },
@@ -2837,6 +2852,17 @@ const routeCatalog: OpenApiOperation[] = [
       200: jsonResponse('Schedule updated.', 'ScheduleDto'),
       201: jsonResponse('Schedule created.', 'ScheduleDto'),
       400: errorResponse('Invalid payload (e.g. sourceId missing for kind=traffic-sync, or providers set for kind=traffic-sync).'),
+      409: errorResponse('The schedule changed since the caller loaded it.'),
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/projects/{name}/schedules',
+    summary: 'List schedules',
+    tags: ['schedules'],
+    parameters: [nameParameter],
+    responses: {
+      200: jsonArrayResponse('Schedules returned.', 'ScheduleDto'),
     },
   },
   {
@@ -2855,10 +2881,11 @@ const routeCatalog: OpenApiOperation[] = [
     path: '/api/v1/projects/{name}/schedule',
     summary: 'Delete a schedule',
     tags: ['schedules'],
-    parameters: [nameParameter, scheduleKindQueryParameter],
+    parameters: [nameParameter, scheduleKindQueryParameter, scheduleExpectedUpdatedAtQueryParameter],
     responses: {
       204: { description: 'Schedule deleted.' },
       404: errorResponse('Schedule not found.'),
+      409: errorResponse('The schedule changed since the caller loaded it.'),
     },
   },
   {

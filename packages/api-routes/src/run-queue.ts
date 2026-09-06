@@ -4,6 +4,7 @@ import {
   buildMeasurementExecutionIdentity,
   buildMeasurementRunManifestV1,
   canonicalMeasurementExecutionIdentityJson,
+  defaultSweepProviderNames,
   MEASUREMENT_PLAN_V2_SCHEMA_VERSION,
   MeasurementRunScopeError,
   measurementRunScopeIsEmpty,
@@ -131,21 +132,54 @@ function storedProviderRoster(value: unknown): string[] {
 }
 
 /**
- * Which providers a run measures with: what was asked for, else the project's
- * own list, else everything the instance can run. An empty project list means
- * "all configured" everywhere else in canonry, and reading it as zero here
- * would freeze an expectation nothing could ever satisfy.
+ * Which native providers a run measures with: what was asked for, else the
+ * project's own list, else the instance's native defaults. Configured gateway
+ * routes are text-only and cannot enter measurement through any selection.
  */
 export function resolveRunProviderSelection(input: {
   requestedProviders?: readonly string[] | null
   projectProviders?: readonly string[] | null
   runnableProviders?: readonly string[] | null
 }): string[] {
+  return resolveRunnableProviderSelection(input).selectedProviders
+}
+
+/**
+ * Resolve both the requested roster and the subset this host can execute.
+ * Run preflight and project-readable readiness surfaces share this exact decision so
+ * the dashboard never claims a launch state the run route would reject.
+ */
+export function resolveRunnableProviderSelection(input: {
+  requestedProviders?: readonly string[] | null
+  projectProviders?: readonly string[] | null
+  runnableProviders?: readonly string[] | null
+}): {
+  availableProviders: string[]
+  selectedProviders: string[]
+  runnableProviders: string[]
+  selectionSource: 'request' | 'project' | 'instance'
+} {
+  const availableProviders = normalizeProviders(defaultSweepProviderNames(input.runnableProviders ?? []))
   const requested = normalizeProviders(input.requestedProviders ?? [])
-  if (requested.length) return requested
   const project = normalizeProviders(input.projectProviders ?? [])
-  if (project.length) return project
-  return normalizeProviders(input.runnableProviders ?? [])
+  // Determine precedence before excluding text routes: a route-only explicit
+  // selection must not silently fall back to unrelated instance defaults.
+  const selectedProviders = requested.length > 0
+    ? defaultSweepProviderNames(requested)
+    : project.length > 0
+      ? defaultSweepProviderNames(project)
+      : availableProviders
+  const available = new Set(availableProviders)
+  return {
+    availableProviders,
+    selectedProviders,
+    runnableProviders: selectedProviders.filter(provider => available.has(provider)),
+    selectionSource: requested.length > 0
+      ? 'request'
+      : project.length > 0
+        ? 'project'
+        : 'instance',
+  }
 }
 
 function providerRoster(tx: DatabaseClient, params: QueueRunParams): string[] {
@@ -280,6 +314,15 @@ function materializeV2ExecutionNodes(
 
   for (const node of [...nodes].sort((left, right) => compareText(left.stableKey, right.stableKey))) {
     const nodeProviders = normalizeProviders(node.context.providers)
+    const unsupportedProviders = nodeProviders.filter(provider => provider.startsWith('route:'))
+    if (unsupportedProviders.length > 0) {
+      // A retained revision can predate the authoring guard. Refuse that
+      // execution without rewriting the frozen plan or dropping its slots.
+      throw validationError(
+        `Configured engine route(s) ${unsupportedProviders.join(', ')} are text-only and cannot run an answer-visibility measurement plan. Publish a revision with native provider adapters.`,
+        { unsupportedProviders },
+      )
+    }
     const declared = nodeProviderModels(node)
     const resolved = new Map<string, string>()
     for (const provider of nodeProviders) {

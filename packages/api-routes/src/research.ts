@@ -36,7 +36,13 @@ export async function researchRoutes(app: FastifyInstance, opts: ResearchRoutesO
     const adapter = adapters.find(candidate => candidate.name === providerName)
     if (!providerName || !adapter || adapter.mode !== 'api' || isBrowserProvider(providerName) || !configured.has(providerName)) throw validationError('Research requires a configured API provider.', { provider: input.provider, validProviders: adapters.filter(a => a.mode === 'api' && configured.has(a.name)).map(a => a.name) })
     if (input.model) { adapter.modelValidationPattern.lastIndex = 0; if (!adapter.modelConfigurable || !adapter.modelValidationPattern.test(input.model)) throw validationError(`Invalid model "${input.model}" for provider "${providerName}".`, { provider: providerName, model: input.model, hint: adapter.modelValidationHint }) }
-    const location = input.location === undefined ? (project.defaultLocation ? project.locations.find(item => item.label === project.defaultLocation) ?? null : null) : input.location
+    // Generic routes send plain text only. Do not label that answer with a
+    // market the transport never receives, including an inherited default.
+    const textOnlyRoute = providerName.startsWith('route:')
+    if (textOnlyRoute && input.location) throw validationError('Text-only research routes do not support location context. Omit location or select a native provider.', { provider: providerName })
+    const location = input.location === undefined
+      ? (!textOnlyRoute && project.defaultLocation ? project.locations.find(item => item.label === project.defaultLocation) ?? null : null)
+      : input.location
     if (location && !project.locations.some(item => sameLocation(item, location))) throw validationError('Research location must exactly match a configured project location.', { location })
     const requestedModel = input.model ?? null
     const resolvedModel = requestedModel ?? (project.providerModels[providerName] || adapter.defaultModel)

@@ -4,6 +4,7 @@ import {
   buildEngineRoutePublicDto,
   buildImplicitNativeEngineRoute,
   canonicalEngineRoutePolicyJson,
+  defaultSweepProviderNames,
   deriveEngineRouteId,
   ENGINE_CONNECTION_PRESET_DEFAULTS,
   engineConnectionConfigSchema,
@@ -18,19 +19,19 @@ import {
 describe('engine route contracts', () => {
   it('normalizes a gateway preset and never exposes its secret', () => {
     const connection = normalizeEngineConnection({
-      id: 'openrouter-main',
-      label: 'OpenRouter',
-      preset: 'openrouter',
+      id: 'litellm-main',
+      label: 'LiteLLM',
+      preset: 'litellm',
       apiKey: 'secret-never-returned',
       quota: { maxConcurrency: 2, maxRequestsPerMinute: 30, maxRequestsPerDay: 500 },
     })
 
-    expect(connection.baseUrl).toBe('https://openrouter.ai/api/v1')
+    expect(connection.baseUrl).toBe('http://localhost:4000')
     expect(connection.protocol).toBe('openai-compatible')
     expect(buildEngineRoutePublicDto(connection)).toMatchObject({
-      id: 'openrouter-main',
+      id: 'litellm-main',
       secretConfigured: true,
-      preset: 'openrouter',
+      preset: 'litellm',
     })
     expect(JSON.stringify(buildEngineRoutePublicDto(connection))).not.toContain('secret-never-returned')
     expect(JSON.stringify(buildEngineRoutePublicDto(connection))).not.toContain('apiKey')
@@ -44,7 +45,7 @@ describe('engine route contracts', () => {
     }).success).toBe(false)
   })
 
-  it('keeps OpenRouter, LiteLLM, and Vercel presets portable protocol defaults', () => {
+  it('keeps LiteLLM and Vercel presets portable protocol defaults', () => {
     for (const [preset, expected] of Object.entries(ENGINE_CONNECTION_PRESET_DEFAULTS)) {
       const connection = normalizeEngineConnection({
         id: `${preset}-main`, label: preset, preset: preset as keyof typeof ENGINE_CONNECTION_PRESET_DEFAULTS,
@@ -57,13 +58,13 @@ describe('engine route contracts', () => {
 
   it('preserves an existing connection secret when a redacted settings update omits apiKey', () => {
     const existing = normalizeEngineConnection({
-      id: 'openrouter-main', label: 'OpenRouter', preset: 'openrouter', apiKey: 'keep-this-secret',
+      id: 'litellm-main', label: 'LiteLLM', preset: 'litellm', apiKey: 'keep-this-secret',
       quota: { maxConcurrency: 2, maxRequestsPerMinute: 30, maxRequestsPerDay: 500 },
     })
 
     const updated = upsertEngineConnection(existing, {
-      id: existing.id, label: 'OpenRouter production', preset: 'openrouter',
-      baseUrl: 'https://openrouter.ai/api/v1/',
+      id: existing.id, label: 'LiteLLM production', preset: 'litellm',
+      baseUrl: 'http://localhost:4000/',
       quota: existing.quota,
     })
 
@@ -73,7 +74,7 @@ describe('engine route contracts', () => {
 
   it('requires a replacement secret before a redacted update can repoint an existing gateway', () => {
     const existing = normalizeEngineConnection({
-      id: 'openrouter-main', label: 'OpenRouter', preset: 'openrouter', apiKey: 'keep-this-secret',
+      id: 'litellm-main', label: 'LiteLLM', preset: 'litellm', apiKey: 'keep-this-secret',
       quota: { maxConcurrency: 2, maxRequestsPerMinute: 30, maxRequestsPerDay: 500 },
     })
 
@@ -88,11 +89,11 @@ describe('engine route contracts', () => {
     })).toMatchObject({ baseUrl: 'https://gateway.example/v1', apiKey: 'replacement-secret' })
   })
 
-  it('uses a durable configured route id and increments only a measurement-relevant revision', () => {
+  it('uses a durable configured route id and increments only an execution-relevant revision', () => {
     const existing = engineRouteConfigSchema.parse({
-      id: 'route-openrouter-main',
+      id: 'route-gateway-main',
       label: 'General analysis',
-      connectionId: 'openrouter-main',
+      connectionId: 'gateway-main',
       modelId: 'openai/gpt-5.4',
       revision: 2,
       capabilities: { kind: 'text-only' },
@@ -114,18 +115,45 @@ describe('engine route contracts', () => {
 
   it('does not accept route identity, revision, or evidence claims from a settings writer', () => {
     expect(engineRouteUpsertInputSchema.parse({
-      label: 'Analysis', connectionId: 'openrouter-main', modelId: 'openai/gpt-5.4',
-    })).toEqual({ label: 'Analysis', connectionId: 'openrouter-main', modelId: 'openai/gpt-5.4' })
+      label: 'Analysis', connectionId: 'gateway-main', modelId: 'openai/gpt-5.4',
+    })).toEqual({ label: 'Analysis', connectionId: 'gateway-main', modelId: 'openai/gpt-5.4' })
     expect(engineRouteUpsertInputSchema.safeParse({
-      id: 'route-client-picked', label: 'Analysis', connectionId: 'openrouter-main', modelId: 'openai/gpt-5.4', revision: 99,
+      id: 'route-client-picked', label: 'Analysis', connectionId: 'gateway-main', modelId: 'openai/gpt-5.4', revision: 99,
     }).success).toBe(false)
+    expect(engineRouteUpsertInputSchema.safeParse({
+      label: 'Analysis', connectionId: 'gateway-main', modelId: 'openai/gpt-5.4',
+      capabilities: { kind: 'verified-measurement', retrieval: true, citations: true, location: true, servedModel: true, fallback: 'disabled' },
+    }).success).toBe(false)
+  })
+
+  it('rejects removed OpenRouter connection and measurement payloads instead of degrading them to text-only', () => {
+    const quota = { maxConcurrency: 1, maxRequestsPerMinute: 10, maxRequestsPerDay: 100 }
+    expect(engineConnectionConfigSchema.safeParse({
+      id: 'legacy-router', label: 'Legacy router', preset: 'openrouter',
+      protocol: 'openai-compatible', baseUrl: 'https://openrouter.ai/api/v1', quota,
+    }).success).toBe(false)
+    expect(engineRouteUpsertInputSchema.safeParse({
+      label: 'Legacy search', connectionId: 'gateway-main', modelId: 'vendor/model',
+      measurement: { kind: 'openrouter-web-search', engine: 'native' },
+    }).success).toBe(false)
+    expect(engineRouteConfigSchema.safeParse({
+      id: 'route:legacy-search', label: 'Legacy search', connectionId: 'gateway-main',
+      modelId: 'vendor/model', revision: 1, source: 'verified-adapter',
+      capabilities: { kind: 'verified-measurement', retrieval: true, citations: true, location: true, servedModel: true, fallback: 'disabled' },
+      measurement: { kind: 'openrouter-web-search', engine: 'native' },
+    }).success).toBe(false)
+  })
+
+  it('keeps dynamic routes out of the implicit sweep provider fallback', () => {
+    expect(defaultSweepProviderNames(['openai', 'route:gateway-main', ' ROUTE:dirty-input ', 'perplexity']))
+      .toEqual(['openai', 'perplexity'])
   })
 
   it('keeps generic routes text-only and fails closed for answer-visibility measurement', () => {
     const route = engineRouteConfigSchema.parse({
-      id: 'route-openrouter-main',
+      id: 'route-gateway-main',
       label: 'General analysis',
-      connectionId: 'openrouter-main',
+      connectionId: 'gateway-main',
       modelId: 'openai/gpt-5.4',
       revision: 1,
       capabilities: { kind: 'text-only' },
@@ -133,6 +161,13 @@ describe('engine route contracts', () => {
 
     expect(engineRouteReadiness(route)).toEqual({ state: 'text-ready', measurementReady: false })
     expect(() => assertEngineRouteCanMeasure(route)).toThrow(/does not prove retrieval, citation, location, and served-model evidence/i)
+
+    const forged = engineRouteConfigSchema.parse({
+      ...route,
+      capabilities: { kind: 'verified-measurement', fallback: 'disabled', retrieval: true, citations: true, location: true, servedModel: true },
+    })
+    expect(engineRouteReadiness(forged)).toEqual({ state: 'text-ready', measurementReady: false })
+    expect(engineRouteConfigSchema.safeParse({ ...forged, source: 'verified-adapter' }).success).toBe(false)
   })
 
   it('preserves native providers as implicit stable routes', () => {
@@ -152,9 +187,9 @@ describe('engine route contracts', () => {
 
   it('keeps route policy separate from the requested model', () => {
     const route = engineRouteConfigSchema.parse({
-      id: 'route:openrouter-main',
+      id: 'route:gateway-main',
       label: 'Analysis',
-      connectionId: 'openrouter-main',
+      connectionId: 'gateway-main',
       modelId: 'openai/gpt-5.4',
       revision: 4,
       source: 'configured',
@@ -162,19 +197,19 @@ describe('engine route contracts', () => {
     })
 
     const base = canonicalEngineRoutePolicyJson(route, {
-      id: 'openrouter-main', protocol: 'openai-compatible', baseUrl: 'https://openrouter.ai/api/v1',
+      id: 'gateway-main', protocol: 'openai-compatible', baseUrl: 'https://gateway.example/v1',
     })
     expect(canonicalEngineRoutePolicyJson({ ...route, label: 'Internal analysis' }, {
-      id: 'openrouter-main', protocol: 'openai-compatible', baseUrl: 'https://openrouter.ai/api/v1',
+      id: 'gateway-main', protocol: 'openai-compatible', baseUrl: 'https://gateway.example/v1',
     })).toBe(base)
     // Requested model is canonicalized in execution identity itself. Keeping
     // it out of the policy fingerprint means a project override cannot claim
     // the route default was the model it actually asked for.
     expect(canonicalEngineRoutePolicyJson({ ...route, modelId: 'openai/gpt-5.5' }, {
-      id: 'openrouter-main', protocol: 'openai-compatible', baseUrl: 'https://openrouter.ai/api/v1',
+      id: 'gateway-main', protocol: 'openai-compatible', baseUrl: 'https://gateway.example/v1',
     })).toBe(base)
     expect(canonicalEngineRoutePolicyJson(route, {
-      id: 'openrouter-main', protocol: 'openai-compatible', baseUrl: 'https://gateway.example/v1',
+      id: 'gateway-main', protocol: 'openai-compatible', baseUrl: 'https://other-gateway.example/v1',
     })).not.toBe(base)
   })
 

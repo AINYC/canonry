@@ -97,6 +97,48 @@ describe('api error envelopes', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true })
   })
 
+  it('rejects a configured text route from Simple project and schedule settings', async () => {
+    const textRoute = {
+      name: 'route:custom-gateway', displayName: 'Custom gateway', mode: 'api' as const,
+      modelConfigurable: true, defaultModel: 'vendor/model', knownModels: [],
+      modelValidationPattern: /.+/, modelValidationHint: 'use a model ID',
+    }
+    const { app, tmpDir } = buildApp({ providerAdapters: [textRoute] })
+    await app.ready()
+    try {
+      const body = {
+        displayName: 'Demo', canonicalDomain: 'example.com', country: 'US', language: 'en',
+        providers: [textRoute.name],
+      }
+      const created = await app.inject({
+        method: 'POST', url: '/api/v1/projects', payload: { name: 'created', ...body },
+      })
+      const upserted = await app.inject({
+        method: 'PUT', url: '/api/v1/projects/upserted', payload: body,
+      })
+      const applied = await app.inject({
+        method: 'POST', url: '/api/v1/apply',
+        payload: {
+          apiVersion: 'canonry/v1', kind: 'Project', metadata: { name: 'applied' },
+          spec: { ...body, schedule: { preset: 'daily', providers: [textRoute.name] } },
+        },
+      })
+
+      for (const response of [created, upserted, applied]) {
+        expect(response.statusCode, response.body).toBe(400)
+        expect(response.json()).toMatchObject({
+          error: {
+            code: 'VALIDATION_ERROR',
+            details: { invalidProviders: [textRoute.name], validProviders: [] },
+          },
+        })
+      }
+    } finally {
+      await app.close()
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
   it('persists validated project model overrides and resets them when PUT omits the map', async () => {
     const { app, tmpDir } = buildApp({
       providerAdapters: [{

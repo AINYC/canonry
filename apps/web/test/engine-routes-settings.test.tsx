@@ -1,7 +1,8 @@
 import React from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, expect, onTestFinished, test } from 'vitest'
+import { afterEach, expect, onTestFinished, test, vi } from 'vitest'
+import type { EngineConnectionPublicDto, EngineRouteConfig } from '@ainyc/canonry-api-client'
 
 import { EngineRoutesSettings } from '../src/components/settings/EngineRoutesSettings.js'
 import { SettingsPage } from '../src/pages/SettingsPage.js'
@@ -11,6 +12,7 @@ import { jsonResponse, mockFetch, pathOf } from './mock-fetch.js'
 afterEach(() => {
   cleanup()
   delete window.__CANONRY_CONFIG__
+  vi.unstubAllGlobals()
 })
 
 const settings = {
@@ -58,6 +60,11 @@ const settings = {
   ],
 }
 
+type SettingsFixture = Omit<typeof settings, 'engineConnections' | 'engineRoutes'> & {
+  engineConnections: EngineConnectionPublicDto[]
+  engineRoutes: EngineRouteConfig[]
+}
+
 const modelCatalog = {
   connectionId: 'gateway:team',
   state: 'available' as const,
@@ -74,7 +81,7 @@ function renderSettings({
   settingsBody = settings,
 }: {
   modelCatalogStatus?: number
-  settingsBody?: typeof settings
+  settingsBody?: SettingsFixture
 } = {}) {
   const requests: Array<{ path: string; init?: RequestInit }> = []
   const restore = mockFetch((url, init) => {
@@ -86,10 +93,16 @@ function renderSettings({
       ...settingsBody.engineConnections[0],
       id: path.split('/').at(-1)!,
     })
-    if (path.startsWith('/api/v1/settings/engine-routes/')) return jsonResponse({
-      ...settingsBody.engineRoutes[1],
-      id: path.split('/').at(-1)!,
-    })
+    if (path.startsWith('/api/v1/settings/engine-routes/')) {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+      return jsonResponse({
+        ...body,
+        id: path.split('/').at(-1)!,
+        revision: 1,
+        source: 'configured',
+        capabilities: { kind: 'text-only' },
+      })
+    }
     return jsonResponse({ error: { message: `Unexpected request: ${path}` } }, 500)
   })
   onTestFinished(restore)
@@ -112,7 +125,17 @@ test('lists native and configured routes with their actual measurement readiness
   expect(screen.getAllByText('Sweep ready')).toHaveLength(1)
   expect(screen.getAllByText('Text-only')).toHaveLength(1)
   expect(screen.getByText('Saved API key')).toBeTruthy()
-  expect(screen.getByText('Text-only routes can be used for research, not answer-visibility sweeps.')).toBeTruthy()
+  expect(screen.getByText('Text-only routes can support research. Native answer engines run visibility sweeps.')).toBeTruthy()
+})
+
+test('marks a hosted gateway route unavailable when its required API key is missing', async () => {
+  renderSettings({ settingsBody: {
+    ...settings,
+    engineConnections: [{ ...settings.engineConnections[0]!, preset: 'vercel-ai-gateway', secretConfigured: false }],
+  } })
+  await screen.findByText('Team GPT')
+  expect(screen.getByText('API key missing')).toBeTruthy()
+  expect(screen.queryByText('Text-only')).toBeNull()
 })
 
 test('keeps routes first, then the route catalog editor, before the connection table', async () => {
@@ -151,14 +174,39 @@ test('preserves a redacted connection secret when an editor changes no key', asy
   expect(JSON.parse(String(request.init?.body))).not.toHaveProperty('apiKey')
 })
 
-test('uses the contract LiteLLM endpoint when its preset is selected', async () => {
+test('lists only supported generic presets and keeps their credential guidance', async () => {
   renderSettings()
   await screen.findByText('Team gateway')
 
   fireEvent.click(screen.getByRole('button', { name: 'Add connection' }))
-  fireEvent.change(screen.getByLabelText('Preset'), { target: { value: 'litellm' } })
+  expect(Array.from((screen.getByLabelText('Preset') as HTMLSelectElement).options).map(option => option.value)).toEqual(['litellm', 'vercel-ai-gateway', 'custom-openai-compatible'])
 
   expect((screen.getByLabelText('Base URL') as HTMLInputElement).value).toBe('http://localhost:4000')
+  expect(screen.getByText('Optional for an unauthenticated endpoint.')).toBeTruthy()
+
+  fireEvent.change(screen.getByLabelText('Preset'), { target: { value: 'vercel-ai-gateway' } })
+  expect((screen.getByLabelText('Base URL') as HTMLInputElement).value).toBe('https://ai-gateway.vercel.sh/v1')
+  expect(screen.getByText('Required to use this hosted gateway.')).toBeTruthy()
+})
+
+test('new connections cannot silently overwrite a loaded connection and use a create-only request', async () => {
+  const { requests } = renderSettings()
+  await screen.findByText('Team gateway')
+  fireEvent.click(screen.getByRole('button', { name: 'Add connection' }))
+  const generatedId = (screen.getByLabelText('Connection ID') as HTMLInputElement).value
+  expect(screen.getByText('Optional for an unauthenticated endpoint.')).toBeTruthy()
+  expect(generatedId).toMatch(/^connection:gateway-.+/)
+  fireEvent.change(screen.getByLabelText('Connection label'), { target: { value: 'Another gateway' } })
+  fireEvent.change(screen.getByLabelText('Connection ID'), { target: { value: 'gateway:team' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save connection' }))
+  expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'This connection ID already exists. Choose a new ID or edit the existing connection.')
+  expect(requests.filter(request => request.init?.method === 'PUT')).toHaveLength(0)
+  fireEvent.change(screen.getByLabelText('Connection ID'), { target: { value: generatedId } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save connection' }))
+  await waitFor(() => expect(requests.some(request => request.init?.method === 'PUT')).toBe(true))
+  const request = requests.find(request => request.init?.method === 'PUT')!
+  expect(request.path).toBe(`/api/v1/settings/engine-connections/${generatedId}`)
+  expect(new Headers(request.init?.headers).get('if-none-match')).toBe('*')
 })
 
 test('creates a generic route with a manual model ID and truthfully labels it text-only', async () => {
@@ -169,7 +217,8 @@ test('creates a generic route with a manual model ID and truthfully labels it te
   fireEvent.change(screen.getByLabelText('Route label'), { target: { value: 'Llama research' } })
   fireEvent.change(screen.getByLabelText('Route ID'), { target: { value: 'route:llama-research' } })
   fireEvent.change(screen.getByLabelText('Model ID'), { target: { value: 'meta-llama/llama-4-maverick' } })
-  expect(screen.getByText('Generic routes are text-only until a verified evidence adapter is installed.')).toBeTruthy()
+  expect(screen.queryByRole('group', { name: 'Route mode' })).toBeNull()
+  expect(screen.getByText('This route supports research. It cannot run answer-visibility sweeps.')).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Save route' }))
 
   await waitFor(() => expect(requests.some(request => request.path === '/api/v1/settings/engine-routes/route:llama-research')).toBe(true))
@@ -179,6 +228,76 @@ test('creates a generic route with a manual model ID and truthfully labels it te
     connectionId: 'gateway:team',
     modelId: 'meta-llama/llama-4-maverick',
   })
+  expect(new Headers(request.init?.headers).get('if-none-match')).toBe('*')
+})
+
+test('new routes cannot overwrite an existing route and receive unique defaults', async () => {
+  const { requests } = renderSettings()
+  await screen.findByText('Team GPT')
+  fireEvent.click(screen.getByRole('button', { name: 'Add route' }))
+  const generatedId = (screen.getByLabelText('Route ID') as HTMLInputElement).value
+  expect(generatedId).toMatch(/^route:research-.+/)
+  fireEvent.change(screen.getByLabelText('Route label'), { target: { value: 'Replacement' } })
+  fireEvent.change(screen.getByLabelText('Route ID'), { target: { value: 'route:team-gpt' } })
+  fireEvent.change(screen.getByLabelText('Model ID'), { target: { value: 'another/model' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save route' }))
+  expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'This route ID already exists. Choose a new ID or edit the existing route.')
+  expect(requests.filter(request => request.init?.method === 'PUT')).toHaveLength(0)
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Add route' }))
+  expect((screen.getByLabelText('Route ID') as HTMLInputElement).value).not.toBe(generatedId)
+})
+
+test('new editors work on HTTP origins without secure-context randomUUID', async () => {
+  vi.stubGlobal('crypto', undefined)
+  renderSettings()
+  await screen.findByText('Team GPT')
+  fireEvent.click(screen.getByRole('button', { name: 'Add route' }))
+  expect((screen.getByLabelText('Route ID') as HTMLInputElement).value).toMatch(/^route:research-.+/)
+  fireEvent.click(screen.getByRole('button', { name: 'Add connection' }))
+  expect((screen.getByLabelText('Connection ID') as HTMLInputElement).value).toMatch(/^connection:gateway-.+/)
+})
+
+test('connection quotas preserve valid exponent input instead of truncating it', async () => {
+  const { requests } = renderSettings()
+  await screen.findByText('Team gateway')
+  fireEvent.click(screen.getByRole('button', { name: 'Edit Team gateway' }))
+  fireEvent.change(screen.getByLabelText('Per day'), { target: { value: '1e3' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save connection' }))
+  await waitFor(() => expect(requests.some(request => request.init?.method === 'PUT')).toBe(true))
+  const request = requests.find(request => request.init?.method === 'PUT')!
+  expect(JSON.parse(String(request.init?.body)).quota.maxRequestsPerDay).toBe(1000)
+})
+
+test('does not treat configured capability claims as server-verified measurement', async () => {
+  renderSettings({
+    settingsBody: {
+      ...settings,
+      engineRoutes: [
+        ...settings.engineRoutes,
+        {
+          id: 'route:claimed',
+          label: 'Claimed measurement',
+          connectionId: 'gateway:team',
+          modelId: 'claimed/model',
+          revision: 1,
+          source: 'configured' as const,
+          capabilities: {
+            kind: 'verified-measurement' as const,
+            retrieval: true as const,
+            citations: true as const,
+            location: true as const,
+            servedModel: true as const,
+            fallback: 'disabled' as const,
+          },
+        },
+      ],
+    },
+  })
+
+  await screen.findByText('Claimed measurement')
+  expect(screen.getAllByText('Sweep ready')).toHaveLength(1)
+  expect(screen.getAllByText('Text-only')).toHaveLength(2)
 })
 
 test('loads and searches a connection catalog only after an explicit request while retaining manual model entry', async () => {
@@ -239,11 +358,11 @@ test('keeps a route with a missing connection visible and marks it unavailable',
         ...settings.engineRoutes,
         {
           id: 'route:stale',
-          label: 'Stale verified route',
+          label: 'Stale route',
           connectionId: 'gateway:missing',
           modelId: 'missing/model',
           revision: 3,
-          source: 'verified-adapter',
+          source: 'configured',
           capabilities: {
             kind: 'verified-measurement',
             retrieval: true,
@@ -257,7 +376,7 @@ test('keeps a route with a missing connection visible and marks it unavailable',
     },
   })
 
-  await screen.findByText('Stale verified route')
+  await screen.findByText('Stale route')
   expect(screen.getByText('Connection missing')).toBeTruthy()
   expect(screen.getByRole('cell', { name: /Team GPT/ })).toBeTruthy()
 })
@@ -291,7 +410,7 @@ test('shows a viewer the safe route summary without reading administrator settin
             label: 'Stale route',
             modelId: 'missing/model',
             revision: 3,
-            source: 'verified-adapter',
+            source: 'configured',
             readiness: { state: 'unavailable', measurementReady: false },
           },
         ],

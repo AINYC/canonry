@@ -160,6 +160,20 @@ function queue(db: DatabaseClient, projectId: string, params: Parameters<typeof 
 }
 
 describe('a published v2 revision at queue time', () => {
+  it('refuses a retained text-route plan before stamping or queueing provider work', () => {
+    const { db, projectId } = seed({ projectProviders: ['openai'] })
+    publishV2(db, projectId, v2Plan({
+      targets: ['north-branch'],
+      nodes: [{ key: 'legacy-route-node', queryId: 'q-1', queryText: 'widget question 0', providers: [' ROUTE:legacy-text '], models: { 'route:legacy-text': 'gateway-model' }, location: NORTH }],
+      assignments: [{ targetKey: 'north-branch', nodeKey: 'legacy-route-node' }],
+    }), 1)
+    expect(() => assertMeasurementRunStampable(db, { projectId, runnableProviders: ['openai', 'route:legacy-text'] }))
+      .toThrow(/text-only.*measurement plan/i)
+    expect(() => queue(db, projectId, { runnableProviders: ['openai', 'route:legacy-text'] }))
+      .toThrow(/text-only.*measurement plan/i)
+    expect(db.select().from(runs).all()).toEqual([])
+  })
+
   it('materializes the manifest from the revision\'s own execution nodes and frozen engines', () => {
     // The project row names an engine the revision does not run. A v2 revision
     // freezes provider configuration, so the plan wins.

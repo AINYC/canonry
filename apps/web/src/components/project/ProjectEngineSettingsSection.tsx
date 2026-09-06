@@ -5,7 +5,7 @@ import type { EngineRouteConfig } from '@ainyc/canonry-api-client'
 
 import { fetchSettings, isEmbed, type ApiProject } from '../../api.js'
 import { Button } from '../ui/button.js'
-import { describeError } from '@ainyc/canonry-contracts'
+import { describeError, engineConnectionAllowsUnauthenticatedText } from '@ainyc/canonry-contracts'
 import { useAccount } from '../../contexts/account-context.js'
 import { EngineRoutesReadOnlySummary } from '../settings/EngineRoutesSettings.js'
 
@@ -21,7 +21,7 @@ type EngineRow = {
   /** The ID used by this UI. Native rows use their legacy provider ID. */
   id: string
   displayName: string
-  kind: 'native' | 'verified' | 'text-only'
+  kind: 'native' | 'text-only'
   sweepEligible: boolean
   connectionMissing?: boolean
   /** Only native providers may use legacy project model overrides. */
@@ -74,14 +74,17 @@ function normalizeResearchProvider(provider: string | null | undefined): string 
 
 function engineRowOrder(row: EngineRow): number {
   if (row.kind === 'native') return 0
-  if (row.kind === 'verified') return 1
-  return 2
+  return 1
 }
 
 function researchRouteOrder(route: ResearchRoute): number {
   if (route.source === 'implicit-native') return 0
-  if (route.source === 'verified-adapter') return 1
-  return 2
+  return 1
+}
+
+function isServerVerifiedMeasurementRoute(route: Pick<EngineRouteConfig, 'source' | 'capabilities'>): boolean {
+  return route.source === 'implicit-native'
+    && route.capabilities.kind === 'verified-measurement'
 }
 
 /**
@@ -89,7 +92,15 @@ function researchRouteOrder(route: ResearchRoute): number {
  * metadata settings because a provider/model edit changes future execution,
  * not a project’s identity.
  */
-export function ProjectEngineSettingsSection({
+export function ProjectEngineSettingsSection(props: {
+  project: EngineProject
+  onSave: (next: EngineSave) => Promise<void>
+}) {
+  // A draft belongs to one project. Navigation must not carry it into another.
+  return <ProjectEngineSettingsBody key={props.project.name} {...props} />
+}
+
+function ProjectEngineSettingsBody({
   project,
   onSave,
 }: {
@@ -130,8 +141,8 @@ export function ProjectEngineSettingsSection({
     () => new Set((settings.data?.providers ?? []).filter(provider => provider.configured).map(provider => provider.name)),
     [settings.data],
   )
-  const connectionIds = useMemo(
-    () => new Set((settings.data?.engineConnections ?? []).map(connection => connection.id)),
+  const connectionsById = useMemo(
+    () => new Map((settings.data?.engineConnections ?? []).map(connection => [connection.id, connection])),
     [settings.data],
   )
   const rows = useMemo<EngineRow[]>(() => {
@@ -171,20 +182,17 @@ export function ProjectEngineSettingsSection({
     }
     for (const route of engineRoutes) {
       if (route.source === 'implicit-native') continue
-      const textOnly = route.capabilities.kind === 'text-only'
-      const connectionMissing = !connectionIds.has(route.connectionId)
+      const connectionMissing = !connectionsById.has(route.connectionId)
       known.set(route.id, {
         id: route.id,
         displayName: route.label,
-        kind: textOnly ? 'text-only' : 'verified',
-        sweepEligible: !textOnly && !connectionMissing,
+        kind: 'text-only',
+        sweepEligible: false,
         connectionMissing,
         modelConfigurable: false,
         defaultModel: route.modelId,
         knownModels: [],
-        modelValidationHint: textOnly
-          ? 'Text-only routes are available through the separate research route selector.'
-          : 'The verified route owns its measured model and evidence contract.',
+        modelValidationHint: 'Text-only routes are available through the separate research route selector.',
       })
     }
     for (const legacyProvider of [...Object.keys(models), ...selected.map(legacyProviderId)]) {
@@ -204,17 +212,20 @@ export function ProjectEngineSettingsSection({
     return [...known.values()].sort((left, right) => (
       engineRowOrder(left) - engineRowOrder(right) || left.displayName.localeCompare(right.displayName)
     ))
-  }, [catalog, configured, connectionIds, engineRoutes, models, selected])
+  }, [catalog, configured, connectionsById, engineRoutes, models, selected])
   const researchRoutes = useMemo<ResearchRoute[]>(() => {
-    const routes: ResearchRoute[] = engineRoutes.map(route => ({
-      id: route.source === 'implicit-native' ? legacyProviderId(route.id) : route.id,
-      label: route.label,
-      source: route.source,
-      capabilities: route.capabilities,
-      unavailable: route.source === 'implicit-native'
-        ? !configured.has(legacyProviderId(route.id))
-        : !connectionIds.has(route.connectionId),
-    }))
+    const routes: ResearchRoute[] = engineRoutes.map(route => {
+      const connection = connectionsById.get(route.connectionId)
+      return {
+        id: route.source === 'implicit-native' ? legacyProviderId(route.id) : route.id,
+        label: route.label,
+        source: route.source,
+        capabilities: route.capabilities,
+        unavailable: route.source === 'implicit-native'
+          ? !configured.has(legacyProviderId(route.id))
+          : !connection || !(connection.secretConfigured || engineConnectionAllowsUnauthenticatedText(connection)),
+      }
+    })
     if (researchProvider && !routes.some(route => route.id === researchProvider)) {
       routes.push({
         id: researchProvider,
@@ -227,10 +238,12 @@ export function ProjectEngineSettingsSection({
     return routes.sort((left, right) => (
       researchRouteOrder(left) - researchRouteOrder(right) || left.label.localeCompare(right.label)
     ))
-  }, [configured, connectionIds, engineRoutes, researchProvider])
-  const selectableSweepIds = new Set(rows.filter(row => row.sweepEligible).map(row => row.id))
+  }, [configured, connectionsById, engineRoutes, researchProvider])
+  // Readiness decides what can be newly selected, not what saved intent survives.
+  // Removing a key temporarily must not delete a checked native provider or its
+  // model override when the operator saves an unrelated research preference.
+  const selectableSweepIds = new Set(rows.filter(row => row.kind === 'native').map(row => row.id))
   const selectedSweepIds = selected.filter(id => selectableSweepIds.has(id))
-  const staleVerifiedIds = selected.filter(id => rows.some(row => row.id === id && row.kind === 'verified' && !row.sweepEligible))
   const selectedNativeProviders = new Set(
     rows
       .filter(row => row.nativeProvider && selectedSweepIds.includes(row.id))
@@ -262,8 +275,7 @@ export function ProjectEngineSettingsSection({
     setEditing(true)
     setAutomatic(false)
     // Preserve a previous explicit draft during this edit session. Automatic
-    // mode has always meant native configured providers; verified dynamic routes
-    // are opt-in so adding one never broadens an existing project's sweeps.
+    // mode includes configured native providers, never generic text routes.
     if (selectedSweepIds.length === 0) setSelected(rows.filter(row => row.kind === 'native' && row.sweepEligible).map(row => row.id))
   }
 
@@ -299,14 +311,13 @@ export function ProjectEngineSettingsSection({
   }
 
   async function save() {
-    if (settings.isError || settings.isLoading || (!automatic && selectedSweepIds.length === 0 && staleVerifiedIds.length === 0)) return
+    if (settings.isError || settings.isLoading || (!automatic && selectedSweepIds.length === 0)) return
     setSaving(true)
     setError(null)
     setNotice(null)
     try {
-      // Model overrides belong only to legacy native providers. A selected
-      // verified route owns its evidence-qualified model; text-only routes are
-      // never allowed into sweep providers at all.
+      // Model overrides belong only to native providers. Text-only routes are
+      // never allowed into sweep providers.
       const providerModels = Object.fromEntries(
         Object.entries(models).filter(([provider, model]) =>
           model.trim() !== '' && (automatic
@@ -315,7 +326,7 @@ export function ProjectEngineSettingsSection({
       ))
       const providers = automatic
         ? []
-        : [...selectedSweepIds, ...staleVerifiedIds]
+        : selectedSweepIds
           .map(selectionId => rows.find(row => row.id === selectionId)?.nativeProvider ?? selectionId)
       const next: EngineSave = {
         providers: [...new Set(providers)],
@@ -374,7 +385,7 @@ export function ProjectEngineSettingsSection({
       </div>
       <fieldset disabled={saving} className="project-engine-fieldset">
         <legend>Sweep routes</legend>
-        <label><input type="radio" checked={automatic} onChange={() => { setEditing(true); setAutomatic(true) }} /> All configured engines</label>
+        <label><input type="radio" checked={automatic} onChange={() => { setEditing(true); setAutomatic(true) }} /> All configured native engines</label>
         <p className="project-engine-help">Includes configured native engines added later in global Settings.</p>
         <label><input type="radio" checked={!automatic} onChange={chooseEngines} /> Choose engines</label>
         {!automatic && (
@@ -389,7 +400,7 @@ export function ProjectEngineSettingsSection({
                 <div key={route.id} className="project-engine-row">
                   <div>
                     <label className="project-engine-provider"><input type="checkbox" checked={checked} disabled={!route.sweepEligible && !checked} onChange={event => toggleProvider(route.id, event.target.checked)} /> <span>{route.displayName}</span></label>
-                    {route.kind === 'text-only' && <p className="project-engine-help text-caution-400">Text-only — research only</p>}
+                    {route.kind === 'text-only' && <p className="project-engine-help text-caution-400">Text-only: research only</p>}
                     {route.connectionMissing && <p className="project-engine-help text-caution-400">Connection missing</p>}
                     {unavailable && route.kind === 'native' && <p className="project-engine-help text-caution-400">Not configured, skipped</p>}
                   </div>
@@ -404,7 +415,7 @@ export function ProjectEngineSettingsSection({
                       {selectValue === '__custom__' && <input ref={customInput} aria-label={`${route.displayName} custom model ID`} value={model ?? ''} onChange={event => { setEditing(true); setModels(current => ({ ...current, [route.nativeProvider!]: event.target.value })) }} aria-describedby={`project-model-hint-${route.id}`} />}
                       <p id={`project-model-hint-${route.id}`} className="project-engine-help">{model ? 'Project override' : 'Inherited from instance settings'}. {route.modelValidationHint}</p>
                     </div>
-                  ) : <p className="project-engine-help">{route.kind === 'verified' ? 'Model and evidence are fixed by this verified route.' : 'Model is detected/fixed for this browser engine.'}</p>)}
+                  ) : <p className="project-engine-help">Model is detected/fixed for this browser engine.</p>)}
                 </div>
               )
             })}
@@ -412,26 +423,26 @@ export function ProjectEngineSettingsSection({
         )}
       </fieldset>
       {rows.every(route => !route.sweepEligible) && <p className="mt-3 text-sm text-secondary">Configure an answer engine in <Link to="/settings" className="text-link">global Settings</Link> before choosing a sweep route. Research can still use a configured text-only route below.</p>}
-      {!automatic && selectedSweepIds.length === 0 && staleVerifiedIds.length === 0 && <p role="alert" className="text-sm text-negative-400">Choose at least one available sweep route.</p>}
+      {!automatic && selectedSweepIds.length === 0 && <p role="alert" className="text-sm text-negative-400">Choose at least one native sweep route.</p>}
       {researchRoutes.length > 0 && (
         <div className="mt-5 border-t border-default pt-4">
           <label className="text-sm font-medium text-secondary" htmlFor="project-research-route">Research route</label>
-          <select id="project-research-route" className="mt-1 w-full max-w-xl rounded-md border border-base bg-surface px-2 py-1.5 text-sm text-primary" value={researchProvider ?? ''} onChange={event => {
+          <select id="project-research-route" disabled={saving} className="mt-1 w-full max-w-xl rounded-md border border-base bg-surface px-2 py-1.5 text-sm text-primary" value={researchProvider ?? ''} onChange={event => {
             setEditing(true)
             setResearchTouched(true)
             setResearchProvider(event.target.value || null)
           }}>
             <option value="">Use the default research route</option>
-            {researchRoutes.map(route => <option key={route.id} value={route.id} disabled={route.unavailable}>{route.label}{route.capabilities.kind === 'text-only' ? ' — text-only' : ''}{route.unavailable ? ' — unavailable' : ''}</option>)}
+            {researchRoutes.map(route => <option key={route.id} value={route.id} disabled={route.unavailable}>{route.label}{!isServerVerifiedMeasurementRoute(route) ? ' — text-only' : ''}{route.unavailable ? ' — unavailable' : ''}</option>)}
           </select>
           <p className="mt-1 project-engine-help">Text-only routes are allowed for research. They cannot run answer-visibility sweeps.</p>
-          {researchRoutes.find(route => route.id === researchProvider)?.unavailable && <p className="mt-1 project-engine-help text-caution-400">The saved research route is unavailable because its connection is missing. Choose another route to replace it.</p>}
+          {researchRoutes.find(route => route.id === researchProvider)?.unavailable && <p className="mt-1 project-engine-help text-caution-400">The saved research route is unavailable. Check its connection and required API key, or choose another route.</p>}
         </div>
       )}
       {error && <p role="alert" className="text-sm text-negative-400">{error}</p>}
       {notice && <p role="status" className="text-sm text-positive-400">{notice}</p>}
       {hasModelChange && <p className="project-engine-warning">Applies on the next sweep. Existing history remains visible. If the recorded model changes, month-to-month comparison may exclude that engine.</p>}
-      <div className="flex gap-2"><Button type="button" onClick={() => void save()} disabled={saving || (!automatic && selectedSweepIds.length === 0 && staleVerifiedIds.length === 0)}>{saving ? 'Saving engines…' : 'Save engines'}</Button><Button type="button" variant="outline" onClick={cancel} disabled={saving}>Cancel</Button></div>
+      <div className="flex gap-2"><Button type="button" onClick={() => void save()} disabled={saving || (!automatic && selectedSweepIds.length === 0)}>{saving ? 'Saving engines…' : 'Save engines'}</Button><Button type="button" variant="outline" onClick={cancel} disabled={saving}>Cancel</Button></div>
     </section>
   )
 }

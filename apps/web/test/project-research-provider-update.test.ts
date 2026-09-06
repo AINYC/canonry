@@ -48,14 +48,14 @@ test('sends an explicitly selected research route in the generated project PUT b
   const bodies = observeProjectPuts()
 
   await updateProject('demo', {
-    providers: ['gemini', 'route:verified'],
+    providers: ['gemini', 'openai'],
     providerModels: { gemini: 'gemini-2.5-pro' },
     researchProvider: 'route:research-gateway',
   })
 
   expect(bodies).toHaveLength(1)
   expect(bodies[0]).toMatchObject({
-    providers: ['gemini', 'route:verified'],
+    providers: ['gemini', 'openai'],
     providerModels: { gemini: 'gemini-2.5-pro' },
     researchProvider: 'route:research-gateway',
   })

@@ -2,7 +2,7 @@ import crypto from 'node:crypto'
 import { and, eq } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { projects, competitors, schedules, notifications } from '@ainyc/canonry-db'
-import { forbidden, normalizeProjectAliases, normalizeProjectDomain, projectConfigSchema, registrableDomain, resolveConfigSpecQueries, SchedulableRunKinds, validationError, describeError } from '@ainyc/canonry-contracts'
+import { defaultSweepProviderNames, forbidden, nextScheduleUpdatedAt, normalizeProjectAliases, normalizeProjectDomain, projectConfigSchema, registrableDomain, resolveConfigSpecQueries, SchedulableRunKinds, validationError, describeError } from '@ainyc/canonry-contracts'
 import type { ProviderAdapterInfo } from './settings.js'
 import { pruneProviderModelsForProviders, validateProviderModels } from './provider-models.js'
 import { writeAuditLog } from './helpers.js'
@@ -14,6 +14,8 @@ import { resolveWebhookTarget } from './webhooks.js'
 export interface ApplyRoutesOptions {
   onScheduleUpdated?: (action: 'upsert' | 'delete', projectId: string, kind: import('@ainyc/canonry-contracts').SchedulableRunKind) => void
   onProjectUpserted?: (projectId: string, projectName: string) => void
+  /** Post-commit lifecycle hook; failures must not turn a committed create into an HTTP 500. */
+  onProjectCreated?: (projectId: string, projectName: string) => void
   /** See `ProjectRoutesOptions.onAliasesChanged`. */
   onAliasesChanged?: (projectId: string, projectName: string) => void
   onGoogleConnectionPropertyUpdated?: (domain: string, connectionType: 'gsc' | 'ga4', propertyId: string) => void
@@ -28,6 +30,13 @@ export interface ApplyRoutesOptions {
 
 export async function applyRoutes(app: FastifyInstance, opts?: ApplyRoutesOptions) {
   const allowLoopback = opts?.allowLoopbackWebhooks === true
+  const notifyProjectCreated = (projectId: string, projectName: string): void => {
+    try {
+      opts?.onProjectCreated?.(projectId, projectName)
+    } catch (error) {
+      app.log.error({ error, projectId, projectName }, 'Project-created callback failed after commit')
+    }
+  }
   // POST /apply — accept a canonry.yaml body (JSON-parsed version)
   app.post('/apply', async (request, reply) => {
     const parsed = projectConfigSchema.safeParse(request.body)
@@ -39,9 +48,11 @@ export async function applyRoutes(app: FastifyInstance, opts?: ApplyRoutesOption
 
     const config = parsed.data
 
-    // Validate provider names against registered adapters
-    const validNames = opts?.providerAdapters?.map(adapter => adapter.name) ?? []
-    if (validNames.length) {
+    // The YAML project and its schedule use native measurement providers.
+    // Research has a broader catalog that may include text-only routes.
+    const validNames = defaultSweepProviderNames(opts?.providerAdapters?.map(adapter => adapter.name) ?? [])
+    const validatesProviderNames = opts?.providerAdapters !== undefined
+    if (validatesProviderNames) {
       const allProviders = [
         ...(config.spec.providers ?? []),
         ...(config.spec.schedule?.providers ?? []),
@@ -150,6 +161,7 @@ export async function applyRoutes(app: FastifyInstance, opts?: ApplyRoutesOption
 
     // All validation done — wrap all writes in a single transaction
     let projectId: string
+    const lifecycle = { projectCreated: false }
     let scheduleAction: 'upsert' | 'delete' | null = null
     let aliasesChanged = false
 
@@ -196,6 +208,7 @@ export async function applyRoutes(app: FastifyInstance, opts?: ApplyRoutesOption
         })
       } else {
         projectId = crypto.randomUUID()
+        lifecycle.projectCreated = true
         tx.insert(projects).values({
           id: projectId,
           name,
@@ -292,7 +305,7 @@ export async function applyRoutes(app: FastifyInstance, opts?: ApplyRoutesOption
             timezone: resolvedSchedule.timezone,
             providers: config.spec.schedule?.providers ?? [],
             ...(specEnabled === undefined ? {} : { enabled: specEnabled }),
-            updatedAt: now,
+            updatedAt: nextScheduleUpdatedAt(existingSched.updatedAt, Date.parse(now)),
           }).where(eq(schedules.id, existingSched.id)).run()
         } else {
           tx.insert(schedules).values({
@@ -350,6 +363,9 @@ export async function applyRoutes(app: FastifyInstance, opts?: ApplyRoutesOption
     })
 
     // Fire callbacks after transaction commits.
+    if (lifecycle.projectCreated) {
+      notifyProjectCreated(projectId!, config.metadata.name)
+    }
     if (scheduleAction) {
       opts?.onScheduleUpdated?.(scheduleAction, projectId!, SchedulableRunKinds['answer-visibility'])
     }

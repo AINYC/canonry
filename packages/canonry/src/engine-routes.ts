@@ -1,6 +1,7 @@
 import { complete, type Context, type Model } from '@mariozechner/pi-ai'
 import {
   assertEngineRouteCanMeasure,
+  engineConnectionAllowsUnauthenticatedText,
   engineConnectionModelCatalogResponseSchema,
   type EngineConnectionConfig,
   type EngineConnectionModelCatalogItem,
@@ -14,10 +15,46 @@ import {
   type TrackedQueryInput,
 } from '@ainyc/canonry-contracts'
 import { runEngineRouteText } from './engine-route-text-execution.js'
+import type { DatabaseClient } from '@ainyc/canonry-db'
+
+export { engineConnectionAllowsUnauthenticatedText } from '@ainyc/canonry-contracts'
 
 const MODEL_CATALOG_TIMEOUT_MS = 8_000
 const MODEL_CATALOG_MAX_BYTES = 1_000_000
 const MODEL_CATALOG_MAX_ITEMS = 500
+
+/**
+ * pi-ai requires a non-empty API key before it constructs its OpenAI client,
+ * even when the configured gateway deliberately has no authentication. The
+ * value is only an adapter sentinel; the model-level null header below makes
+ * the OpenAI SDK remove Authorization before sending the request.
+ */
+const UNAUTHENTICATED_TEXT_ROUTE_API_KEY = 'canonry-unauthenticated-route'
+
+type TextConnectionCredential = Pick<EngineConnectionConfig, 'preset' | 'apiKey'>
+
+/**
+ * Resolve the exact value passed to pi-ai without consulting provider env
+ * fallbacks. LiteLLM/custom endpoints may intentionally be keyless; hosted
+ * Vercel gateway routes may not.
+ */
+export function resolveEngineConnectionTextApiKey(
+  connection: TextConnectionCredential,
+  override?: string,
+): string | undefined {
+  const configured = override ?? connection.apiKey
+  if (configured) return configured
+  return engineConnectionAllowsUnauthenticatedText(connection)
+    ? UNAUTHENTICATED_TEXT_ROUTE_API_KEY
+    : undefined
+}
+
+export function isEngineConnectionTextReady(
+  connection: TextConnectionCredential,
+  override?: string,
+): boolean {
+  return resolveEngineConnectionTextApiKey(connection, override) !== undefined
+}
 
 /**
  * Build a pi-ai model for the generic OpenAI-compatible transport. This path
@@ -29,6 +66,8 @@ export function buildOpenAiCompatibleRouteModel(input: {
   config?: Pick<ProviderConfig, 'apiKey' | 'baseUrl' | 'model'>
 }): Model<'openai-completions'> {
   const { connection, route, config } = input
+  const explicitlyKeyless = !(config?.apiKey ?? connection.apiKey)
+    && engineConnectionAllowsUnauthenticatedText(connection)
   return {
     id: config?.model ?? route.modelId,
     name: route.label,
@@ -40,6 +79,13 @@ export function buildOpenAiCompatibleRouteModel(input: {
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 131_072,
     maxTokens: 32_768,
+    // OpenAI's SDK supports null header values to remove defaults, while
+    // pi-ai's Model type currently narrows values to string. Keep the cast at
+    // this compatibility boundary. The sentinel key therefore satisfies
+    // pi-ai without emitting a fake bearer credential on the wire.
+    ...(explicitlyKeyless
+      ? { headers: { Authorization: null } as unknown as Record<string, string> }
+      : {}),
     compat: {
       supportsStore: false,
       supportsDeveloperRole: false,
@@ -173,6 +219,9 @@ export async function fetchOpenAiCompatibleModelCatalog(
     return unavailableModelCatalog(connection.id)
   } finally {
     clearTimeout(timeout)
+    // Early returns (HTTP errors or oversized declared bodies) must also
+    // release the response socket instead of leaving an unread stream alive.
+    controller.abort()
   }
 }
 
@@ -183,12 +232,16 @@ export async function fetchOpenAiCompatibleModelCatalog(
 export function createOpenAiCompatibleTextRouteAdapter(input: {
   connection: EngineConnectionConfig
   route: EngineRouteConfig
+  db?: DatabaseClient
 }): ProviderAdapter {
   const { connection, route } = input
 
   const validateConfig = (config: ProviderConfig): ProviderHealthcheckResult => {
     if (!config.baseUrl && !connection.baseUrl) {
       return { ok: false, provider: route.id, message: 'A baseUrl is required for an OpenAI-compatible route.' }
+    }
+    if (!isEngineConnectionTextReady(connection, config.apiKey)) {
+      return { ok: false, provider: route.id, message: 'An API key is required for this hosted gateway.' }
     }
     return { ok: true, provider: route.id, message: 'OpenAI-compatible text route configured.', model: config.model ?? route.modelId }
   }
@@ -223,18 +276,20 @@ export function createOpenAiCompatibleTextRouteAdapter(input: {
       throw new Error(`Engine route "${route.id}" cannot normalize answer-visibility evidence without a verified adapter.`)
     },
     async generateText(prompt: string, config: ProviderConfig): Promise<string> {
+      const apiKey = resolveEngineConnectionTextApiKey(connection, config.apiKey)
+      if (!apiKey) throw new Error(`Engine connection "${connection.id}" requires an API key.`)
       return runEngineRouteText(connection, async () => {
         const model = buildOpenAiCompatibleRouteModel({ connection, route, config })
         const context: Context = {
           messages: [{ role: 'user', content: prompt, timestamp: Date.now() }],
         }
         const response = await complete(model, context, {
-          ...(config.apiKey ?? connection.apiKey ? { apiKey: config.apiKey ?? connection.apiKey } : {}),
+          apiKey,
         })
         const text = textFromResponse(response)
         if (!text) throw new Error(`Engine route "${route.id}" returned no text content.`)
         return text
-      })
+      }, { db: input.db })
     },
   }
 }

@@ -6,6 +6,8 @@ import path from 'node:path'
 import { eq } from 'drizzle-orm'
 import {
   buildMeasurementRunManifestV1,
+  buildMeasurementExecutionIdentity,
+  canonicalMeasurementExecutionIdentityJson,
   canonicalMeasurementPlanJson,
   compileMeasurementPlan,
   resolveMeasurementRunScope,
@@ -165,6 +167,33 @@ function report(env: Env) {
 }
 
 describe('plan-aware execution', () => {
+  test('refuses a changed route policy before manifest-backed provider work', async () => {
+    const env = buildEnv()
+    const calls: RecordedCall[] = []
+    const descriptor = { routeId: 'native:openai', routeRevision: 1, policyFingerprint: 'a'.repeat(64) }
+    const input = { schemaVersion: 2 as const, providers: ['openai'], models: { openai: 'fake-model' }, routes: { openai: descriptor } }
+    const checksum = crypto.createHash('sha256').update(canonicalMeasurementExecutionIdentityJson(input)).digest('hex')
+    env.db.update(runs).set({ measurementExecutionIdentity: buildMeasurementExecutionIdentity(input, checksum) })
+      .where(eq(runs.id, env.runId)).run()
+
+    await new JobRunner(env.db, registryFor(calls, [{ name: 'openai' }]), {
+      getProviderRouteDescriptors: () => ({ openai: { ...descriptor, routeRevision: 2 } }),
+    }).executeRun(env.runId, env.projectId)
+
+    expect(calls).toEqual([])
+    expect(snapshotsFor(env)).toEqual([])
+    expect(env.db.select().from(runs).where(eq(runs.id, env.runId)).get()).toMatchObject({ status: 'failed' })
+  })
+
+  test('refuses a missing configured measurement route before provider work', async () => {
+    const env = buildEnv({ providers: ['openai', 'route:unavailable'] })
+    const calls: RecordedCall[] = []
+    await new JobRunner(env.db, registryFor(calls, [{ name: 'openai' }])).executeRun(env.runId, env.projectId)
+    expect(calls).toEqual([])
+    expect(snapshotsFor(env)).toEqual([])
+    expect(env.db.select().from(runs).where(eq(runs.id, env.runId)).get()).toMatchObject({ status: 'failed' })
+  })
+
   test('runs the same question once per context, with the context on the call', async () => {
     const env = buildEnv()
     const calls: RecordedCall[] = []

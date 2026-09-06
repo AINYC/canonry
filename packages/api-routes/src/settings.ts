@@ -10,7 +10,9 @@ import type {
   ProviderQuotaPolicy,
 } from '@ainyc/canonry-contracts'
 import {
+  AppError,
   buildEngineRouteSummaryDto,
+  engineConnectionAllowsUnauthenticatedText,
   engineConnectionEndpointChanged,
   engineConnectionInputSchema,
   engineConnectionModelCatalogResponseSchema,
@@ -104,16 +106,17 @@ export async function settingsRoutes(app: FastifyInstance, opts: SettingsRoutesO
   // viewers and project-scoped keys may choose/describe routes without seeing
   // connection ids, endpoint URLs, credential state, or provider settings.
   app.get('/settings/engine-routes', async () => {
-    const connectionIds = new Set(resolveSettingList(opts.engineConnections).map(connection => connection.id))
+    const connections = new Map(resolveSettingList(opts.engineConnections).map(connection => [connection.id, connection]))
+    const readyConnectionIds = new Set([...connections.values()]
+      .filter(connection => connection.secretConfigured || engineConnectionAllowsUnauthenticatedText(connection))
+      .map(connection => connection.id))
     return engineRouteSummaryResponseSchema.parse({
       routes: resolveSettingList(opts.engineRoutes)
         // Configured gateway routes depend on a configured connection. Native
-        // and server-owned verified routes use a host-owned adapter instead,
-        // so treating their virtual `native:*` connection id as missing would
-        // incorrectly hide a healthy built-in provider.
+        // virtual routes use a host-owned adapter instead.
         .map(route => buildEngineRouteSummaryDto(route, {
           connectionAvailable: route.source === 'configured'
-            ? connectionIds.has(route.connectionId)
+            ? readyConnectionIds.has(route.connectionId)
             : undefined,
         }))
         .sort((left, right) => left.label.localeCompare(right.label) || left.id.localeCompare(right.id)),
@@ -161,8 +164,15 @@ export async function settingsRoutes(app: FastifyInstance, opts: SettingsRoutesO
     if (!opts.onEngineConnectionUpsert) {
       throw notImplemented('Engine connection configuration updates are not supported in this deployment')
     }
-    const input = engineConnectionInputSchema.parse({ ...parsed.data, id: request.params.id })
+    const parsedInput = engineConnectionInputSchema.safeParse({ ...parsed.data, id: request.params.id })
+    if (!parsedInput.success) throw validationError('Invalid engine connection configuration', { issues: parsedInput.error.issues })
+    const input = parsedInput.data
     const existing = resolveSettingList(opts.engineConnections).find(connection => connection.id === input.id)
+    // Check and synchronous upsert share one event-loop turn, including when
+    // two tabs picked the same new ID from stale settings.
+    if (existing && request.headers['if-none-match'] === '*') {
+      throw new AppError('ALREADY_EXISTS', 'This connection ID already exists. Choose a new ID or edit the existing connection.', 412)
+    }
     if (existing?.secretConfigured && input.apiKey === undefined && engineConnectionEndpointChanged(existing, input)) {
       throw validationError(
         'Changing an engine connection endpoint requires an explicit apiKey; the existing credential is not forwarded to a different endpoint.',
@@ -193,10 +203,15 @@ export async function settingsRoutes(app: FastifyInstance, opts: SettingsRoutesO
     const knownConnection = resolveSettingList(opts.engineConnections).some(connection => connection.id === input.connectionId)
     if (!knownConnection) throw validationError(`Unknown engine connection: ${input.connectionId}`)
     const existing = resolveSettingList(opts.engineRoutes).find(route => route.id === request.params.id)
-    if (existing && existing.source !== 'configured') {
-      throw validationError('Implicit and verified engine routes are server-owned and cannot be edited through settings.')
+    // Create-only callers must not overwrite a route selected by another tab.
+    // This read and the host's synchronous upsert share one event-loop turn.
+    if (existing && request.headers['if-none-match'] === '*') {
+      throw new AppError('ALREADY_EXISTS', 'This route ID already exists. Choose a new ID or edit the existing route.', 412)
     }
-    const draft = engineRouteConfigSchema.parse({
+    if (existing && existing.source !== 'configured') {
+      throw validationError('Implicit engine routes are server-owned and cannot be edited through settings.')
+    }
+    const parsedDraft = engineRouteConfigSchema.safeParse({
       id: request.params.id,
       label: input.label,
       connectionId: input.connectionId,
@@ -205,6 +220,8 @@ export async function settingsRoutes(app: FastifyInstance, opts: SettingsRoutesO
       source: 'configured',
       capabilities: { kind: 'text-only' },
     })
+    if (!parsedDraft.success) throw validationError('Invalid engine route configuration', { issues: parsedDraft.error.issues })
+    const draft = parsedDraft.data
     const route = existing
       ? { ...draft, revision: nextEngineRouteRevision(existing, draft) }
       : draft

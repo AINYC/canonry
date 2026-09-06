@@ -5,11 +5,12 @@ import os from 'node:os'
 import path from 'node:path'
 import { eq } from 'drizzle-orm'
 import { afterEach, expect, test, vi } from 'vitest'
-import { createClient, apiKeys, migrate, projects, queries, researchRunQueries, researchRuns, runs } from '@ainyc/canonry-db'
+import { createClient, apiKeys, migrate, projects, queries, researchRunQueries, researchRuns, runs, usageCounters } from '@ainyc/canonry-db'
 import { engineRouteConfigSchema, normalizeEngineConnection } from '@ainyc/canonry-contracts'
 import { loadConfig } from '../src/config.js'
 import { JobRunner } from '../src/job-runner.js'
 import { createServer } from '../src/server.js'
+import { runEngineRouteText } from '../src/engine-route-text-execution.js'
 
 const temporaryDirectories: string[] = []
 
@@ -17,6 +18,62 @@ afterEach(() => {
   vi.unstubAllEnvs()
   for (const directory of temporaryDirectories.splice(0)) {
     fs.rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('hosted routes need a credential before summary and research selection become ready', async () => {
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'canonry-route-readiness-'))
+  temporaryDirectories.push(configDir)
+  vi.stubEnv('CANONRY_CONFIG_DIR', configDir)
+  vi.stubEnv('CANONRY_TELEMETRY_DISABLED', '1')
+  const dbPath = path.join(configDir, 'test.db')
+  const db = createClient(dbPath)
+  migrate(db)
+  const apiKey = `cnry_${crypto.randomBytes(16).toString('hex')}`
+  const now = new Date().toISOString()
+  db.insert(apiKeys).values({
+    id: crypto.randomUUID(), name: 'test', keyHash: crypto.createHash('sha256').update(apiKey).digest('hex'),
+    keyPrefix: apiKey.slice(0, 9), scopes: ['*'], createdAt: now,
+  }).run()
+  db.insert(projects).values({
+    id: 'p', name: 'p', displayName: 'Alpha', canonicalDomain: 'alpha.example',
+    country: 'US', language: 'en', providers: ['openai'], createdAt: now, updatedAt: now,
+  }).run()
+  const connection = normalizeEngineConnection({
+    id: 'hosted', label: 'Hosted', preset: 'vercel-ai-gateway',
+    quota: { maxConcurrency: 1, maxRequestsPerMinute: 10, maxRequestsPerDay: 100 },
+  })
+  const route = engineRouteConfigSchema.parse({
+    id: 'route:hosted', label: 'Hosted', connectionId: connection.id,
+    modelId: 'text-model', revision: 1, source: 'configured', capabilities: { kind: 'text-only' },
+  })
+  const config = { apiUrl: 'http://localhost:4100', database: dbPath, apiKey, providers: {}, engineRoutes: { connections: [connection], routes: [route] } }
+  fs.writeFileSync(path.join(configDir, 'config.yaml'), JSON.stringify(config), 'utf8')
+  const app = await createServer({ config, db, logger: false })
+  const headers = { authorization: `Bearer ${apiKey}` }
+  const projectUpdate = { displayName: 'Alpha', canonicalDomain: 'alpha.example', country: 'US', language: 'en', providers: ['openai'], researchProvider: route.id }
+  try {
+    const summary = await app.inject({ method: 'GET', url: '/api/v1/settings/engine-routes', headers })
+    expect(summary.json().routes).toContainEqual(expect.objectContaining({ id: route.id, readiness: { state: 'unavailable', measurementReady: false } }))
+    const selection = await app.inject({ method: 'PUT', url: '/api/v1/projects/p', headers, payload: projectUpdate })
+    expect(selection.statusCode).toBe(400)
+    expect(db.select().from(projects).get()?.researchProvider).toBeNull()
+    const run = await app.inject({ method: 'POST', url: '/api/v1/projects/p/research/runs', headers, payload: { queries: ['best agencies'], provider: route.id } })
+    expect(run.statusCode).toBe(400)
+    expect(db.select().from(researchRuns).all()).toEqual([])
+
+    const configured = await app.inject({
+      method: 'PUT', url: '/api/v1/settings/engine-connections/hosted', headers,
+      payload: { label: connection.label, preset: connection.preset, quota: connection.quota, apiKey: 'configured-test-key' },
+    })
+    expect(configured.statusCode).toBe(200)
+    const ready = await app.inject({ method: 'GET', url: '/api/v1/settings/engine-routes', headers })
+    expect(ready.json().routes).toContainEqual(expect.objectContaining({ id: route.id, readiness: { state: 'text-ready', measurementReady: false } }))
+    const accepted = await app.inject({ method: 'PUT', url: '/api/v1/projects/p', headers, payload: projectUpdate })
+    expect(accepted.statusCode, accepted.body).toBe(200)
+    expect(db.select().from(projects).get()).toMatchObject({ researchProvider: route.id, providers: ['openai'] })
+  } finally {
+    await app.close()
   }
 })
 
@@ -40,7 +97,7 @@ test('server settings preserve omitted connection secrets and own dynamic route 
   }).run()
 
   const connection = normalizeEngineConnection({
-    id: 'gateway-one', label: 'Gateway one', preset: 'openrouter', apiKey: 'persist-me',
+    id: 'gateway-one', label: 'Gateway one', preset: 'custom-openai-compatible', baseUrl: 'https://gateway-one.example/v1', apiKey: 'persist-me',
     quota: { maxConcurrency: 2, maxRequestsPerMinute: 20, maxRequestsPerDay: 100 },
   })
   const config = {
@@ -66,7 +123,7 @@ test('server settings preserve omitted connection secrets and own dynamic route 
       headers: { authorization: `Bearer ${apiKey}` },
       payload: {
         label: 'Gateway one updated',
-        preset: 'openrouter',
+        preset: 'custom-openai-compatible', baseUrl: 'https://gateway-one.example/v1',
         quota: { maxConcurrency: 1, maxRequestsPerMinute: 10, maxRequestsPerDay: 50 },
       },
     })
@@ -74,6 +131,13 @@ test('server settings preserve omitted connection secrets and own dynamic route 
     expect(connectionUpdate.body).not.toContain('persist-me')
     expect(config.engineRoutes.connections[0]?.apiKey).toBe('persist-me')
     expect(loadConfig().engineRoutes?.connections?.[0]?.apiKey).toBe('persist-me')
+    const now = new Date().toISOString()
+    db.insert(usageCounters).values({ id: crypto.randomUUID(), scope: 'connection:gateway-one', period: now.slice(0, 10), metric: 'queries', count: 50, updatedAt: now }).run()
+    const dispatch = vi.fn(async () => 'must not dispatch')
+    // Even an adapter captured before this settings write sees the new cap,
+    // including a connection that has no configured route yet.
+    await expect(runEngineRouteText(connection, dispatch, { db })).rejects.toThrow('limit is 50')
+    expect(dispatch).not.toHaveBeenCalled()
 
     const createRoute = await app.inject({
       method: 'PUT',
@@ -116,7 +180,7 @@ test('server settings preserve omitted connection secrets and own dynamic route 
     expect(rejectedEndpointUpdate.statusCode).toBe(400)
     expect(rejectedEndpointUpdate.json().error.message).toMatch(/explicit apiKey/i)
     expect(config.engineRoutes.connections[0]).toMatchObject({
-      baseUrl: 'https://openrouter.ai/api/v1', apiKey: 'persist-me',
+      baseUrl: 'https://gateway-one.example/v1', apiKey: 'persist-me',
     })
 
     const endpointUpdate = await app.inject({
@@ -159,6 +223,99 @@ test('server settings preserve omitted connection secrets and own dynamic route 
       }),
     ]))
   } finally {
+    await app.close()
+  }
+})
+
+test('generic text routes and forged measurement config stay excluded from visibility sweeps', async () => {
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'canonry-text-route-'))
+  temporaryDirectories.push(configDir)
+  vi.stubEnv('CANONRY_CONFIG_DIR', configDir)
+  vi.stubEnv('CANONRY_TELEMETRY_DISABLED', '1')
+
+  const dbPath = path.join(configDir, 'test.db')
+  const db = createClient(dbPath)
+  migrate(db)
+  const apiKey = `cnry_${crypto.randomBytes(16).toString('hex')}`
+  db.insert(apiKeys).values({
+    id: crypto.randomUUID(), name: 'test', keyHash: crypto.createHash('sha256').update(apiKey).digest('hex'),
+    keyPrefix: apiKey.slice(0, 9), scopes: ['*'], createdAt: new Date().toISOString(),
+  }).run()
+  const connection = normalizeEngineConnection({
+    id: 'gateway-main', label: 'Gateway', preset: 'custom-openai-compatible',
+    baseUrl: 'https://gateway.example/v1', apiKey: 'gateway-secret',
+    quota: { maxConcurrency: 1, maxRequestsPerMinute: 10, maxRequestsPerDay: 100 },
+  })
+  const route = engineRouteConfigSchema.parse({
+    id: 'route:gateway-text', label: 'Gateway text', connectionId: connection.id,
+    modelId: 'test-model', revision: 1, source: 'configured', capabilities: { kind: 'text-only' },
+  })
+  const forgedRoute = engineRouteConfigSchema.parse({
+    ...route, id: 'route:forged', source: 'implicit-native',
+    capabilities: {
+      kind: 'verified-measurement', retrieval: true, citations: true,
+      location: true, servedModel: true, fallback: 'disabled',
+    },
+  })
+  const now = new Date().toISOString()
+  db.insert(projects).values({
+    id: 'text-project', name: 'text-project', displayName: 'Text project', canonicalDomain: 'example.com',
+    country: 'US', language: 'en', providers: [], createdAt: now, updatedAt: now,
+  }).run()
+  db.insert(queries).values({
+    id: 'text-query', projectId: 'text-project', query: 'Who sells widgets?', createdAt: now,
+  }).run()
+  const config = {
+    apiUrl: 'http://localhost:4100', database: dbPath, apiKey, providers: {},
+    engineRoutes: { connections: [connection], routes: [forgedRoute] },
+  }
+  fs.writeFileSync(path.join(configDir, 'config.yaml'), JSON.stringify(config), 'utf8')
+  const executeRun = vi.spyOn(JobRunner.prototype, 'executeRun').mockResolvedValue(undefined)
+  const app = await createServer({ config, db, logger: false })
+  await app.ready()
+  try {
+    const createdRoute = await app.inject({
+      method: 'PUT', url: `/api/v1/settings/engine-routes/${route.id}`, headers: { authorization: `Bearer ${apiKey}` },
+      payload: { label: route.label, connectionId: route.connectionId, modelId: route.modelId },
+    })
+    expect(createdRoute.statusCode).toBe(200)
+    expect(createdRoute.json()).toMatchObject({
+      id: route.id, revision: 1, source: 'configured', capabilities: { kind: 'text-only' },
+    })
+
+    const summary = await app.inject({
+      method: 'GET', url: '/api/v1/settings/engine-routes', headers: { authorization: `Bearer ${apiKey}` },
+    })
+    expect(summary.statusCode).toBe(200)
+    expect(summary.json().routes).toContainEqual(expect.objectContaining({
+      id: route.id, source: 'configured', readiness: { state: 'text-ready', measurementReady: false },
+    }))
+    expect(summary.json().routes).not.toContainEqual(expect.objectContaining({ id: forgedRoute.id }))
+
+    const fullSettings = await app.inject({
+      method: 'GET', url: '/api/v1/settings', headers: { authorization: `Bearer ${apiKey}` },
+    })
+    expect(fullSettings.statusCode).toBe(200)
+    expect(fullSettings.json().engineRoutes).not.toContainEqual(expect.objectContaining({ id: forgedRoute.id }))
+
+    const selected = await app.inject({
+      method: 'PUT', url: '/api/v1/projects/text-project', headers: { authorization: `Bearer ${apiKey}` },
+      payload: {
+        displayName: 'Text project', canonicalDomain: 'example.com',
+        country: 'US', language: 'en', providers: [route.id],
+      },
+    })
+    expect(selected.statusCode).toBe(400)
+
+    const queued = await app.inject({
+      method: 'POST', url: '/api/v1/projects/text-project/runs', headers: { authorization: `Bearer ${apiKey}` },
+      payload: { providers: [route.id] },
+    })
+    expect(queued.statusCode).toBe(400)
+    expect(db.select().from(runs).all()).toEqual([])
+    expect(executeRun).not.toHaveBeenCalled()
+  } finally {
+    executeRun.mockRestore()
     await app.close()
   }
 })

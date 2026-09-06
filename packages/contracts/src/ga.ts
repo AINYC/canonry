@@ -123,7 +123,7 @@ export const ga4TrafficSummaryDtoSchema = z.object({
   })),
   aiReferrals: z.array(ga4AiReferralDtoSchema),
   aiReferralLandingPages: z.array(ga4AiReferralLandingPageDtoSchema),
-  /** Deduped AI session total: MAX(sessions) per date+source+medium across attribution dimensions, then summed. Cross-cutting: can overlap with Direct/Organic/Social via firstUserSource. */
+  /** Deduped AI session total: MAX(sessions) per date+source across attribution dimensions, then summed. Cross-cutting: can overlap with Direct/Organic/Social via firstUserSource. */
   aiSessionsDeduped: z.number(),
   /** @deprecated See `GA4AiReferralDto.users`. Never emitted since 4.135.0. */
   aiUsersDeduped: z.number().optional(),
@@ -151,7 +151,12 @@ export const ga4TrafficSummaryDtoSchema = z.object({
   /** Total social sessions (session-scoped, no cross-dimension dedup needed). */
   socialSessions: z.number(),
   /** Total social users (session-scoped, no cross-dimension dedup needed). */
-  socialUsers: z.number(),
+  /**
+   * @deprecated Never emitted. ga_social_referrals stores users as GA's
+   * COUNT DISTINCT at (date, source, medium, channel group), so summing it
+   * across the window counts a returning visitor once per day.
+   */
+  socialUsers: z.number().optional(),
   /** Five disjoint buckets used for the channel breakdown. Known AI session-source matches are removed from their native GA4 bucket before shares are computed. */
   channelBreakdown: ga4ChannelBreakdownDtoSchema,
   /** Organic sessions as a percentage of total sessions (0–100, rounded). */
@@ -330,7 +335,7 @@ export interface GaTrafficResponse {
   aiReferrals: Array<{ source: string; medium: string; trafficClass: AiReferralTrafficClass; sessions: number; users?: number; sourceDimension: GA4SourceDimension }>
   /** Deduped to the winning attribution dimension (highest sessions) per (source, medium, landingPage). `users` is deprecated — see `GA4AiReferralDto.users`; never emitted since 4.135.0. */
   aiReferralLandingPages: Array<{ source: string; medium: string; trafficClass: AiReferralTrafficClass; sourceDimension: GA4SourceDimension; landingPage: string; sessions: number; users?: number }>
-  /** Deduped AI session total: MAX(sessions) per date+source+medium across attribution dimensions, then summed. Cross-cutting: can overlap with Direct/Organic/Social via firstUserSource. */
+  /** Deduped AI session total: MAX(sessions) per date+source across attribution dimensions, then summed. Cross-cutting: can overlap with Direct/Organic/Social via firstUserSource. */
   aiSessionsDeduped: number
   /** @deprecated See `GA4AiReferralDto.users`. Never emitted since 4.135.0. */
   aiUsersDeduped?: number
@@ -354,11 +359,16 @@ export interface GaTrafficResponse {
   organicAiSessionsBySession: number
   /** @deprecated See `GA4AiReferralDto.users`. Never emitted since 4.135.0. */
   organicAiUsersBySession?: number
-  socialReferrals: Array<{ source: string; medium: string; sessions: number; users: number; channelGroup: string }>
+  socialReferrals: Array<{ source: string; medium: string; sessions: number; users?: number; channelGroup: string }>
   /** Total social sessions (session-scoped via sessionDefaultChannelGroup). */
   socialSessions: number
-  /** Total social users (session-scoped via sessionDefaultChannelGroup). */
-  socialUsers: number
+  /**
+   * @deprecated Never emitted. ga_social_referrals stores users as GA's COUNT
+   * DISTINCT at (date, source, medium, channel group), so summing it across a
+   * window counts a returning visitor once per day. Same reasoning that
+   * withdrew `GA4AiReferralDto.users` in 4.135.0.
+   */
+  socialUsers?: number
   /** Five disjoint buckets used for the channel breakdown. Known AI session-source matches are removed from their native GA4 bucket before shares are computed. */
   channelBreakdown: {
     organic: GA4ChannelBucketDto

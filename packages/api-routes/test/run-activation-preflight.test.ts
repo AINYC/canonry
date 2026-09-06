@@ -85,6 +85,39 @@ afterEach(async () => {
 })
 
 describe('answer-visibility activation preflight', () => {
+  it('does not treat a configured text route as a runnable measurement provider', async () => {
+    const route = 'route:custom-gateway'
+    const harness = await buildHarness([route])
+    await createProject(harness, 'text-route-only')
+    await addQueries(harness, 'text-route-only')
+
+    const rejected = await harness.app.inject({ method: 'POST', url: '/api/v1/projects/text-route-only/runs', payload: {} })
+    expect(rejected.statusCode).toBe(503)
+    expect(harness.db.select().from(runs).all()).toEqual([])
+
+    harness.db.update(projects).set({ providers: [route] }).run()
+    const stillRejected = await harness.app.inject({ method: 'POST', url: '/api/v1/projects/text-route-only/runs', payload: {} })
+    expect(stillRejected.statusCode).toBe(503)
+    expect(harness.db.select().from(runs).all()).toEqual([])
+  })
+
+  it('rejects a configured text route explicitly requested by runs and schedules', async () => {
+    const harness = await buildHarness(['gemini'])
+    await createProject(harness, 'text-route-request')
+    await addQueries(harness, 'text-route-request')
+    const route = 'route:custom-gateway'
+    harness.setRunnableProviders(['gemini', route])
+    const schedule = await harness.app.inject({
+      method: 'PUT', url: '/api/v1/projects/text-route-request/schedule', payload: { preset: 'daily', providers: [route] },
+    })
+    expect(schedule.statusCode).toBe(400)
+    const run = await harness.app.inject({
+      method: 'POST', url: '/api/v1/projects/text-route-request/runs', payload: { providers: [route] },
+    })
+    expect(run.statusCode).toBe(400)
+    expect(harness.db.select().from(runs).all()).toEqual([])
+  })
+
   it('rejects a normal run with NO_QUERIES before inserting a run', async () => {
     const harness = await buildHarness()
     await createProject(harness, 'empty-basket')

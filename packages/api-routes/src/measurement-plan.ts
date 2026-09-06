@@ -5,6 +5,7 @@ import {
   canonicalMeasurementPlanJson,
   compileMeasurementPlan,
   compileMeasurementPlanPreview,
+  defaultSweepProviderNames,
   effectiveBrandNames,
   MeasurementPlanValidationError,
   measurementPlanCounts,
@@ -117,10 +118,11 @@ function compileContextForProject(
   const defaultContext = project.defaultLocation
     ? project.locations.find(location => location.label === project.defaultLocation) ?? null
     : null
-  const projectProviders = normalizedProviderNames(project.providers)
-  const selectedProviders = projectProviders.length > 0
+  const projectProviderSelection = normalizedProviderNames(project.providers)
+  const projectProviders = normalizedProviderNames(defaultSweepProviderNames(projectProviderSelection))
+  const selectedProviders = projectProviderSelection.length > 0
     ? projectProviders
-    : normalizedProviderNames(opts.getRunnableProviderNames?.() ?? [])
+    : normalizedProviderNames(defaultSweepProviderNames(opts.getRunnableProviderNames?.() ?? []))
 
   return {
     canonicalDomain: project.canonicalDomain,
