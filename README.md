@@ -1,70 +1,33 @@
 # Canonry <img src="https://raw.githubusercontent.com/Canonry/canonry/main/apps/web/public/favicon-32.png" alt="Canonry canary icon" width="24" />
 
-[![npm version](https://img.shields.io/npm/v/@canonry/canonry)](https://www.npmjs.com/package/@canonry/canonry) [![Node.js >= 22.14](https://img.shields.io/badge/node-%3E%3D22.14-brightgreen)](https://nodejs.org)
+[![npm version](https://img.shields.io/npm/v/@canonry/canonry)](https://www.npmjs.com/package/@canonry/canonry)
 
 **Give your agent the evidence, tools, and skills to run AEO.**
 
-Canonry is an **agent-first, open-source AEO operating platform.**
+Canonry is an **agent-first, open-source AEO operating platform.** Track AI visibility over time, investigate changes across search and traffic, and measure progress after your agent acts.
+
+**Self-hosted, with your own provider keys.** Your dashboard and agent review the same project evidence.
+
+[Quick start](#quick-start) · [Evidence](#explore-the-evidence) · [Actions](#act-on-the-evidence) · [Integrations](#integrations) · [Docs](#documentation)
 
 <p align="center">
   <a href="https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/measure-act.svg">
-    <img src="https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/measure-act.svg" alt="Supported external sources feed Canonry. Canonry stores project evidence in SQLite for your agent, dashboard, and client reports. Your agent combines its own execution tools with Canonry's WordPress and indexing workflows. Webhooks connect Discord and other systems." width="94%" />
+    <img src="https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/measure-act.svg" alt="AI, search, analytics, and traffic sources feed Canonry on schedules or on demand. Historical evidence runs from baseline through the latest checks. Your agent reads evidence and sends commands to Canonry tools, while using its own tools for code and content. Canonry publishes to WordPress, submits to Google and Bing, and supplies the dashboard, reports, and webhooks. Site changes loop back into measurement." width="100%" />
   </a>
 </p>
 
-Connect the sources you use. Schedule syncs and checks, or run them on demand.
-
-**Connect your agent:** [Agent Plugin](docs/plugins.md) · [MCP](docs/mcp.md) · CLI · REST API
-
-- **Track AI visibility:** Brand mentions and citations across answer engines.
-- **Compare competitors:** Citation gaps and the domains and pages getting cited.
-- **Measure complex portfolios:** Properties and market groups, with questions, engines, models, and locations tailored per property.
-- **Investigate what changed:** Combine search and local performance, server-side crawler visits, AI page fetches, referrals, conversion evidence, and technical audits.
-- **Improve your site:** Your agent uses its own coding tools alongside Canonry's content, WordPress publishing, schema, and indexing workflows.
-- **Report and follow up:** Generate client reports, schedule data syncs and checks, and send alerts to Discord or your own systems.
-
-**Self-hosted, with your own provider keys.** Use the dashboard to review the same evidence and recommendations as your agent.
-
-`npm install -g @canonry/canonry`
-
-**Give your agent a job:**
-
-> Review what changed across search, local visibility, AI citations, and server-side traffic. Find where competitors get cited and we don't. Use that evidence and the site audit to propose the next changes. Prepare a pull request or WordPress draft for review, then report the results and next steps to the client.
-
-Your agent coordinates the work through Canonry and its own tools. After changes ship, rerun the relevant checks to measure progress.
-
-### Compare competitors and measure complex portfolios
-
-- **Competitor comparisons:** Compare brand mentions and citations across tracked questions and answer engines. Find questions where competitors are cited and your site is absent.
-- **Who gets cited:** [Rank cited domains](skills/canonry/references/canonry-cli.md#cited-source-rankings-cnry-sources) and inspect exact URLs, including your pages, competitors, aggregators, and publishers.
-- **Advanced Measurement:** Build [versioned measurement plans](docs/mcp.md#tool-surface) for portfolios of locations, products, or site sections. Assign questions, engines, models, and locations per property, separate branded and non-brand coverage, and organize overlapping market groups with their own competitors. Compare results across properties, groups, answer engines, and locations, then drill down to exact answers and cited sources.
-
-### Built-in integrations and workflows
-
-- **Answer engines:** Canonry measures Gemini, ChatGPT, Claude, Perplexity, and OpenAI-compatible local models.
-- **Agent workflows:** Use the [MCP adapter](docs/mcp.md), [Agent Plugin](docs/plugins.md), [external webhooks](skills/canonry/references/canonry-cli.md#agent), or built-in [Aero](skills/aero/SKILL.md).
-- **Search and analytics:** Connect [Google Search Console](docs/google-search-console-setup.md), [Google Analytics 4](docs/google-analytics-setup.md), and [Bing Webmaster Tools](docs/bing-webmaster-setup.md).
-- **Server traffic:** Inspect recorded crawler visits, AI page fetches, and referral arrivals from [Cloudflare, Cloud Run, Vercel, and WordPress](skills/canonry/references/server-side-traffic.md).
-- **Backlinks:** Query [Common Crawl hyperlink releases](skills/canonry/references/canonry-cli.md#backlinks-common-crawl) locally with DuckDB, and sync new releases on a schedule.
-- **Conversion measurement:** Audit [Google Ads and Google Tag Manager](docs/google-marketing.md) with read-only snapshots and declared conversion contracts.
-- **Local presence:** Connect [Google Business Profile](skills/canonry/references/google-business-profile.md) for search terms, performance, lodging data, and booking actions.
-- **Publishing and indexing:** Publish through [WordPress](docs/wordpress-setup.md), generate JSON-LD, and [submit sitemaps or URLs for indexing](skills/canonry/references/indexing.md).
-- **Client reporting:** Generate [client-ready HTML reports or JSON evidence](skills/canonry/references/canonry-cli.md#reports), use the report API/MCP tools, or build your own reporting pipeline.
-- **Schedules and alerts:** Configure [data syncs and checks](skills/canonry/references/canonry-cli.md#scheduling--notifications) independently; send webhook alerts to Discord, Slack, or your own systems.
-- **ChatGPT Ads:** Use the [ads tools](docs/mcp.md#tool-surface) to measure campaigns, create and update paused campaign trees, activate approved trees, and reconcile operation receipts.
-
-The dashboard, CLI, and agent tools share the same project API.
+## Quick start
 
 <a id="or-use-any-shell-capable-coding-agent"></a>
 
-## Start with your agent
+### Start with your agent
 
-Connect the [Agent Plugin](docs/plugins.md) or [MCP adapter](docs/mcp.md) to your agent, or use built-in [Aero](skills/aero/SKILL.md). For any shell-capable agent, copy the setup request below.
+Connect the [Agent Plugin](docs/plugins.md) or [MCP adapter](docs/mcp.md) to your agent. When enabled, built-in [Aero](skills/aero/SKILL.md) reviews evidence and wakes after completed runs.
+
+For a new installation, give your agent this setup request:
 
 <details>
-<summary>Copy the Site Health-first setup request</summary>
-
-<br />
+<summary>Copy the first-time setup request</summary>
 
 ```text
 Help me set up Canonry for my public site.
@@ -87,11 +50,9 @@ If a Canonry installation or connected plugin/MCP is available, use it. Do not c
 
 </details>
 
-## Get a Page Health baseline
+<a id="get-a-page-health-baseline"></a>
 
-![Canonry Site Map graph](https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/dashboard.png)
-
-*Map crawlable pages and the internal links connecting them.*
+### Start locally
 
 1. Install Canonry.
 
@@ -99,15 +60,11 @@ If a Canonry installation or connected plugin/MCP is available, use it. Do not c
    npm install -g @canonry/canonry
    ```
 
-2. Create the local configuration, SQLite database, and full-instance API key.
+2. Initialize Canonry.
 
    ```bash
    cnry bootstrap
    ```
-
-   Canonry stores `config.yaml` and `data.db` in `~/.canonry` by default. Set
-   `CANONRY_CONFIG_DIR` before `bootstrap`, `serve`, and later CLI commands to
-   keep an install in another private directory; use the same value every time.
 
 3. Start Canonry.
 
@@ -115,27 +72,41 @@ If a Canonry installation or connected plugin/MCP is available, use it. Do not c
    cnry serve
    ```
 
-4. Open [http://127.0.0.1:4100/setup](http://127.0.0.1:4100/setup). If prompted, create a dashboard password.
+4. Open [http://127.0.0.1:4100/setup](http://127.0.0.1:4100/setup) and follow the setup to scan your site.
 
-5. Enter your domain and approve the public-site crawl. This crawl creates a persisted Page Health baseline. AI Visibility is optional.
+The crawl saves a Page Health baseline. AI Visibility is optional and has a separate setup.
 
-6. To use the terminal instead, keep `cnry serve` running. Open a second terminal and run:
+<details>
+<summary>Scan and read results from the terminal</summary>
 
-   ```bash
-   cnry project create my-site --domain example.com --country US --language en
-   cnry technical-aeo run my-site --max-pages 100 --wait --format json
-   ```
+Keep `cnry serve` active. In a second terminal, create a project and start a bounded scan:
 
-7. Read the run ID and status from the output. If the status is `completed` or `partial`, read evidence from that run:
+```bash
+cnry project create my-site --domain example.com --country US --language en
+cnry technical-aeo run my-site --max-pages 100 --wait --format json
+```
 
-   ```bash
-   cnry technical-aeo score my-site --run-id <run-id> --format json
-   cnry technical-aeo pages my-site --run-id <run-id> --sort score-asc --limit 10 --format jsonl
-   ```
+Read the run ID and status from the output. If the status is `completed` or `partial`, read evidence from that run:
 
-   `--wait` polls for up to 15 minutes. If the scan remains active, use the progress command below. If it fails or is cancelled, inspect it with `cnry run show <run-id> --format json`.
+```bash
+cnry technical-aeo score my-site --run-id <run-id> --format json
+cnry technical-aeo pages my-site --run-id <run-id> --sort score-asc --limit 10 --format jsonl
+```
 
-## Add AI Visibility when you need it
+`--wait` polls for up to 15 minutes. If the scan remains active, use `cnry technical-aeo progress <project> --run-id <id> --format json`.
+If the scan fails or is cancelled, read the error with `cnry run show <run-id> --format json`.
+
+</details>
+
+## Explore the evidence
+
+Your agent and dashboard use the same project API. The dashboard makes trends, exact answers, and site findings available for human review.
+
+<a id="add-ai-visibility-when-you-need-it"></a>
+
+### AI visibility
+
+Track brand mentions and citations over time, by query and answer engine. Find answers that cite competitors but omit your site.
 
 ![Canonry AI Visibility mention share trend across answer engines](https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/ai-visibility-trend.png)
 
@@ -143,7 +114,13 @@ If a Canonry installation or connected plugin/MCP is available, use it. Do not c
 
 ![Canonry AI Visibility citation map across queries and answer engines](https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/ai-visibility-diagnostics.png)
 
-*Map citation and answer-mention coverage across every tracked query and engine.*
+The citation map shows mention and citation coverage across queries and engines.
+[Rank cited domains and pages](skills/canonry/references/canonry-cli.md#cited-source-rankings-cnry-sources), then inspect the exact answers and URLs behind each result.
+
+<details>
+<summary>Configure a provider and run visibility checks</summary>
+
+For an existing project, configure a provider with your own key.
 
 | Provider | Key source | Environment variable |
 |---|---|---|
@@ -153,7 +130,7 @@ If a Canonry installation or connected plugin/MCP is available, use it. Do not c
 | Perplexity | [Perplexity settings](https://www.perplexity.ai/settings/api) | `PERPLEXITY_API_KEY` |
 | Local model | Any OpenAI-compatible endpoint | `LOCAL_BASE_URL` |
 
-Then add the queries that matter and run a measured sweep:
+Add the queries that matter to your project:
 
 ```bash
 cnry query add my-site "your first query" "your second query"
@@ -161,7 +138,12 @@ cnry run my-site --wait
 cnry visibility-stats my-site --by-provider
 ```
 
-### Why we use model providers' APIs directly (not a router)
+</details>
+
+<a id="why-we-use-model-providers-apis-directly-not-a-router"></a>
+
+<details>
+<summary>Why Canonry uses direct provider APIs</summary>
 
 Canonry uses direct provider APIs to capture answers, citations, and available
 search details that model routers can omit. This richer data helps us measure
@@ -169,45 +151,100 @@ brand mentions and website citations accurately and explain changes in your
 visibility.
 [Read more about accuracy and why we chose models and direct provider API adapters individually](docs/providers/model-selection.md).
 
-## Technical surface
+</details>
 
-| Surface | Use it for |
+<details>
+<summary>Discover questions or run one-off research</summary>
+
+**Expand your tracked questions.** Run `cnry discover run <project> --icp "..."`. This does not change the tracked questions.
+Preview a completed session with `cnry discover promote preview <project> <session-id>`. Promote only after approval.
+
+**Research without changing tracking.** Run `cnry research run <project> "query one" "query two" --wait`.
+Research saves the answers without adding queries to the tracked questions.
+
+</details>
+
+<a id="compare-competitors-and-measure-complex-portfolios"></a>
+
+### Portfolios and competitors
+
+Use [versioned measurement plans](docs/mcp.md#tool-surface) for portfolios of locations, products, or site sections.
+
+- **Properties:** Assign queries, engines, models, and locations to each property. Keep branded and non-brand coverage separate.
+- **Market groups:** Organize overlapping sets of properties, each with its own competitors.
+- **Comparisons:** Compare properties, groups, engines, and locations. Open the exact answers and cited URLs behind each result.
+
+### Search, traffic, and site health
+
+Investigate visibility changes with evidence from search and local performance, crawler visits, AI page fetches, referrals, and conversions.
+Site audits show technical findings alongside that evidence.
+
+![Canonry Site Map graph](https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/dashboard.png)
+
+*Map crawlable pages and the internal links that connect them.*
+
+## Act on the evidence
+
+Your agent coordinates the work through Canonry and its own tools.
+
+- **Improve the site:** Combine your agent's coding tools with Canonry's content, [WordPress publishing](docs/wordpress-setup.md), JSON-LD, and [indexing workflows](skills/canonry/references/indexing.md).
+- **Measure after changes:** Configure [independent schedules](skills/canonry/references/canonry-cli.md#scheduling--notifications) for data syncs and checks. Compare new results with earlier evidence.
+- **Report and follow up:** Generate [HTML reports or JSON evidence](skills/canonry/references/canonry-cli.md#reports). Send [webhook alerts](skills/canonry/references/canonry-cli.md#agent) to Discord, Slack, or your systems.
+
+**An example job for your connected agent:**
+
+> Find where competitors get cited and we don't. Use search data and the site audit to prepare a pull request or WordPress draft for review. After it ships, rerun checks and report what changed.
+
+<a id="built-in-integrations-and-workflows"></a>
+
+## Integrations
+
+Connect the sources you use. Each integration adds evidence or tools to the same project workflow.
+
+| Area | Supported integrations |
 |---|---|
-| **CLI and REST API** | Script project measurements, diagnoses, actions, reports, and schedules. OpenAPI is available at `GET /api/v1/openapi.json`. |
-| **MCP and Agent Plugin** | Give Codex, Claude, Cursor, or a custom agent a typed, task-shaped tool surface. |
-| **Aero** | When enabled and configured, use the built-in analyst that reviews evidence and wakes after completed runs. |
-| **Dashboard** | Review recommendations, inspect evidence, and observe the same project record used by agents. |
+| **AI answers** | ChatGPT · Claude · Gemini · Perplexity · OpenAI-compatible local models |
+| **Search and local** | [Google Search Console](docs/google-search-console-setup.md) · [Bing Webmaster Tools](docs/bing-webmaster-setup.md) · [Google Business Profile](skills/canonry/references/google-business-profile.md) |
+| **Analytics** | [Google Analytics 4](docs/google-analytics-setup.md) |
+| **Conversion measurement** | [Google Ads + Google Tag Manager](docs/google-marketing.md): read-only snapshots and declared conversion contracts |
+| **Server traffic** | [Cloudflare · Vercel · Cloud Run · WordPress](skills/canonry/references/server-side-traffic.md) |
+| **Backlinks** | [Common Crawl](skills/canonry/references/canonry-cli.md#backlinks-common-crawl) hyperlink releases, queried locally with DuckDB |
+| **Publishing and indexing** | [WordPress](docs/wordpress-setup.md) · JSON-LD · [sitemap and URL submissions](skills/canonry/references/indexing.md) |
+| **ChatGPT Ads** | [Campaign measurement, paused campaign editing, approved activation, and operation reconciliation](docs/mcp.md#tool-surface) |
 
-## Deployment and trust boundary
+<a id="deployment-and-trust-boundary"></a>
+<a id="technical-surface"></a>
 
-Canonry is self-hosted and single-tenant. Run one instance for one operator or team, and isolate unrelated teams on separate instances.
+## Self-hosting and API
+
+Canonry is single-tenant. Run one instance for one operator or team. Keep unrelated teams on separate instances.
+
+The CLI and REST API are the primary interfaces. They expose measurements, diagnoses, actions, reports, and schedules.
+OpenAPI is available at `GET /api/v1/openapi.json`.
 
 See the [deployment guide](docs/deployment.md) for reverse proxies, daemon mode, Docker, systemd, and Tailscale.
 
-## If you get stuck
-
-| Problem | Fix |
-|---|---|
-| Site scan is still running | Read exact counters with `cnry technical-aeo progress <project> --run-id <id> --format json`. |
-| Site scan failed | Read the error with `cnry run show <run-id> --format json`. Read the last phase and counters with the progress command above. |
-| No visibility results | Inspect existing work with `cnry runs <project> --format json`, then `cnry run show <run-id> --format json`. This does not start another paid run. |
-| Need more query candidates | Run `cnry discover run <project> --icp "..."`. This does not change the basket. Preview a completed session with `cnry discover promote preview <project> <session-id>`. Promote only after approval. |
-| Need one-off research | Run `cnry research run <project> "query one" "query two" --wait`. Research does not change the tracked basket. |
-| `npm install` fails on `node-gyp` | Install build tools for `better-sqlite3` ([guide](https://github.com/WiseLibs/better-sqlite3/blob/master/docs/troubleshooting.md)). |
-
 ## Documentation
 
-| | |
+- **Operate Canonry:** [CLI reference](skills/canonry/references/canonry-cli.md) · [Agent Plugin](docs/plugins.md) · [MCP](docs/mcp.md)
+- **Use built-in Aero:** [Setup and analysis workflows](skills/aero/SKILL.md)
+- **Understand the system:** [Architecture](docs/architecture.md) · [Data model](docs/data-model.md)
+- **Install standalone agent skills:** `cnry skills install` ([guide](skills/canonry/SKILL.md))
+- **Browse all guides:** [Documentation index](docs/README.md)
+
+<a id="if-you-get-stuck"></a>
+
+<details>
+<summary>Troubleshoot installation, scans, and visibility results</summary>
+
+| Problem | Next step |
 |---|---|
-| **Architecture & data model** | [docs/architecture.md](docs/architecture.md) · [docs/data-model.md](docs/data-model.md) |
-| **Aero — built-in agent** | [skills/aero/SKILL.md](skills/aero/SKILL.md) |
-| **Agent Plugin — portable core + Codex / Claude adapters** | [docs/plugins.md](docs/plugins.md) |
-| **MCP — Claude Desktop / Cursor / Codex** | [docs/mcp.md](docs/mcp.md) |
-| **Integrations** | [GSC](docs/google-search-console-setup.md) · [GA4](docs/google-analytics-setup.md) · [Google Ads + GTM](docs/google-marketing.md) · [Bing](docs/bing-webmaster-setup.md) · [Google Business Profile](skills/canonry/references/google-business-profile.md) · [WordPress](docs/wordpress-setup.md) · [Server-side traffic (Cloudflare direct push or Queue pull, Cloud Run, Vercel, WordPress)](skills/canonry/references/server-side-traffic.md) |
-| **Deployment** — reverse proxies, Docker, systemd, Tailscale | [docs/deployment.md](docs/deployment.md) |
-| **API** | `GET /api/v1/openapi.json` |
-| **Standalone skills bundle** for Claude Code / Codex | `cnry skills install` ([details](skills/canonry/SKILL.md)) |
-| **All docs** | [docs/README.md](docs/README.md) |
+| Site scan is still active | Read exact counters with `cnry technical-aeo progress <project> --run-id <id> --format json`. |
+| Site scan failed | Read the error with `cnry run show <run-id> --format json`. Read the last phase and counters with the progress command. |
+| No visibility results | Inspect existing work with `cnry runs <project> --format json`, then `cnry run show <run-id> --format json`. This does not start another paid run. |
+| `npm install` fails on `node-gyp` | Install build tools for `better-sqlite3` ([guide](https://github.com/WiseLibs/better-sqlite3/blob/master/docs/troubleshooting.md)). |
+
+</details>
 
 ## Contributing
 
