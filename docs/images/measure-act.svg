@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="988" viewBox="0 0 1080 988" role="img" aria-labelledby="title description">
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1008" viewBox="0 0 1080 1008" role="img" aria-labelledby="title description">
   <title id="title">Canonry: evidence in, actions out</title>
-  <desc id="description">Named external sources feed Canonry from above: ChatGPT, Claude, Gemini, Perplexity, Google Search Console, Google Analytics 4, Bing Webmaster Tools, Cloudflare, Vercel, Cloud Run, WordPress, and your website. Canonry measures citations, competitors, portfolios, server traffic, and site health. Evidence flows left to your agent and dashboard UI. Your agent sends commands right through Canonry tools to publish in WordPress, submit to Google and Bing, and prepare paused ChatGPT Ads. Webhooks deliver events to your systems. Canonry is open source and self-hosted.</desc>
+  <desc id="description">Named external sources feed Canonry from above: ChatGPT, Claude, Gemini, Perplexity, Google Search Console, Google Analytics 4, Bing Webmaster Tools, Cloudflare, Vercel, Cloud Run, WordPress, and your website. Canonry measures citations, competitors, portfolios, server traffic, and site health. Evidence flows left to your coding agent and dashboard UI. Your agent executes code, content, schema, and technical fixes directly in your site using its own tools. It also commands Canonry integrations to submit to Google and Bing and prepare paused ChatGPT Ads. Webhooks deliver events to your systems. Canonry is open source and self-hosted.</desc>
   <!-- Palette and typography match the default dark dashboard in apps/web/src/styles.css. -->
   <metadata id="embedded-font-license">
 Embedded, unmodified Geist and Geist Mono fonts.
@@ -113,7 +113,7 @@ text { font-feature-settings: "cv11", "ss01", "ss03"; }
       <path d="M0 0 10 5 0 10Z" fill="#60a5fa" />
     </marker>
   </defs>
-  <rect width="1080" height="988" fill="#09090b" />
+  <rect width="1080" height="1008" fill="#09090b" />
   <g font-family="'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif" fill="#f4f4f5">
     <!-- Named examples, not an exhaustive integration inventory. All sources are external. -->
     <text x="32" y="42" font-size="18" font-family="'Geist Mono', monospace" fill="#a1a1aa" letter-spacing="1.2">EXTERNAL SOURCES</text>
@@ -154,48 +154,54 @@ text { font-feature-settings: "cv11", "ss01", "ss03"; }
       <path d="m0 5-6 7 6 7m18-14 6 7-6 7m-6-18-6 22" />
     </g>
 
-    <!-- The user's agent is the operator; both clients read the same project evidence. -->
-    <rect x="32" y="472" width="220" height="244" rx="12" fill="#18181b" stroke="#3f3f46" stroke-width="1.5" />
-    <text x="60" y="530" font-size="28" font-weight="600" letter-spacing="-0.4">Your agent</text>
-    <text x="60" y="578" font-size="21" fill="#a1a1aa">Agent Plugin</text>
-    <text x="60" y="616" font-size="20" fill="#a1a1aa">MCP · CLI · API</text>
-    <g transform="translate(60 650)" fill="none" stroke="#71717a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <path d="m0 0 8 7-8 7m15 0h12" />
+    <!-- The user's coding agent executes site changes with its own tools. -->
+    <rect x="32" y="510" width="220" height="238" rx="12" fill="#18181b" stroke="#3f3f46" stroke-width="1.5" />
+    <g font-size="28" font-weight="600" letter-spacing="-0.4">
+      <text x="60" y="558">Your coding</text>
+      <text x="60" y="594">agent</text>
     </g>
-    <path d="M364 510H254" fill="none" stroke="#a1a1aa" stroke-width="2" marker-end="url(#arrow)" />
-    <text x="308" y="492" text-anchor="middle" font-size="18" fill="#a1a1aa">Evidence</text>
-    <path d="M252 694H362" fill="none" stroke="#60a5fa" stroke-width="2" marker-end="url(#command-arrow)" />
-    <text x="308" y="676" text-anchor="middle" font-size="18" fill="#60a5fa">Commands</text>
+    <text x="60" y="638" font-size="21" fill="#a1a1aa">Agent Plugin</text>
+    <text x="60" y="676" font-size="20" fill="#a1a1aa">MCP · CLI · API</text>
+    <path d="M364 554H254" fill="none" stroke="#a1a1aa" stroke-width="2" marker-end="url(#arrow)" />
+    <text x="308" y="536" text-anchor="middle" font-size="18" fill="#a1a1aa">Evidence</text>
+    <path d="M252 714H362" fill="none" stroke="#60a5fa" stroke-width="2" marker-end="url(#command-arrow)" />
+    <text x="308" y="696" text-anchor="middle" font-size="18" fill="#60a5fa">Commands</text>
 
-    <!-- One output branch, with the action stated beside its destination. -->
-    <path d="M716 694H768V466H810M768 578H810M768 690H810" fill="none" stroke="#60a5fa" stroke-width="2" />
+    <!-- These destinations use Canonry integrations, commanded by the agent. -->
+    <path d="M716 694H768V466H810M768 610H810" fill="none" stroke="#60a5fa" stroke-width="2" />
     <g fill="none" stroke="#60a5fa" stroke-width="2" marker-end="url(#command-arrow)">
       <path d="M800 466H826" />
-      <path d="M800 578H826" />
-      <path d="M800 690H826" />
+      <path d="M800 610H826" />
     </g>
     <g font-size="19" fill="#a1a1aa">
-      <text x="848" y="448">Publish</text>
-      <text x="848" y="560">Submit</text>
-      <text x="848" y="672">Prepare</text>
+      <text x="848" y="448">Submit</text>
+      <text x="848" y="592">Prepare</text>
     </g>
     <g font-size="24" font-weight="500">
-      <text x="848" y="484">WordPress</text>
-      <text x="848" y="596">Google + Bing</text>
-      <text x="848" y="708">ChatGPT Ads</text>
+      <text x="848" y="484">Google + Bing</text>
+      <text x="848" y="628">ChatGPT Ads</text>
     </g>
 
     <!-- Dashboard is a read companion. Webhooks can reach any external system. -->
-    <rect x="32" y="826" width="220" height="114" rx="10" fill="#18181b" fill-opacity="0.4" stroke="#3f3f46" stroke-width="1.5" />
-    <path d="M32 858H252" stroke="#27272a" stroke-width="1.5" />
+    <rect x="32" y="356" width="220" height="114" rx="10" fill="#18181b" fill-opacity="0.4" stroke="#3f3f46" stroke-width="1.5" />
+    <path d="M32 388H252" stroke="#27272a" stroke-width="1.5" />
     <g fill="#71717a">
-      <circle cx="49" cy="842" r="2.5" /><circle cx="60" cy="842" r="2.5" /><circle cx="71" cy="842" r="2.5" />
+      <circle cx="49" cy="372" r="2.5" /><circle cx="60" cy="372" r="2.5" /><circle cx="71" cy="372" r="2.5" />
     </g>
-    <text x="60" y="908" font-size="24" font-weight="500">Dashboard UI</text>
-    <path d="M430 748V886H254" fill="none" stroke="#a1a1aa" stroke-width="2" marker-end="url(#arrow)" />
-    <text x="336" y="868" text-anchor="middle" font-size="18" fill="#a1a1aa">Evidence</text>
-    <path d="M650 748V904H826" fill="none" stroke="#a1a1aa" stroke-width="2" stroke-dasharray="5 6" marker-end="url(#arrow)" />
-    <text x="744" y="886" text-anchor="middle" font-size="18" fill="#a1a1aa">Webhooks</text>
-    <text x="848" y="912" font-size="24" font-weight="500">Your systems</text>
+    <text x="60" y="438" font-size="24" font-weight="500">Dashboard UI</text>
+    <path d="M364 432H254" fill="none" stroke="#a1a1aa" stroke-width="2" marker-end="url(#arrow)" />
+    <text x="308" y="414" text-anchor="middle" font-size="18" fill="#a1a1aa">Evidence</text>
+    <path d="M716 726H784V770H826" fill="none" stroke="#a1a1aa" stroke-width="2" stroke-dasharray="5 6" marker-end="url(#arrow)" />
+    <text x="848" y="752" font-size="19" fill="#a1a1aa">Webhooks</text>
+    <text x="848" y="788" font-size="24" font-weight="500">Your systems</text>
+
+    <!-- Direct execution deliberately bypasses Canonry's platform boundary. -->
+    <path d="M142 748V898H826" fill="none" stroke="#60a5fa" stroke-width="2" marker-end="url(#command-arrow)" />
+    <text x="430" y="880" font-size="20" fill="#60a5fa">Execute</text>
+    <text x="848" y="906" font-size="24" font-weight="500">Your site</text>
+    <g font-size="21" fill="#a1a1aa">
+      <text x="848" y="942">Code + content</text>
+      <text x="848" y="974">Schema + fixes</text>
+    </g>
   </g>
 </svg>

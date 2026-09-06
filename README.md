@@ -12,19 +12,19 @@ Canonry is an **agent-first, open-source AEO operating platform.**
 - **Compare competitors:** Citation gaps and the domains and pages getting cited.
 - **Measure complex portfolios:** Properties and market groups, with questions, engines, models, and locations tailored per property.
 - **Investigate site activity:** Search analytics, server-side crawler visits, AI page fetches, referrals, and technical audits.
-- **Act on the evidence:** Plan content, update WordPress pages, deploy structured data, submit sitemaps, and prepare paused ChatGPT Ads campaigns for approval.
+- **Act on the evidence:** Your coding agent updates content, implements schema, and fixes your site with its own tools. Canonry adds indexing and ChatGPT Ads integrations.
 
 **Self-hosted, with your own provider keys.** Use the dashboard to review the same evidence and recommendations as your agent.
 
 `npm install -g @canonry/canonry`
 
-![ChatGPT, Google Analytics, server-side traffic, and other external sources feed Canonry from above. Evidence returns to your agent and dashboard UI; agent commands flow through Canonry to publishing, indexing, and ChatGPT Ads. Webhooks connect your systems.](https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/measure-act.svg)
+![External sources feed Canonry. Evidence returns to your coding agent and dashboard UI. Your agent executes code, content, schema, and site fixes directly, and uses Canonry integrations for indexing and ChatGPT Ads. Webhooks connect your systems.](https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/measure-act.svg)
 
 **Give your agent a job:**
 
-> Find a question where competitors get cited and we don't. Compare their cited pages with our relevant page, using our search data, server-side traffic, and site audit. Propose a content update for review. After I approve it, publish through WordPress, submit the sitemap, and rerun the checks.
+> Find a question where competitors get cited and we don't. Compare their cited pages with our relevant page, using our search data, server-side traffic, and site audit. Update the relevant content and schema in my codebase, then open a pull request. After the changes ship, submit the sitemap and rerun the checks.
 
-Your agent coordinates the steps using Canonry's tools and returns the results for review.
+Your agent uses Canonry for evidence and integrations, and its own coding tools to make the changes.
 
 ### Compare competitors and measure complex portfolios
 
