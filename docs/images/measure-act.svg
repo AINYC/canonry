@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="824" viewBox="0 0 1440 824" role="img" aria-labelledby="title description">
-  <title id="title">Canonry architecture: left-to-right request flow</title>
-  <desc id="description">Read from left to right. Your agent, with Agent Plugin skills, uses MCP, CLI, or REST API. The dashboard UI uses the same API to show evidence, recommendations, and activity. Inside a self-hosted Canonry instance, the API exposes measurement and execution capabilities and reads the shared project database. Measurement covers answers, citations, competitors, advanced portfolio plans, server-side traffic, site audits, and search analytics. Integrations connect these capabilities to answer engines, analytics, server traffic, websites, WordPress, Google, Bing, and ChatGPT Ads. A separate webhook path sends events to external apps, agents, and automations. Canonry is open source and uses your provider keys.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1104" viewBox="0 0 1440 1104" role="img" aria-labelledby="title description">
+  <title id="title">Canonry: evidence in, actions out</title>
+  <desc id="description">Data sources above Canonry feed measurement through collection and sync. Stored and analyzed evidence flows left through the shared API to your agent and the dashboard UI. Blue command arrows flow from your agent through the API and execution tools to WordPress, structured data, indexing services, and paused ChatGPT Ads. Webhook events flow separately to external apps, agents, and automations. Canonry is open source and self-hosted, with shared project storage and your provider keys.</desc>
   <!-- Palette and typography match the default dark dashboard in apps/web/src/styles.css. -->
   <metadata id="embedded-font-license">
 Embedded, unmodified Geist and Geist Mono fonts.
@@ -109,94 +109,110 @@ text { font-feature-settings: "cv11", "ss01", "ss03"; }
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
       <path d="M0 0 10 5 0 10Z" fill="#a1a1aa" />
     </marker>
+    <marker id="command-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 10 5 0 10Z" fill="#60a5fa" />
+    </marker>
   </defs>
-  <rect width="1440" height="824" fill="#09090b" x="0" />
-  <g font-family="'Geist', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif" fill="#f4f4f5">
-    <g font-family="'Geist Mono', 'SFMono-Regular', Consolas, monospace" font-size="22" fill="#a1a1aa">
-      <text x="1060" y="79">INTEGRATIONS</text>
-      <text x="32" y="79">CLIENTS</text>
+  <rect width="1440" height="1104" fill="#09090b" x="0" />
+  <!-- Evidence returns left to clients. Stored evidence comes from the project database. -->
+  <g id="platform" transform="translate(0 280)">
+    <g font-family="'Geist', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif" fill="#f4f4f5">
+      <g font-family="'Geist Mono', 'SFMono-Regular', Consolas, monospace" font-size="22" fill="#a1a1aa">
+        <text x="1060" y="79">OUTPUTS</text>
+        <text x="32" y="79">CLIENTS</text>
+      </g>
+      <!-- The API, capabilities, database, and event delivery share one instance. -->
+      <rect x="392" y="24" width="638" height="768" rx="12" fill="#09090b" stroke="#3f3f46" stroke-width="1.5" />
+      <path d="M 1020 24 H 402 Q 392 24 392 34 V 104 H 1030 V 34 Q 1030 24 1020 24 Z" fill="#18181b" />
+      <text x="424" y="62" font-size="30" font-weight="600" fill="#fafafa" letter-spacing="-0.35">Canonry</text>
+      <text x="424" y="93" text-anchor="start" font-size="20" fill="#a1a1aa">Open source · self-hosted · your keys</text>
+      <g fill="#18181b" stroke="#27272a" stroke-width="1.5" fill-opacity="0.3">
+        <rect x="1060" y="414" width="348" height="200" rx="12" />
+        <rect x="1060" y="666" width="348" height="110" rx="12" />
+        <rect x="616" y="132" width="382" height="250" rx="12" />
+        <rect x="616" y="414" width="382" height="200" rx="12" />
+        <rect x="32" y="370" width="290" height="160" rx="12" />
+      </g>
+      <g font-size="26" font-weight="600">
+        <text x="1084" y="459" font-size="25">Action targets</text>
+        <text x="1084" y="707">Your systems</text>
+        <text x="640" y="177">Measurement</text>
+        <text x="640" y="459">Execution</text>
+      </g>
+      <g font-size="23" fill="#a1a1aa">
+        <text x="1084" y="496">WordPress + JSON-LD</text>
+        <text x="1084" y="530">Google + Bing</text>
+        <text x="1084" y="564">ChatGPT Ads</text>
+        <text x="1084" y="746" font-size="23">Apps · agents · automation</text>
+        <text x="640" y="218">AI answers + cited sources</text>
+        <text x="640" y="252">Competitors + citation gaps</text>
+        <text x="640" y="286">Advanced portfolio plans</text>
+        <text x="640" y="320" font-size="23">Server-side traffic + site audits</text>
+        <text x="640" y="354">Search analytics</text>
+        <text x="640" y="496" font-size="23">Content plans + WordPress</text>
+        <text x="640" y="530">Structured data</text>
+        <text x="640" y="564" font-size="23">Sitemaps + URL submissions</text>
+        <text x="640" y="598">Paused ChatGPT Ads</text>
+      </g>
+      <!-- Both clients use the public API. MCP and CLI adapt agent requests. -->
+      <rect x="424" y="168" width="114" height="380" rx="6" fill="#18181b" stroke="#3f3f46" stroke-width="1.5" />
+      <g text-anchor="middle" font-family="'Geist Mono', 'SFMono-Regular', Consolas, monospace">
+        <text x="481" y="323" font-size="26" font-weight="600" letter-spacing="-0.35">REST</text>
+        <text x="481" y="360" font-size="30" font-weight="600" letter-spacing="-0.35">API</text>
+        <text x="481" y="398" font-size="19" fill="#a1a1aa">/api/v1</text>
+      </g>
+      <rect x="32" y="148" width="290" height="148" rx="12" fill="#18181b" />
+      <text x="56" y="195" font-size="29" font-weight="600" fill="#fafafa" letter-spacing="-0.35">Your agent</text>
+      <text x="56" y="235" font-size="23" fill="#a1a1aa">Agent Plugin skills</text>
+      <text x="56" y="273" font-size="23" fill="#a1a1aa">MCP · CLI · REST API</text>
+      <!-- Browser chrome identifies the UI without inventing a product screen. -->
+      <path d="M 314 370 H 40 Q 32 370 32 378 V 405 H 322 V 378 Q 322 370 314 370 Z" fill="#18181b" />
+      <path d="M 322 405 H 32" stroke="#27272a" />
+      <g fill="#71717a">
+        <circle cx="52" cy="388" r="3" />
+        <circle cx="64" cy="388" r="3" />
+        <circle cx="76" cy="388" r="3" />
+      </g>
+      <text x="56" y="443" font-size="26" font-weight="600" letter-spacing="-0.35">Dashboard UI</text>
+      <text x="56" y="480" font-size="23" fill="#a1a1aa">Evidence + activity</text>
+      <text x="56" y="509" font-size="23" fill="#a1a1aa">Recommendations</text>
+      <!-- Shared persistence and a distinct outbound event path. -->
+      <path d="M 790 678 V 752 C 790 779 424 779 424 752 V 678 Z" fill="#18181b" stroke="#3f3f46" stroke-width="1.5" />
+      <ellipse cx="607" cy="678" rx="183" ry="18" fill="#18181b" stroke="#3f3f46" stroke-width="1.5" />
+      <text x="607" y="722" text-anchor="middle" font-size="25" font-weight="600" letter-spacing="-0.35">Project database</text>
+      <text x="607" y="751" text-anchor="middle" font-size="23" fill="#a1a1aa">Plans · runs · evidence · activity</text>
+      <rect x="830" y="680" width="168" height="86" rx="6" fill="#18181b" stroke="#3f3f46" stroke-width="1.5" />
+      <text x="914" y="717" text-anchor="middle" font-size="24" font-weight="600" letter-spacing="-0.35">Webhooks</text>
+      <text x="914" y="747" text-anchor="middle" font-size="23" fill="#a1a1aa">Events</text>
     </g>
-    <!-- The API, capabilities, database, and event delivery share one instance. -->
-    <rect x="392" y="24" width="638" height="768" rx="12" fill="#09090b" stroke="#3f3f46" stroke-width="1.5" />
-    <path d="M 1020 24 H 402 Q 392 24 392 34 V 104 H 1030 V 34 Q 1030 24 1020 24 Z" fill="#18181b" />
-    <text x="424" y="75" font-size="30" font-weight="600" fill="#fafafa" letter-spacing="-0.35">Canonry</text>
-    <text x="998" y="73" text-anchor="end" font-size="21" fill="#a1a1aa">Open source · self-hosted · your keys</text>
-    <g fill="#18181b" stroke="#27272a" stroke-width="1.5" fill-opacity="0.3">
-      <rect x="1060" y="132" width="348" height="250" rx="12" />
-      <rect x="1060" y="414" width="348" height="200" rx="12" />
-      <rect x="1060" y="666" width="348" height="110" rx="12" />
-      <rect x="616" y="132" width="382" height="250" rx="12" />
-      <rect x="616" y="414" width="382" height="200" rx="12" />
-      <rect x="32" y="370" width="290" height="160" rx="12" />
+    <g fill="none" stroke="#a1a1aa" stroke-width="2.4" marker-end="url(#arrow)">
+      <path d="M 424 220 H 332" />
+      <path d="M 424 455 H 332" />
+      <path d="M 616 238 H 548" />
+      <path d="M 481 660 V 558" />
+      <path d="M 998 723 H 1050" />
     </g>
-    <g font-size="26" font-weight="600">
-      <text x="1084" y="177">Data sources</text>
-      <text x="1084" y="459" font-size="25">Action targets</text>
-      <text x="1084" y="707">Your systems</text>
-      <text x="640" y="177">Measurement</text>
-      <text x="640" y="459">Execution</text>
+    <text x="501" y="644" text-anchor="start" font-family="'Geist Mono', 'SFMono-Regular', Consolas, monospace" font-size="20" fill="#a1a1aa">stored evidence</text>
+    <g fill="none" stroke="#60a5fa" stroke-width="2.4" marker-end="url(#command-arrow)">
+      <path d="M322 274H414" />
+      <path d="M538 484H606" />
+      <path d="M998 514H1050" />
     </g>
-    <g font-size="23" fill="#a1a1aa">
-      <text x="1084" y="218">Answer engines</text>
-      <text x="1084" y="252">Search + analytics</text>
-      <text x="1084" y="286">Server-side traffic</text>
-      <text x="1084" y="316" font-size="23">Crawlers · fetches · referrals</text>
-      <text x="1084" y="354">Your website</text>
-      <text x="1084" y="496">WordPress + JSON-LD</text>
-      <text x="1084" y="530">Google + Bing</text>
-      <text x="1084" y="564">ChatGPT Ads</text>
-      <text x="1084" y="746" font-size="23">Apps · agents · automation</text>
-      <text x="640" y="218">AI answers + cited sources</text>
-      <text x="640" y="252">Competitors + citation gaps</text>
-      <text x="640" y="286">Advanced portfolio plans</text>
-      <text x="640" y="320" font-size="23">Server-side traffic + site audits</text>
-      <text x="640" y="354">Search analytics</text>
-      <text x="640" y="496" font-size="23">Content plans + WordPress</text>
-      <text x="640" y="530">Structured data</text>
-      <text x="640" y="564" font-size="23">Sitemaps + URL submissions</text>
-      <text x="640" y="598">Paused ChatGPT Ads</text>
+    <g font-family="'Geist', sans-serif" font-size="20" text-anchor="middle" fill="#a1a1aa">
+      <text x="373" y="205">evidence</text>
+      <text x="373" y="440">evidence</text>
+      <text x="373" y="259" fill="#60a5fa">commands</text>
     </g>
-    <!-- Both clients use the public API. MCP and CLI adapt agent requests. -->
-    <rect x="424" y="168" width="114" height="380" rx="6" fill="#18181b" stroke="#3f3f46" stroke-width="1.5" />
-    <g text-anchor="middle" font-family="'Geist Mono', 'SFMono-Regular', Consolas, monospace">
-      <text x="481" y="323" font-size="26" font-weight="600" letter-spacing="-0.35">REST</text>
-      <text x="481" y="360" font-size="30" font-weight="600" letter-spacing="-0.35">API</text>
-      <text x="481" y="398" font-size="19" fill="#a1a1aa">/api/v1</text>
-    </g>
-    <rect x="32" y="148" width="290" height="148" rx="12" fill="#18181b" />
-    <text x="56" y="195" font-size="29" font-weight="600" fill="#fafafa" letter-spacing="-0.35">Your agent</text>
-    <text x="56" y="235" font-size="23" fill="#a1a1aa">Agent Plugin skills</text>
-    <text x="56" y="273" font-size="23" fill="#a1a1aa">MCP · CLI · REST API</text>
-    <!-- Browser chrome identifies the UI without inventing a product screen. -->
-    <path d="M 314 370 H 40 Q 32 370 32 378 V 405 H 322 V 378 Q 322 370 314 370 Z" fill="#18181b" />
-    <path d="M 322 405 H 32" stroke="#27272a" />
-    <g fill="#71717a">
-      <circle cx="52" cy="388" r="3" />
-      <circle cx="64" cy="388" r="3" />
-      <circle cx="76" cy="388" r="3" />
-    </g>
-    <text x="56" y="443" font-size="26" font-weight="600" letter-spacing="-0.35">Dashboard UI</text>
-    <text x="56" y="480" font-size="23" fill="#a1a1aa">Evidence + activity</text>
-    <text x="56" y="509" font-size="23" fill="#a1a1aa">Recommendations</text>
-    <!-- Shared persistence and a distinct outbound event path. -->
-    <path d="M 790 678 V 752 C 790 779 424 779 424 752 V 678 Z" fill="#18181b" stroke="#3f3f46" stroke-width="1.5" />
-    <ellipse cx="607" cy="678" rx="183" ry="18" fill="#18181b" stroke="#3f3f46" stroke-width="1.5" />
-    <text x="607" y="722" text-anchor="middle" font-size="25" font-weight="600" letter-spacing="-0.35">Project database</text>
-    <text x="607" y="751" text-anchor="middle" font-size="23" fill="#a1a1aa">Plans · runs · evidence · activity</text>
-    <rect x="830" y="680" width="168" height="86" rx="6" fill="#18181b" stroke="#3f3f46" stroke-width="1.5" />
-    <text x="914" y="717" text-anchor="middle" font-size="24" font-weight="600" letter-spacing="-0.35">Webhooks</text>
-    <text x="914" y="747" text-anchor="middle" font-size="23" fill="#a1a1aa">Events</text>
   </g>
-  <!-- Primary request flow runs left to right; stored reads branch downward. -->
-  <g fill="none" stroke="#a1a1aa" stroke-width="2.4" marker-end="url(#arrow)">
-    <path d="M 322 220 H 414" />
-    <path d="M 322 455 H 414" />
-    <path d="M 538 238 H 606" />
-    <path d="M 538 484 H 606" />
-    <path d="M 998 238 H 1050" />
-    <path d="M 998 514 H 1050" />
-    <path d="M 481 548 V 648" />
-    <path d="M 998 723 H 1050" />
+  <g font-family="'Geist', sans-serif" fill="#a1a1aa">
+    <rect x="392" y="24" width="638" height="200" rx="12" fill="#18181b" fill-opacity="0.3" stroke="#27272a" stroke-width="1.5" />
+    <text x="416" y="68" font-size="26" font-weight="600" fill="#f4f4f5">Data sources</text>
+    <text x="416" y="112" font-size="23">Answer engines</text>
+    <text x="416" y="153" font-size="23">Search + analytics</text>
+    <text x="740" y="112" font-size="23">Server-side traffic</text>
+    <text x="740" y="153" font-size="23">Your website</text>
+    <text x="416" y="195" font-size="23">Crawler visits · AI fetches · referrals</text>
+    <path d="M807 224V402" fill="none" stroke="#a1a1aa" stroke-width="2.4" marker-end="url(#arrow)" />
+    <text x="831" y="269" font-size="21">collect + sync</text>
   </g>
-  <text x="501" y="629" text-anchor="start" font-family="'Geist Mono', 'SFMono-Regular', Consolas, monospace" font-size="20" fill="#a1a1aa">stored reads</text>
 </svg>

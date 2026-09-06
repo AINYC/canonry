@@ -18,7 +18,7 @@ Canonry is an **agent-first, open-source AEO operating platform.**
 
 `npm install -g @canonry/canonry`
 
-![Left-to-right architecture: your agent and the dashboard UI connect to Canonry's shared API, measurement and execution capabilities, and integrations. Canonry stores project evidence in its database and sends webhook events to external systems.](https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/measure-act.svg)
+![Data sources feed Canonry from above. Evidence flows left to your agent and dashboard UI. Agent commands flow right through execution tools, while webhook events reach external systems.](https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/measure-act.svg)
 
 **Give your agent a job:**
 
