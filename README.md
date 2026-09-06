@@ -11,20 +11,23 @@ Canonry is an **agent-first, open-source AEO operating platform.**
 - **Track AI visibility:** Brand mentions and citations across answer engines.
 - **Compare competitors:** Citation gaps and the domains and pages getting cited.
 - **Measure complex portfolios:** Properties and market groups, with questions, engines, models, and locations tailored per property.
-- **Investigate site activity:** Search analytics, server-side crawler visits, AI page fetches, referrals, and technical audits.
-- **Act on the evidence:** Your coding agent updates content, implements schema, and fixes your site with its own tools. Canonry adds indexing and ChatGPT Ads integrations.
+- **Investigate what changed:** Combine search and local performance, server-side crawler visits, AI page fetches, referrals, conversion evidence, and technical audits.
+- **Improve your site:** Your agent uses its own coding tools alongside Canonry's content, WordPress publishing, schema, and indexing workflows.
+- **Report and follow up:** Generate client reports, schedule data syncs and checks, and send alerts to Discord or your own systems.
 
 **Self-hosted, with your own provider keys.** Use the dashboard to review the same evidence and recommendations as your agent.
 
 `npm install -g @canonry/canonry`
 
-![External sources feed Canonry. Evidence returns to your coding agent and dashboard UI. Your agent executes code, content, schema, and site fixes directly, and uses Canonry integrations for indexing and ChatGPT Ads. Webhooks connect your systems.](https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/measure-act.svg)
+![Supported external sources feed Canonry. Project evidence reaches your agent, dashboard, and client reports. Your agent combines its own execution tools with Canonry's WordPress and indexing workflows. Webhooks connect Discord and other systems.](https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/measure-act.svg)
+
+Connect the sources you use. Schedule syncs and checks, or run them on demand.
 
 **Give your agent a job:**
 
-> Find a question where competitors get cited and we don't. Compare their cited pages with our relevant page, using our search data, server-side traffic, and site audit. Update the relevant content and schema in my codebase, then open a pull request. After the changes ship, submit the sitemap and rerun the checks.
+> Review what changed across search, local visibility, AI citations, and server-side traffic. Find where competitors get cited and we don't. Use that evidence and the site audit to propose the next changes. Prepare a pull request or WordPress draft for review, then report the results and next steps to the client.
 
-Your agent uses Canonry for evidence and integrations, and its own coding tools to make the changes.
+Your agent coordinates the work through Canonry and its own tools. After changes ship, rerun the relevant checks to measure progress.
 
 ### Compare competitors and measure complex portfolios
 
@@ -39,11 +42,12 @@ Your agent uses Canonry for evidence and integrations, and its own coding tools 
 - **Search and analytics:** Connect [Google Search Console](docs/google-search-console-setup.md), [Google Analytics 4](docs/google-analytics-setup.md), and [Bing Webmaster Tools](docs/bing-webmaster-setup.md).
 - **Server traffic:** Inspect recorded crawler visits, AI page fetches, and referral arrivals from [Cloudflare, Cloud Run, Vercel, and WordPress](skills/canonry/references/server-side-traffic.md).
 - **Backlinks:** Query [Common Crawl hyperlink releases](skills/canonry/references/canonry-cli.md#backlinks-common-crawl) locally with DuckDB, and sync new releases on a schedule.
-- **Paid media:** Connect [OpenAI Ads Manager](docs/mcp.md#tool-surface) for account, conversion, campaign, and performance workflows.
 - **Conversion measurement:** Audit [Google Ads and Google Tag Manager](docs/google-marketing.md) with read-only snapshots and declared conversion contracts.
 - **Local presence:** Connect [Google Business Profile](skills/canonry/references/google-business-profile.md) for search terms, performance, lodging data, and booking actions.
 - **Publishing and indexing:** Publish through [WordPress](docs/wordpress-setup.md), generate JSON-LD, and [submit sitemaps or URLs for indexing](skills/canonry/references/indexing.md).
-- **Client reporting:** Automate [scheduled checks and data syncs](skills/canonry/references/canonry-cli.md#scheduling--notifications), send webhook alerts, and generate [client-ready HTML reports](skills/canonry/references/canonry-cli.md#reports).
+- **Client reporting:** Generate [client-ready HTML reports or JSON evidence](skills/canonry/references/canonry-cli.md#reports), use the report API/MCP tools, or build your own reporting pipeline.
+- **Schedules and alerts:** Configure [data syncs and checks](skills/canonry/references/canonry-cli.md#scheduling--notifications) independently; send webhook alerts to Discord, Slack, or your own systems.
+- **ChatGPT Ads:** Use the [ads tools](docs/mcp.md#tool-surface) to measure campaigns, create and update paused campaign trees, activate approved trees, and reconcile operation receipts.
 
 The dashboard, CLI, and agent tools share the same project API.
 
@@ -51,7 +55,7 @@ The dashboard, CLI, and agent tools share the same project API.
 
 ## Start with your agent
 
-Connect the [Agent Plugin](docs/plugins.md) or [MCP adapter](docs/mcp.md) to your agent. For any shell-capable agent, copy the setup request below.
+Connect the [Agent Plugin](docs/plugins.md) or [MCP adapter](docs/mcp.md) to your agent, or use built-in [Aero](skills/aero/SKILL.md). For any shell-capable agent, copy the setup request below.
 
 <details>
 <summary>Copy the Site Health-first setup request</summary>
