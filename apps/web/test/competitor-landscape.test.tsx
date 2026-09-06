@@ -94,7 +94,7 @@ describe('CompetitorLandscape', () => {
     expect(screen.getByRole('rowheader', { name: 'Observed rival 8' })).toBeTruthy()
     expect(screen.getByText('Showing 8 of 8 observed competitors.')).toBeTruthy()
     expect(within(brand).getByText('50.0%')).toBeTruthy()
-    expect(screen.getByText(/20 answer results and 21 source results/)).toBeTruthy()
+    expect(screen.getByText('20 answers')).toBeTruthy()
 
     const showFewer = screen.getByRole('button', { name: 'Show fewer observed competitors' })
     expect(showFewer.getAttribute('aria-expanded')).toBe('true')
@@ -107,6 +107,63 @@ describe('CompetitorLandscape', () => {
     renderLandscape({ landscape: landscape({ observed: observedRows(count) }) })
     expect(screen.queryByRole('button', { name: /Show all/ })).toBeNull()
     expect(screen.queryByText(/Showing \d+ of \d+ observed competitors/)).toBeNull()
+  })
+
+  test.each([
+    { kind: 'project' },
+    { kind: 'group', groupKey: 'north' },
+    { kind: 'all-markets' },
+  ] as const)('keeps empty observations and detailed evidence notes out of the default $kind view', (scope) => {
+    renderLandscape({ landscape: landscape({
+      scope,
+      observed: [],
+      truncated: true,
+      evidence: {
+        answeredResults: 44,
+        sourceResults: 42,
+        missingAnswerTextResults: 0,
+        mentionCredits: 12,
+        incompleteSourceResults: 42,
+        excludedProbeResults: 2,
+        excludedNonCompletedResults: 1,
+      },
+    }) })
+
+    expect(screen.queryByText('Observed in this window')).toBeNull()
+    expect(screen.getByRole('rowheader', { name: 'Pinned zero' })).toBeTruthy()
+    const disclosure = screen.getByText('About these results').closest('details')!
+    expect(disclosure.open).toBe(false)
+    const summary = disclosure.querySelector('summary')!
+    expect(within(summary).getByText('44 answers')).toBeTruthy()
+    expect(within(summary).getByText('Citation data incomplete')).toBeTruthy()
+    expect(within(summary).queryByText(/100/)).toBeNull()
+    expect(screen.getByText(/42 results have incomplete source lists/).closest('details')).toBe(disclosure)
+    expect(screen.getByText(/All pinned competitors are included/).closest('details')).toBe(disclosure)
+
+    fireEvent.click(summary)
+    expect(disclosure.open).toBe(true)
+    expect(within(disclosure).getByText('42 results include source URLs.')).toBeTruthy()
+    expect(within(disclosure).getByText('3 test or unfinished results are excluded.')).toBeTruthy()
+    expect(within(disclosure).getByText('No additional competitors were identified in this period.')).toBeTruthy()
+  })
+
+  test('only shows data-quality warnings when the corresponding evidence is incomplete', () => {
+    const data = landscape()
+    const { props, rerender } = renderLandscape({ landscape: {
+      ...data,
+      evidence: { ...data.evidence, incompleteSourceResults: 0 },
+    } })
+    expect(screen.queryByText('Citation data incomplete')).toBeNull()
+    expect(screen.getByText('Answer data incomplete').closest('summary')).not.toBeNull()
+    expect(screen.getByText(/2 results have no answer text/).closest('details')?.open).toBe(false)
+
+    rerender(<CompetitorLandscape {...props} landscape={{
+      ...data,
+      evidence: { ...data.evidence, answeredResults: 1, missingAnswerTextResults: 0, incompleteSourceResults: 0 },
+    }} />)
+    expect(screen.queryByText('Answer data incomplete')).toBeNull()
+    expect(screen.queryByText('Citation data incomplete')).toBeNull()
+    expect(screen.getByText('1 answer')).toBeTruthy()
   })
 
   test.each([
@@ -288,7 +345,8 @@ describe('CompetitorLandscape', () => {
   test('states when ranked observed rows are truncated while pins remain complete', () => {
     renderLandscape({ landscape: landscape({ truncated: true }) })
 
-    expect(screen.getByText('Results are limited to the top 100 observed competitors and other sources. Pinned competitors are complete.')).not.toBeNull()
+    const note = screen.getByText('Lists include up to 100 observed competitors and 100 other sources. All pinned competitors are included.')
+    expect(note.closest('details')?.open).toBe(false)
   })
 
   test('marks Advanced draft-only competitors as pending publication', () => {

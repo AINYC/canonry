@@ -1,4 +1,5 @@
 import { useId, useState, type KeyboardEvent } from 'react'
+import { ChevronDown } from 'lucide-react'
 import type { CompetitorLandscapeResponse, CompetitorLandscapeRow as CompetitorLandscapeRowDto } from '@ainyc/canonry-contracts'
 
 import { Button } from '../ui/button.js'
@@ -200,11 +201,9 @@ function ObservedCompetitors({
   return (
     <tbody>
       <GroupHeading>Observed in this window</GroupHeading>
-      {visibleRows.length > 0 ? visibleRows.map(row => (
+      {visibleRows.map(row => (
         <LandscapeRow key={row.domain} row={{ ...row, pinned: false }} canManage={canManage} onPin={onPin} />
-      )) : (
-        <tr><td colSpan={6} className="text-secondary">No direct competitors were observed in this window.</td></tr>
-      )}
+      ))}
       {rows.length > OBSERVED_PREVIEW_LIMIT ? (
         <tr>
           <td colSpan={6}>
@@ -376,7 +375,7 @@ export function CompetitorLandscape({
                   <tr><td colSpan={6} className="text-secondary">No pinned competitors.</td></tr>
                 )}
               </tbody>
-              {landscape ? (
+              {landscape && observed.length > 0 ? (
                 <ObservedCompetitors
                   // Refreshes and pin changes keep the operator's choice. A new
                   // project, window, or measurement scope starts compact again.
@@ -390,20 +389,35 @@ export function CompetitorLandscape({
           </div>
 
           {evidence ? (
-            <p className="text-sm text-secondary">
-              {evidence.answeredResults} answer results and {evidence.sourceResults} source results in this window.
-              {evidence.missingAnswerTextResults > 0 ? ` ${evidence.missingAnswerTextResults} result${evidence.missingAnswerTextResults === 1 ? '' : 's'} without answer text excluded from mention share.` : ''}
-              {evidence.incompleteSourceResults > 0 ? ` ${evidence.incompleteSourceResults} incomplete source result${evidence.incompleteSourceResults === 1 ? '' : 's'} excluded from negative citation evidence.` : ''}
-              {evidence.excludedProbeResults > 0 || evidence.excludedNonCompletedResults > 0
-                ? ` ${evidence.excludedProbeResults + evidence.excludedNonCompletedResults} probe or incomplete run${evidence.excludedProbeResults + evidence.excludedNonCompletedResults === 1 ? '' : 's'} excluded.`
-                : ''}
-            </p>
-          ) : null}
-
-          {landscape?.truncated ? (
-            <p className="text-sm text-secondary">
-              Results are limited to the top 100 observed competitors and other sources. Pinned competitors are complete.
-            </p>
+            <details className="group text-sm text-secondary">
+              <summary className="flex min-h-11 cursor-pointer list-none flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-md hover:text-heading focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-500 [&::-webkit-details-marker]:hidden">
+                <span className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                  <span>{evidence.answeredResults} {evidence.answeredResults === 1 ? 'answer' : 'answers'}</span>
+                  {evidence.missingAnswerTextResults > 0 ? <span className="text-caution">Answer data incomplete</span> : null}
+                  {evidence.incompleteSourceResults > 0 ? <span className="text-caution">Citation data incomplete</span> : null}
+                </span>
+                <span className="inline-flex items-center gap-1">
+                  About these results
+                  <ChevronDown size={14} aria-hidden="true" className="transition-transform group-open:rotate-180 motion-reduce:transition-none" />
+                </span>
+              </summary>
+              <div className="max-w-prose space-y-2 pb-2 pt-1">
+                {observed.length === 0 ? <p>No additional competitors were identified in this period.</p> : null}
+                <p>{evidence.sourceResults} {evidence.sourceResults === 1 ? 'result includes' : 'results include'} source URLs.</p>
+                {evidence.missingAnswerTextResults > 0 ? (
+                  <p>{evidence.missingAnswerTextResults} {evidence.missingAnswerTextResults === 1 ? 'result has' : 'results have'} no answer text and {evidence.missingAnswerTextResults === 1 ? 'is' : 'are'} excluded from mention share.</p>
+                ) : null}
+                {evidence.incompleteSourceResults > 0 ? (
+                  <p>{evidence.incompleteSourceResults} {evidence.incompleteSourceResults === 1 ? 'result has an incomplete source list' : 'results have incomplete source lists'}. Recorded citations still count; missing citations are not treated as confirmed misses.</p>
+                ) : null}
+                {evidence.excludedProbeResults + evidence.excludedNonCompletedResults > 0 ? (
+                  <p>{evidence.excludedProbeResults + evidence.excludedNonCompletedResults} test or unfinished {evidence.excludedProbeResults + evidence.excludedNonCompletedResults === 1 ? 'result is' : 'results are'} excluded.</p>
+                ) : null}
+                {landscape.truncated ? (
+                  <p>Lists include up to 100 observed competitors and 100 other sources. All pinned competitors are included.</p>
+                ) : null}
+              </div>
+            </details>
           ) : null}
 
           {pendingDraftCompetitorCount > 0 ? (
