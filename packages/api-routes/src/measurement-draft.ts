@@ -223,12 +223,33 @@ function seedAuthoring(
 
   if (active.schemaVersion === 2) {
     const assignments = new Map<string, MeasurementDraftAssignment>()
+    const nodes = new Map(active.executionNodes.map(node => [node.stableKey, node]))
+    const provenance = new Map(active.querySnapshots.map(snapshot => [snapshot.queryId, snapshot.provenance]))
     for (const assignment of active.assignments) {
-      assignments.set(`${assignment.targetKey} ${assignment.queryId}`, {
+      const node = nodes.get(assignment.executionNodeKey)
+      if (!node) {
+        throw validationError('The active plan references a missing execution context. Repair it before creating a draft.')
+      }
+      const key = `${assignment.targetKey} ${assignment.queryId}`
+      const classificationSource = assignment.classificationSource === 'server' ? 'rule' : 'operator'
+      const existing = assignments.get(key)
+      if (existing) {
+        if (existing.queryClass !== assignment.queryClass || existing.classificationSource !== classificationSource) {
+          throw validationError('This query has different classifications across markets. Use Queries to edit those assignments separately.')
+        }
+        if (!existing.executionContexts!.some(context => context.executionNodeKey === node.stableKey)) {
+          existing.executionContexts!.push({ ...structuredClone(node.context), executionNodeKey: node.stableKey })
+        }
+        continue
+      }
+      const queryProvenance = provenance.get(assignment.queryId)
+      assignments.set(key, {
         targetKey: assignment.targetKey,
         queryId: assignment.queryId,
+        executionContexts: [{ ...structuredClone(node.context), executionNodeKey: node.stableKey }],
+        ...(queryProvenance === undefined ? {} : { queryProvenance: structuredClone(queryProvenance) }),
         queryClass: assignment.queryClass,
-        classificationSource: assignment.classificationSource === 'server' ? 'rule' : 'operator',
+        classificationSource,
       })
     }
     return {
