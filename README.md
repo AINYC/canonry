@@ -6,6 +6,14 @@
 
 Canonry is an **agent-first, open-source AEO operating platform.**
 
+<p align="center">
+  <a href="https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/measure-act.svg">
+    <img src="https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/measure-act.svg" alt="Supported external sources feed Canonry. Project evidence reaches your agent, dashboard, and client reports. Your agent combines its own execution tools with Canonry's WordPress and indexing workflows. Webhooks connect Discord and other systems." width="94%" />
+  </a>
+</p>
+
+Connect the sources you use. Schedule syncs and checks, or run them on demand.
+
 **Connect your agent:** [Agent Plugin](docs/plugins.md) · [MCP](docs/mcp.md) · CLI · REST API
 
 - **Track AI visibility:** Brand mentions and citations across answer engines.
@@ -18,10 +26,6 @@ Canonry is an **agent-first, open-source AEO operating platform.**
 **Self-hosted, with your own provider keys.** Use the dashboard to review the same evidence and recommendations as your agent.
 
 `npm install -g @canonry/canonry`
-
-![Supported external sources feed Canonry. Project evidence reaches your agent, dashboard, and client reports. Your agent combines its own execution tools with Canonry's WordPress and indexing workflows. Webhooks connect Discord and other systems.](https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/measure-act.svg)
-
-Connect the sources you use. Schedule syncs and checks, or run them on demand.
 
 **Give your agent a job:**
 
