@@ -1633,6 +1633,88 @@ export type CompetitorLandscapeResponse = {
         excludedProbeResults: number;
         excludedNonCompletedResults: number;
     };
+    modelComparison?: {
+        basis: 'requested-model';
+        groups: Array<{
+            provider: string;
+            model: string | null;
+            servedModels: {
+                status: 'known';
+                model: string;
+            } | {
+                status: 'unknown';
+            } | {
+                status: 'mixed';
+                models: Array<string>;
+                includesUnknown: boolean;
+            };
+            snapshotCount: number;
+            project: {
+                domain: string;
+                label: string;
+                surfaceClass: 'own' | 'direct-competitor' | 'ota-aggregator' | 'editorial-media' | 'other' | 'unknown';
+                pinned: boolean;
+                mentionCount: number;
+                shareOfVoice: number | null;
+                citationCount: number;
+                answeredResults: number;
+                firstSeenAt: string | null;
+                lastSeenAt: string | null;
+                sampleUrls: Array<string>;
+            };
+            pinned: Array<{
+                domain: string;
+                label: string;
+                surfaceClass: 'own' | 'direct-competitor' | 'ota-aggregator' | 'editorial-media' | 'other' | 'unknown';
+                pinned: boolean;
+                mentionCount: number;
+                shareOfVoice: number | null;
+                citationCount: number;
+                answeredResults: number;
+                firstSeenAt: string | null;
+                lastSeenAt: string | null;
+                sampleUrls: Array<string>;
+            }>;
+            observed: Array<{
+                domain: string;
+                label: string;
+                surfaceClass: 'own' | 'direct-competitor' | 'ota-aggregator' | 'editorial-media' | 'other' | 'unknown';
+                pinned: boolean;
+                mentionCount: number;
+                shareOfVoice: number | null;
+                citationCount: number;
+                answeredResults: number;
+                firstSeenAt: string | null;
+                lastSeenAt: string | null;
+                sampleUrls: Array<string>;
+            }>;
+            otherSources: Array<{
+                domain: string;
+                label: string;
+                surfaceClass: 'own' | 'direct-competitor' | 'ota-aggregator' | 'editorial-media' | 'other' | 'unknown';
+                pinned: boolean;
+                mentionCount: number;
+                shareOfVoice: number | null;
+                citationCount: number;
+                answeredResults: number;
+                firstSeenAt: string | null;
+                lastSeenAt: string | null;
+                sampleUrls: Array<string>;
+            }>;
+            evidence: {
+                answeredResults: number;
+                sourceResults: number;
+                missingAnswerTextResults: number;
+                mentionCredits: number;
+                incompleteSourceResults: number;
+                excludedProbeResults: number;
+                excludedNonCompletedResults: number;
+            };
+            truncated: boolean;
+        }>;
+        totalGroups: number;
+        truncated: boolean;
+    };
     marketState: {
         activeRevision: number;
         draft: {
@@ -1644,6 +1726,8 @@ export type CompetitorLandscapeResponse = {
         scope: 'project' | 'all-markets';
         groupKey: string | null;
         provider: string | null;
+        model?: string;
+        groupBy?: 'model';
         queryClass: 'all' | 'branded' | 'non-brand';
         location: string | null;
         runId: string | null;
@@ -14588,11 +14672,19 @@ export type GetApiV1ProjectsByNameAnalyticsCompetitorsData = {
         /**
          * Set to "all-markets" to aggregate raw stored evidence across every Advanced Measurement market. It cannot be combined with groupKey.
          */
-        scope?: 'all-markets';
+        scope?: 'project' | 'all-markets';
         /**
          * Restrict evidence to one answer provider.
          */
         provider?: string;
+        /**
+         * Restrict all evidence and exclusions to one exact stored requested model ID (surrounding whitespace ignored). Requires provider. Never matches by served model or current configuration.
+         */
+        model?: string;
+        /**
+         * Set to "model" for an additional provider/requested-model breakdown with each group's sample counts and raw served-model evidence. Unknown requested IDs form a null group. Groups are descriptive, not equal-weight or matched-query comparisons; absent models are not measured zeros. At most 50 groups in provider/model order (unknown first), with totalGroups and truncation disclosed.
+         */
+        groupBy?: 'model';
         /**
          * Restrict evidence to a question class. Advanced groups use their frozen assignment classes; simple projects classify stored query text.
          */

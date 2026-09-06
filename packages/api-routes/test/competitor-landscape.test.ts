@@ -193,6 +193,9 @@ describe('GET /projects/:name/analytics/competitors', () => {
     expect(response.statusCode, response.body).toBe(200)
     const body = response.json()
     expect(competitorLandscapeResponseSchema.safeParse(body).success).toBe(true)
+    expect(body).not.toHaveProperty('modelComparison')
+    expect(body.filters).not.toHaveProperty('model')
+    expect(body.filters).not.toHaveProperty('groupBy')
     expect(body).toMatchObject({
       window: 'all',
       scope: { kind: 'project' },
@@ -227,6 +230,248 @@ describe('GET /projects/:name/analytics/competitors', () => {
       shareOfVoice: null,
       citationCount: 1,
     })])
+  })
+
+  it.each([null, '', ' \t '])('keeps an unavailable Simple question (%j) only in All, including model groups', async unavailableQuery => {
+    db.insert(querySnapshots).values([
+      { id: 'unavailable-query', queryText: unavailableQuery },
+      { id: 'known-branded-query', queryText: 'Northwind options' },
+      { id: 'known-non-brand-query', queryText: 'Housing options' },
+    ].map(row => ({
+      ...marketSnapshot(row.id, 'run_normal', null, 'Northwind and Rival.', 'rival.example'),
+      queryId: null,
+      queryText: row.queryText,
+      model: 'query-class-model',
+    }))).run()
+
+    for (const [queryClass, expectedCount] of [['all', 3], ['branded', 1], ['non-brand', 1]] as const) {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/v1/projects/northwind/analytics/competitors?window=all&provider=openai&model=query-class-model&groupBy=model&queryClass=${queryClass}`,
+      })
+      expect(response.statusCode, response.body).toBe(200)
+      expect(response.json()).toMatchObject({
+        evidence: { answeredResults: expectedCount },
+        project: { mentionCount: expectedCount },
+        modelComparison: {
+          totalGroups: 1,
+          groups: [{
+            model: 'query-class-model',
+            snapshotCount: expectedCount,
+            evidence: { answeredResults: expectedCount },
+          }],
+        },
+      })
+    }
+  })
+
+  it.each(['', '&groupKey=regional', '&scope=all-markets'])('does not turn generated project pin labels into curated aliases (%s)', async scope => {
+    db.insert(competitors).values(['car.com', 'www.car.com'].map((domain, index) => ({
+      id: `short-domain-pin-${index}`,
+      projectId: 'project_northwind',
+      domain,
+      provenance: 'manual',
+      createdAt: NOW,
+    }))).run()
+    const plan = marketPlan('short-label-node', 'car.com', 'Car Services')
+    plan.groups[0]!.competitors[0]!.aliases = []
+    seedVersion('short_label_plan', 1, plan)
+    db.insert(measurementPlans).values({
+      projectId: 'project_northwind', activeVersionId: 'short_label_plan', createdAt: NOW, updatedAt: NOW,
+    }).run()
+    db.insert(runs).values({
+      id: 'short_label_run', projectId: 'project_northwind', kind: 'answer-visibility',
+      status: 'completed', trigger: 'manual', measurementPlanVersionId: 'short_label_plan', createdAt: NOW,
+    }).run()
+    db.insert(querySnapshots).values({
+      ...marketSnapshot('short_label_snapshot', 'short_label_run', 'short-label-node', 'Northwind helps you rent a car.', 'car.com'),
+      // The Advanced class remains available through the frozen execution,
+      // even when both legacy question text and the current query are absent.
+      queryId: null,
+      queryText: null,
+      model: 'short-label-model',
+    }).run()
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/v1/projects/northwind/analytics/competitors?window=all&provider=openai&model=short-label-model&groupBy=model${scope}${scope ? '&queryClass=non-brand' : ''}`,
+    })
+    expect(response.statusCode, response.body).toBe(200)
+    const body = competitorLandscapeResponseSchema.parse(response.json())
+    expect(body.project).toMatchObject({ mentionCount: 1, shareOfVoice: 100 })
+    expect(body.pinned.find(row => row.domain === 'car.com'))
+      .toMatchObject({ mentionCount: 0, citationCount: 1, shareOfVoice: 0 })
+    expect(body.modelComparison!.groups[0]!.pinned.find(row => row.domain === 'car.com'))
+      .toMatchObject({ mentionCount: 0, citationCount: 1, shareOfVoice: 0 })
+    expect(body.evidence.answeredResults).toBe(1)
+  })
+
+  it.each([
+    { input: {}, label: 'car.com', aliases: [], mentions: 0 },
+    { input: { label: 'CAR' }, label: 'CAR', aliases: ['CAR'], mentions: 1 },
+    { input: { aliases: ['CAR'] }, label: 'car.com', aliases: ['CAR'], mentions: 1 },
+  ])('keeps Advanced domain-only pins distinct from explicit brand names ($input)', async ({ input, label, aliases, mentions }) => {
+    const plan = marketPlan('domain-pin-node', 'market-rival.example', 'Market Rival')
+    seedVersion('domain_pin_plan', 1, plan)
+    db.insert(measurementPlans).values({
+      projectId: 'project_northwind', activeVersionId: 'domain_pin_plan', createdAt: NOW, updatedAt: NOW,
+    }).run()
+    db.insert(runs).values({
+      id: 'domain_pin_run', projectId: 'project_northwind', kind: 'answer-visibility',
+      status: 'completed', trigger: 'manual', measurementPlanVersionId: 'domain_pin_plan', createdAt: NOW,
+    }).run()
+    db.insert(querySnapshots).values({
+      ...marketSnapshot('domain_pin_snapshot', 'domain_pin_run', 'domain-pin-node', 'Northwind helps you rent a car.', 'car.com'),
+      model: 'domain-pin-model',
+    }).run()
+
+    const pin = await app.inject({
+      method: 'POST', url: '/api/v1/projects/northwind/measurement-plan/draft/actions/pin-competitor',
+      headers: { 'idempotency-key': 'domain-only-pin' },
+      payload: { expectedActiveRevision: 1, groupKey: 'regional', domain: 'car.com', ...input },
+    })
+    expect(pin.statusCode, pin.body).toBe(200)
+    expect(pin.json().competitor).toMatchObject({ label, domain: 'car.com', aliases })
+    // A later domain-only upsert must preserve an already-curated identity.
+    const retained = await app.inject({
+      method: 'POST', url: '/api/v1/projects/northwind/measurement-plan/draft/actions/pin-competitor',
+      headers: { 'idempotency-key': 'retain-pin-identity' },
+      payload: { expectedActiveRevision: 1, groupKey: 'regional', domain: 'car.com' },
+    })
+    expect(retained.statusCode, retained.body).toBe(200)
+    expect(retained.json().competitor).toEqual(pin.json().competitor)
+
+    for (const scope of ['groupKey=regional', 'scope=all-markets']) {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/v1/projects/northwind/analytics/competitors?window=all&provider=openai&model=domain-pin-model&groupBy=model&${scope}`,
+      })
+      expect(response.statusCode, response.body).toBe(200)
+      const body = competitorLandscapeResponseSchema.parse(response.json())
+      expect(body.pinned.find(row => row.domain === 'car.com')).toMatchObject({ mentionCount: mentions, citationCount: 1 })
+      expect(body.modelComparison!.groups[0]!.pinned.find(row => row.domain === 'car.com')).toMatchObject({ mentionCount: mentions, citationCount: 1 })
+      expect(body.project.shareOfVoice).toBe(mentions ? 50 : 100)
+    }
+  })
+
+  it('groups stored requested identities by provider with separate sample counts and raw served evidence', async () => {
+    db.insert(querySnapshots).values([
+      { ...marketSnapshot('shared_openai_1', 'run_normal', null, 'Rival.', 'rival.example'), model: 'shared', servedModel: 'shared-2026-01', answerMentioned: false },
+      { ...marketSnapshot('shared_openai_2', 'run_normal', null, 'Rival.', 'rival.example'), model: 'shared', servedModel: 'shared-2026-02', answerMentioned: false },
+      { ...marketSnapshot('shared_openai_3', 'run_normal', null, 'No brands.', 'guide.example'), model: ' shared ', servedModel: null, answerMentioned: false },
+      { ...marketSnapshot('shared_gemini', 'run_normal', null, 'Northwind.', 'northwind.example'), provider: 'gemini', model: 'shared', servedModel: 'different-served-id' },
+      { ...marketSnapshot('empty_requested', 'run_normal', null, 'Northwind.', 'northwind.example'), model: '  ', servedModel: 'reported-only-id' },
+      { ...marketSnapshot('excluded_only', 'run_probe', null, 'Rival.', 'rival.example'), model: 'not-measured' },
+    ]).run()
+    db.update(querySnapshots).set({ model: 'shared' }).where(eq(querySnapshots.id, 'snapshot_probe')).run()
+    db.update(querySnapshots).set({ model: 'shared' }).where(eq(querySnapshots.id, 'snapshot_failed')).run()
+    db.update(projects).set({ providerModels: { openai: 'current-unmeasured-model' } }).where(eq(projects.id, 'project_northwind')).run()
+
+    const aggregate = await app.inject({ method: 'GET', url: '/api/v1/projects/northwind/analytics/competitors?window=all' })
+    const response = await app.inject({ method: 'GET', url: '/api/v1/projects/northwind/analytics/competitors?window=all&groupBy=model' })
+    expect(response.statusCode, response.body).toBe(200)
+    const body = competitorLandscapeResponseSchema.parse(response.json())
+    const { modelComparison, ...combined } = body
+    const { groupBy: _groupBy, ...unchangedFilters } = combined.filters
+    expect({ ...combined, filters: unchangedFilters }).toEqual(aggregate.json())
+    expect(modelComparison).toMatchObject({ basis: 'requested-model', totalGroups: 3, truncated: false })
+    expect(modelComparison!.groups.map(group => [group.provider, group.model])).toEqual([
+      ['gemini', 'shared'], ['openai', null], ['openai', 'shared'],
+    ])
+    const [gemini, unknown, openai] = modelComparison!.groups
+    expect(gemini).toMatchObject({
+      snapshotCount: 1,
+      servedModels: { status: 'known', model: 'different-served-id' },
+      project: { mentionCount: 1, citationCount: 1, shareOfVoice: 100 },
+      pinned: [{ domain: 'rival.example', mentionCount: 0, citationCount: 0, answeredResults: 1 }],
+      evidence: { answeredResults: 1, excludedProbeResults: 0, excludedNonCompletedResults: 0 },
+    })
+    expect(unknown).toMatchObject({
+      snapshotCount: 3,
+      servedModels: { status: 'mixed', models: ['reported-only-id'], includesUnknown: true },
+      evidence: { answeredResults: 2, sourceResults: 3, missingAnswerTextResults: 1, incompleteSourceResults: 1 },
+    })
+    expect(openai).toMatchObject({
+      snapshotCount: 3,
+      servedModels: { status: 'mixed', models: ['shared-2026-01', 'shared-2026-02'], includesUnknown: true },
+      project: { mentionCount: 0, citationCount: 0, shareOfVoice: 0 },
+      pinned: [{ domain: 'rival.example', mentionCount: 2, citationCount: 2, answeredResults: 3, shareOfVoice: 100 }],
+      evidence: { answeredResults: 3, excludedProbeResults: 1, excludedNonCompletedResults: 1 },
+    })
+    expect(modelComparison!.groups.reduce((sum, group) => sum + group.snapshotCount, 0)).toBe(7)
+    expect(modelComparison!.groups.reduce((sum, group) => sum + group.evidence.answeredResults, 0)).toBe(body.evidence.answeredResults)
+    expect(modelComparison!.groups.reduce((sum, group) => sum + group.evidence.mentionCredits, 0)).toBe(body.evidence.mentionCredits)
+    for (const row of [body.project, ...body.pinned, ...body.observed, ...body.otherSources]) {
+      const pieces = modelComparison!.groups.flatMap(group => [group.project, ...group.pinned, ...group.observed, ...group.otherSources])
+        .filter(piece => piece.domain === row.domain)
+      expect(pieces.reduce((sum, piece) => sum + piece.mentionCount, 0)).toBe(row.mentionCount)
+      expect(pieces.reduce((sum, piece) => sum + piece.citationCount, 0)).toBe(row.citationCount)
+    }
+    const filtered = await app.inject({
+      method: 'GET', url: '/api/v1/projects/northwind/analytics/competitors?window=all&provider=openai&model=%20shared%20&groupBy=model',
+    })
+    expect(filtered.statusCode, filtered.body).toBe(200)
+    expect(filtered.json()).toMatchObject({
+      filters: { model: 'shared' },
+      evidence: { answeredResults: 3, excludedProbeResults: 1, excludedNonCompletedResults: 1 },
+      modelComparison: { totalGroups: 1, groups: [{ provider: 'openai', model: 'shared', snapshotCount: 3 }] },
+    })
+  })
+
+  it('filters exact requested model before aggregate totals, exclusions, and optional groups', async () => {
+    db.update(querySnapshots).set({ model: 'model-a', servedModel: 'model-b' }).where(eq(querySnapshots.id, 'snapshot_answer')).run()
+    db.update(querySnapshots).set({ model: 'model-b', servedModel: 'model-a' }).where(eq(querySnapshots.id, 'snapshot_source_only')).run()
+    db.update(querySnapshots).set({ model: 'model-b' }).where(eq(querySnapshots.id, 'snapshot_probe')).run()
+    db.update(querySnapshots).set({ model: 'model-a' }).where(eq(querySnapshots.id, 'snapshot_failed')).run()
+    db.insert(querySnapshots).values({
+      ...marketSnapshot('other_provider_same_id', 'run_normal', null, 'Northwind.', 'northwind.example'),
+      provider: 'gemini', model: 'model-a',
+    }).run()
+
+    const response = await app.inject({ method: 'GET', url: '/api/v1/projects/northwind/analytics/competitors?window=all&provider=openai&model=model-a' })
+    expect(response.statusCode, response.body).toBe(200)
+    expect(response.json()).toMatchObject({
+      filters: { provider: 'openai', model: 'model-a' },
+      evidence: { answeredResults: 1, sourceResults: 1, missingAnswerTextResults: 0, incompleteSourceResults: 0, excludedProbeResults: 0, excludedNonCompletedResults: 1 },
+      pinned: [{ domain: 'rival.example', mentionCount: 1, citationCount: 1 }],
+    })
+    expect(response.json()).not.toHaveProperty('modelComparison')
+    const empty = await app.inject({ method: 'GET', url: '/api/v1/projects/northwind/analytics/competitors?window=all&provider=openai&model=absent&groupBy=model' })
+    expect(empty.statusCode, empty.body).toBe(200)
+    expect(empty.json()).toMatchObject({
+      evidence: { answeredResults: 0, sourceResults: 0, excludedProbeResults: 0, excludedNonCompletedResults: 0 },
+      modelComparison: { basis: 'requested-model', totalGroups: 0, groups: [], truncated: false },
+      pinned: [{ domain: 'rival.example', answeredResults: 0, shareOfVoice: null }],
+    })
+  })
+
+  it.each(['model=model-a', 'provider=openai&model=', 'provider=openai&model=%20%20', 'groupBy=provider', 'groupBy=model&groupKey=regional&scope=all-markets'])(
+    'rejects invalid model comparison filters: %s', async query => {
+      const response = await app.inject({ method: 'GET', url: `/api/v1/projects/northwind/analytics/competitors?window=all&${query}` })
+      expect(response.statusCode, response.body).toBe(400)
+    },
+  )
+
+  it('caps model groups deterministically without truncating combined totals', async () => {
+    db.insert(querySnapshots).values(Array.from({ length: 52 }, (_, index) => ({
+      ...marketSnapshot(`model_cap_${index}`, 'run_normal', null, 'Rival.', 'rival.example'),
+      model: `model-${String(51 - index).padStart(2, '0')}`,
+    }))).run()
+    const response = await app.inject({ method: 'GET', url: '/api/v1/projects/northwind/analytics/competitors?window=all&groupBy=model' })
+    expect(response.statusCode, response.body).toBe(200)
+    const body = competitorLandscapeResponseSchema.parse(response.json())
+    expect(body).toMatchObject({
+      truncated: false,
+      evidence: { answeredResults: 53 },
+      modelComparison: { totalGroups: 53, truncated: true },
+    })
+    expect(body.modelComparison!.groups).toHaveLength(50)
+    expect(body.modelComparison!.groups.map(group => group.model)).toEqual([
+      null, ...Array.from({ length: 49 }, (_, index) => `model-${String(index).padStart(2, '0')}`),
+    ])
+    expect(body.modelComparison!.groups[1]).toMatchObject({
+      servedModels: { status: 'unknown' }, snapshotCount: 1, pinned: [{ domain: 'rival.example' }],
+    })
   })
 
   it('uses the run creation timestamp for rolling windows', async () => {
@@ -312,6 +557,14 @@ describe('GET /projects/:name/analytics/competitors', () => {
     expect(body.otherSources.map((row: { domain: string }) => row.domain)).toEqual(
       [...body.otherSources.map((row: { domain: string }) => row.domain)].sort((a, b) => a.localeCompare(b)),
     )
+    const grouped = await app.inject({
+      method: 'GET', url: '/api/v1/projects/northwind/analytics/competitors?window=all&groupBy=model',
+    })
+    const group = competitorLandscapeResponseSchema.parse(grouped.json()).modelComparison!.groups[0]!
+    expect(group).toMatchObject({ model: null, truncated: true, snapshotCount: 103 })
+    expect(group.observed).toHaveLength(100)
+    expect(group.otherSources).toHaveLength(100)
+    expect(group.pinned.map(row => row.domain)).toEqual(['rival.example'])
   })
 
   it('uses each run\'s frozen v2 market membership and supports an explicit all-markets aggregate', async () => {
@@ -384,7 +637,7 @@ describe('GET /projects/:name/analytics/competitors', () => {
     expect(group.otherSources.some((row: { domain: string }) => row.domain === 'legacy-rival.example')).toBe(false)
 
     // A removed tracked-query row leaves its historic snapshot query_id NULL,
-    // but the frozen plan still names its text and class. The market reading
+    // but the frozen execution still identifies its assigned class. The market reading
     // must retain that stored answer under its frozen non-brand scope.
     db.insert(querySnapshots).values({
       ...marketSnapshot(
@@ -448,7 +701,7 @@ describe('GET /projects/:name/analytics/competitors', () => {
 
     const rescanned = await app.inject({
       method: 'GET',
-      url: '/api/v1/projects/northwind/analytics/competitors?window=all&groupKey=regional',
+      url: '/api/v1/projects/northwind/analytics/competitors?window=all&groupKey=regional&groupBy=model',
     })
     expect(rescanned.statusCode, rescanned.body).toBe(200)
     expect(rescanned.json()).toMatchObject({
@@ -464,6 +717,16 @@ describe('GET /projects/:name/analytics/competitors', () => {
     ])
     expect(rescanned.json().pinned.find((row: { domain: string }) => row.domain === 'legacy-rival.example'))
       .toMatchObject({ mentionCount: 1, citationCount: 1 })
+    expect(rescanned.json().modelComparison.groups).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        provider: 'openai', model: null,
+        pinned: expect.arrayContaining([expect.objectContaining({ domain: 'legacy-rival.example', mentionCount: 1, citationCount: 1 })]),
+      }),
+      expect.objectContaining({
+        provider: 'gemini', model: null,
+        pinned: expect.arrayContaining([expect.objectContaining({ domain: 'legacy-rival.example', mentionCount: 0, citationCount: 0 })]),
+      }),
+    ]))
 
     const allMarketsResponse = await app.inject({
       method: 'GET',
@@ -534,121 +797,8 @@ describe('GET /projects/:name/analytics/competitors', () => {
     expect(rejectedPin.statusCode, rejectedPin.body).toBe(400)
     expect(db.select().from(measurementPlanDrafts).get()).toEqual(missingGroupDraft)
   })
-  it.each([null, '', ' \t '])('keeps an unavailable Simple question (%j) only in All', async unavailableQuery => {
-    db.insert(querySnapshots).values([
-      { id: 'unavailable-query', queryText: unavailableQuery },
-      { id: 'known-branded-query', queryText: 'Northwind options' },
-      { id: 'known-non-brand-query', queryText: 'Housing options' },
-    ].map(row => ({
-      ...marketSnapshot(row.id, 'run_normal', null, 'Northwind and Rival.', 'rival.example'),
-      queryId: null,
-      queryText: row.queryText,
-      provider: 'gemini',
-    }))).run()
 
-    for (const [queryClass, expectedCount] of [['all', 3], ['branded', 1], ['non-brand', 1]] as const) {
-      const response = await app.inject({
-        method: 'GET',
-        url: `/api/v1/projects/northwind/analytics/competitors?window=all&provider=gemini&queryClass=${queryClass}`,
-      })
-      expect(response.statusCode, response.body).toBe(200)
-      expect(response.json()).toMatchObject({
-        evidence: { answeredResults: expectedCount },
-        project: { mentionCount: expectedCount },
-      })
-    }
-  })
-
-
-  it.each(['', '&groupKey=regional', '&scope=all-markets'])('does not turn generated project pin labels into curated aliases (%s)', async scope => {
-    db.insert(competitors).values(['car.com', 'www.car.com'].map((domain, index) => ({
-      id: `short-domain-pin-${index}`,
-      projectId: 'project_northwind',
-      domain,
-      provenance: 'manual',
-      createdAt: NOW,
-    }))).run()
-    const plan = marketPlan('short-label-node', 'car.com', 'Car Services')
-    plan.groups[0]!.competitors[0]!.aliases = []
-    seedVersion('short_label_plan', 1, plan)
-    db.insert(measurementPlans).values({
-      projectId: 'project_northwind', activeVersionId: 'short_label_plan', createdAt: NOW, updatedAt: NOW,
-    }).run()
-    db.insert(runs).values({
-      id: 'short_label_run', projectId: 'project_northwind', kind: 'answer-visibility',
-      status: 'completed', trigger: 'manual', measurementPlanVersionId: 'short_label_plan', createdAt: NOW,
-    }).run()
-    db.insert(querySnapshots).values({
-      ...marketSnapshot('short_label_snapshot', 'short_label_run', 'short-label-node', 'Northwind helps you rent a car.', 'car.com'),
-      // The Advanced class remains available through the frozen execution,
-      // even when both legacy question text and the current query are absent.
-      queryId: null,
-      queryText: null,
-      model: 'short-label-model',
-    }).run()
-
-    const response = await app.inject({
-      method: 'GET',
-      url: `/api/v1/projects/northwind/analytics/competitors?window=all&provider=openai&runId=short_label_run${scope}${scope ? '&queryClass=non-brand' : ''}`,
-    })
-    expect(response.statusCode, response.body).toBe(200)
-    const body = competitorLandscapeResponseSchema.parse(response.json())
-    expect(body.project).toMatchObject({ mentionCount: 1, shareOfVoice: 100 })
-    expect(body.pinned.find(row => row.domain === 'car.com'))
-      .toMatchObject({ mentionCount: 0, citationCount: 1, shareOfVoice: 0 })
-    expect(body.evidence.answeredResults).toBe(1)
-  })
-
-
-  it.each([
-    { input: {}, label: 'car.com', aliases: [], mentions: 0 },
-    { input: { label: 'CAR' }, label: 'CAR', aliases: ['CAR'], mentions: 1 },
-    { input: { aliases: ['CAR'] }, label: 'car.com', aliases: ['CAR'], mentions: 1 },
-  ])('keeps Advanced domain-only pins distinct from explicit brand names ($input)', async ({ input, label, aliases, mentions }) => {
-    const plan = marketPlan('domain-pin-node', 'market-rival.example', 'Market Rival')
-    seedVersion('domain_pin_plan', 1, plan)
-    db.insert(measurementPlans).values({
-      projectId: 'project_northwind', activeVersionId: 'domain_pin_plan', createdAt: NOW, updatedAt: NOW,
-    }).run()
-    db.insert(runs).values({
-      id: 'domain_pin_run', projectId: 'project_northwind', kind: 'answer-visibility',
-      status: 'completed', trigger: 'manual', measurementPlanVersionId: 'domain_pin_plan', createdAt: NOW,
-    }).run()
-    db.insert(querySnapshots).values({
-      ...marketSnapshot('domain_pin_snapshot', 'domain_pin_run', 'domain-pin-node', 'Northwind helps you rent a car.', 'car.com'),
-      model: 'domain-pin-model',
-    }).run()
-
-    const pin = await app.inject({
-      method: 'POST', url: '/api/v1/projects/northwind/measurement-plan/draft/actions/pin-competitor',
-      headers: { 'idempotency-key': 'domain-only-pin' },
-      payload: { expectedActiveRevision: 1, groupKey: 'regional', domain: 'car.com', ...input },
-    })
-    expect(pin.statusCode, pin.body).toBe(200)
-    expect(pin.json().competitor).toMatchObject({ label, domain: 'car.com', aliases })
-    // A later domain-only upsert must preserve an already-curated identity.
-    const retained = await app.inject({
-      method: 'POST', url: '/api/v1/projects/northwind/measurement-plan/draft/actions/pin-competitor',
-      headers: { 'idempotency-key': 'retain-pin-identity' },
-      payload: { expectedActiveRevision: 1, groupKey: 'regional', domain: 'car.com' },
-    })
-    expect(retained.statusCode, retained.body).toBe(200)
-    expect(retained.json().competitor).toEqual(pin.json().competitor)
-
-    for (const scope of ['groupKey=regional', 'scope=all-markets']) {
-      const response = await app.inject({
-        method: 'GET',
-        url: `/api/v1/projects/northwind/analytics/competitors?window=all&provider=openai&runId=domain_pin_run&${scope}`,
-      })
-      expect(response.statusCode, response.body).toBe(200)
-      const body = competitorLandscapeResponseSchema.parse(response.json())
-      expect(body.pinned.find(row => row.domain === 'car.com')).toMatchObject({ mentionCount: mentions, citationCount: 1 })
-      expect(body.project.shareOfVoice).toBe(mentions ? 50 : 100)
-    }
-  })
-
-
-  it.each(['groupKey=regional', 'scope=all-markets'])('retains frozen competitor identities within their own historical revisions (%s)', async scope => {
+  it.each(['groupKey=regional', 'scope=all-markets'])('retains frozen competitor identities within each model group (%s)', async scope => {
     const historicalPlan = marketPlan('old-only-node', 'alphaco.example', 'AlphaCo')
     const activePlan = marketPlan('current-only-node', 'betaco.example', 'BetaCo')
     seedVersion('frozen_plan_v1', 1, historicalPlan)
@@ -675,7 +825,7 @@ describe('GET /projects/:name/analytics/competitors', () => {
     ]).run()
 
     const response = await app.inject({
-      method: 'GET', url: `/api/v1/projects/northwind/analytics/competitors?window=all&${scope}`,
+      method: 'GET', url: `/api/v1/projects/northwind/analytics/competitors?window=all&${scope}&groupBy=model`,
     })
     expect(response.statusCode, response.body).toBe(200)
     expect(response.json().pinned).toEqual(expect.arrayContaining([
@@ -683,15 +833,30 @@ describe('GET /projects/:name/analytics/competitors', () => {
     ]))
     expect(response.json().evidence.mentionCredits).toBe(3)
     expect(response.json().observed.find((row: { domain: string }) => row.domain === 'alphaco.example')?.mentionCount ?? 0).toBe(0)
+    const modelComparison = competitorLandscapeResponseSchema.parse(response.json()).modelComparison!
+    expect(modelComparison).toMatchObject({ totalGroups: 2, truncated: false })
+    expect(modelComparison.groups.map(group => group.model)).toEqual(['current-model', 'historical-model'])
+    expect(modelComparison.groups[0]).toMatchObject({
+      snapshotCount: 1,
+      servedModels: { status: 'unknown' },
+      evidence: { answeredResults: 1, mentionCredits: 1 },
+      observed: [],
+      otherSources: [expect.objectContaining({ domain: 'alphaco.example', surfaceClass: 'unknown' })],
+    })
+    expect(modelComparison.groups[1]).toMatchObject({
+      snapshotCount: 1,
+      servedModels: { status: 'known', model: 'historical-served-id' },
+      pinned: expect.arrayContaining([expect.objectContaining({ domain: 'betaco.example', mentionCount: 1 })]),
+    })
     const filtered = await app.inject({
-      method: 'GET', url: `/api/v1/projects/northwind/analytics/competitors?window=all&${scope}&provider=openai&queryClass=non-brand&runId=frozen_old_run`,
+      method: 'GET', url: `/api/v1/projects/northwind/analytics/competitors?window=all&${scope}&provider=openai&model=historical-model&queryClass=non-brand&runId=frozen_old_run&groupBy=model`,
     })
     expect(filtered.statusCode, filtered.body).toBe(200)
     expect(filtered.json()).toMatchObject({
       evidence: { answeredResults: 1, mentionCredits: 2 },
+      modelComparison: { totalGroups: 1, groups: [{ model: 'historical-model', snapshotCount: 1 }] },
     })
   })
-
 
   it('resolves sibling-host classification conflicts deterministically', async () => {
     db.insert(domainClassifications).values([
@@ -719,7 +884,6 @@ describe('GET /projects/:name/analytics/competitors', () => {
       expect.objectContaining({ domain: 'contoso.com', surfaceClass: 'direct-competitor', citationCount: 1 }),
     ]))
   })
-
 
   it.each([
     { scope: 'groupKey=regional', queryId: 'market-query' },
@@ -753,19 +917,19 @@ describe('GET /projects/:name/analytics/competitors', () => {
       { ...marketSnapshot('class-context-probe', 'run_probe', 'non-brand-node', 'Northwind and Challenger.', 'challenger.example', NOW, queryId), model: 'non-brand-model' },
     ]).run()
 
-    for (const [queryClass, excludedProbeResults] of [
-      ['branded', 0], ['non-brand', 1],
+    for (const [queryClass, model, excludedProbeResults] of [
+      ['branded', 'branded-model', 0], ['non-brand', 'non-brand-model', 1],
     ] as const) {
       const response = await app.inject({
-        method: 'GET', url: `/api/v1/projects/northwind/analytics/competitors?window=all&${scope}&queryClass=${queryClass}`,
+        method: 'GET', url: `/api/v1/projects/northwind/analytics/competitors?window=all&${scope}&queryClass=${queryClass}&groupBy=model`,
       })
       expect(response.statusCode, response.body).toBe(200)
       expect(response.json()).toMatchObject({
         evidence: { answeredResults: 1, excludedProbeResults },
+        modelComparison: { totalGroups: 1, groups: [{ model, snapshotCount: 1, evidence: { answeredResults: 1, excludedProbeResults } }] },
       })
     }
   })
-
 
   it('unions aliases when one competitor domain appears in multiple markets', async () => {
     const plan = marketPlan('north-alias-node', 'parentco.com', 'AlphaCo')
@@ -813,14 +977,24 @@ describe('GET /projects/:name/analytics/competitors', () => {
     expect(response.json().pinned).toEqual(expect.arrayContaining([
       expect.objectContaining({ domain: 'parentco.com', mentionCount: 2, citationCount: 2 }),
     ]))
+    const grouped = await app.inject({
+      method: 'GET', url: '/api/v1/projects/northwind/analytics/competitors?window=all&scope=all-markets&groupBy=model',
+    })
+    const groups = competitorLandscapeResponseSchema.parse(grouped.json()).modelComparison!.groups
+    expect(groups.map(group => [group.model, group.snapshotCount])).toEqual([['north-model', 1], ['south-model', 1]])
+    for (const group of groups) {
+      expect(group.pinned).toEqual(expect.arrayContaining([
+        expect.objectContaining({ domain: 'parentco.com', mentionCount: 1, citationCount: 1 }),
+      ]))
+    }
     const selected = await app.inject({
-      method: 'GET', url: '/api/v1/projects/northwind/analytics/competitors?window=all&scope=all-markets&provider=openai&location=South&queryClass=non-brand',
+      method: 'GET', url: '/api/v1/projects/northwind/analytics/competitors?window=all&scope=all-markets&groupBy=model&provider=openai&model=south-model&location=South&queryClass=non-brand',
     })
     expect(selected.json()).toMatchObject({
       evidence: { answeredResults: 1 },
+      modelComparison: { totalGroups: 1, groups: [{ model: 'south-model', snapshotCount: 1 }] },
     })
   })
-
 
   it('scopes classes to Target usages when two markets share one execution', async () => {
     const plan = marketPlan('shared-class-node', 'market-rival.example', 'Market Rival')
@@ -847,15 +1021,15 @@ describe('GET /projects/:name/analytics/competitors', () => {
       ['scope=all-markets', 'branded', 1], ['scope=all-markets', 'non-brand', 1], ['scope=all-markets', 'all', 1],
     ] as const) {
       const response = await app.inject({
-        method: 'GET', url: `/api/v1/projects/northwind/analytics/competitors?window=all&${scope}&queryClass=${queryClass}`,
+        method: 'GET', url: `/api/v1/projects/northwind/analytics/competitors?window=all&${scope}&queryClass=${queryClass}&groupBy=model`,
       })
       expect(response.statusCode, response.body).toBe(200)
       expect(response.json()).toMatchObject({
         evidence: { answeredResults: count },
+        modelComparison: { totalGroups: count, groups: count === 0 ? [] : [{ model: 'shared-model', snapshotCount: 1 }] },
       })
     }
   })
-
 
   it('allows scoped read-only keys in Simple and Advanced scopes without changing stored evidence', async () => {
     const plan = marketPlan('reader-node', 'market-rival.example', 'Market Rival')
@@ -870,9 +1044,9 @@ describe('GET /projects/:name/analytics/competitors', () => {
       id: 'project_foreign', name: 'foreign', displayName: 'Foreign', canonicalDomain: 'foreign.example',
       country: 'US', language: 'en', providers: ['openai'], locations: [], createdAt: NOW, updatedAt: NOW,
     }).run()
-    const key = 'cnry_competitor_reader'
+    const key = 'cnry_competitor_model_reader'
     db.insert(apiKeys).values({
-      id: 'competitor-reader-key', name: 'Competitor reader', keyHash: hashApiKey(key), keyPrefix: key.slice(0, 9),
+      id: 'model-reader-key', name: 'Model reader', keyHash: hashApiKey(key), keyPrefix: key.slice(0, 9),
       scopes: ['read'], projectId: 'project_northwind', createdAt: NOW,
     }).run()
     await app.close()
@@ -890,13 +1064,13 @@ describe('GET /projects/:name/analytics/competitors', () => {
     for (const scope of ['', '&groupKey=regional', '&scope=all-markets']) {
       const response = await app.inject({
         method: 'GET', headers,
-        url: `/api/v1/projects/northwind/analytics/competitors?window=all&provider=openai&runId=run_normal${scope}`,
+        url: `/api/v1/projects/northwind/analytics/competitors?window=all&provider=openai&model=reader-model&groupBy=model${scope}`,
       })
       expect(response.statusCode, response.body).toBe(200)
-      expect(response.json()).toMatchObject({ evidence: { answeredResults: 1 } })
+      expect(response.json()).toMatchObject({ modelComparison: { totalGroups: 1, groups: [{ model: 'reader-model', snapshotCount: 1 }] } })
     }
     const foreign = await app.inject({
-      method: 'GET', headers, url: '/api/v1/projects/foreign/analytics/competitors?window=all',
+      method: 'GET', headers, url: '/api/v1/projects/foreign/analytics/competitors?window=all&groupBy=model',
     })
     expect(foreign.statusCode, foreign.body).toBe(403)
     expect({

@@ -2012,7 +2012,7 @@ export const getApiV1ProjectsByNameAnalyticsCompetitorsQueryKey = (options: Opti
 /**
  * Get the stored competitor landscape
  *
- * Returns project pins first, then stored-discovery direct competitors and non-competitive cited sources. Mention share uses answer text only; citations remain a separate source-list signal. This is a stored-evidence read: it never calls a provider or classifier. Probe and non-terminal observations are excluded and counted explicitly. A groupKey scopes an Advanced Measurement market to its frozen v2 execution nodes and usage edges.
+ * Returns project pins first, then stored-discovery direct competitors and non-competitive cited sources. Mention share uses answer text only; citations remain a separate source-list signal. This is a stored-evidence read: it never calls a provider or classifier. Probe and non-terminal observations are excluded and counted explicitly. A groupKey scopes an Advanced Measurement market to its frozen v2 execution nodes and usage edges. Optional model filtering and groupBy=model apply to project, selected-market, and all-markets scopes; frozen competitor identities stay bound to their historical runs. The default response remains the combined landscape.
  */
 export const getApiV1ProjectsByNameAnalyticsCompetitorsOptions = (options: Options<GetApiV1ProjectsByNameAnalyticsCompetitorsData>) => {
     return queryOptions({

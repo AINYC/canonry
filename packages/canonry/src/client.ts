@@ -2087,7 +2087,7 @@ export class ApiClient {
     )
   }
 
-  /** Historical competitor SOV from stored evidence only; never runs a provider or discovery job. */
+  /** Stored competitor SOV, optionally grouped or filtered by requested model; never starts provider work. */
   async getCompetitorLandscape(
     project: string,
     opts: CompetitorLandscapeQuery = {},
@@ -2096,7 +2096,7 @@ export class ApiClient {
       getApiV1ProjectsByNameAnalyticsCompetitors({
         client: this.heyClient,
         path: { name: project },
-        query: opts as never,
+        query: opts,
       }),
     )
   }

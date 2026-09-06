@@ -1,5 +1,5 @@
-import type { ProjectDto, InsightDto, MentionShareBreakdownDto, ProjectOverviewDto, RunErrorDto, RunKind } from '@ainyc/canonry-contracts'
-import { RunKinds, RunStatuses, RunTriggers, CitationStates, formatRunErrorOneLine } from '@ainyc/canonry-contracts'
+import type { ProjectDto, InsightDto, MentionShareBreakdownDto, ProjectOverviewDto, QueryClassifier, RunErrorDto, RunKind } from '@ainyc/canonry-contracts'
+import { RunKinds, RunStatuses, RunTriggers, CitationStates, compileQueryClassifier, effectiveBrandNames, formatRunErrorOneLine } from '@ainyc/canonry-contracts'
 import type {
   ApiCompetitor,
   ApiBingCoverageSummary,
@@ -153,6 +153,7 @@ function buildEvidenceFromTimeline(
   timeline: ApiTimelineEntry[],
   latestRunDetails: ApiRunDetail[],
   savedQueries: ApiQuery[],
+  queryClassifier: QueryClassifier | null,
 ): CitationInsightVm[] {
   const results: CitationInsightVm[] = []
   let idx = 0
@@ -298,6 +299,7 @@ function buildEvidenceFromTimeline(
           results.push({
             id: `evidence_${projectName}_${idx++}`,
             query: entry.query,
+            queryClass: queryClassifier?.classify(entry.query) ?? null,
             provider: snap?.provider ?? provider,
             model: snap?.model ?? null,
             location: snap?.location ?? location,
@@ -338,6 +340,7 @@ function buildEvidenceFromTimeline(
     results.push({
       id: `evidence_${projectName}_${idx++}`,
       query: q.query,
+      queryClass: queryClassifier?.classify(q.query) ?? null,
       provider: '',
       model: null,
       location: null,
@@ -514,7 +517,10 @@ export function buildProjectCommandCenter(data: ProjectData): ProjectCommandCent
   // Evidence cards stay client-side for now: per Q8 of the deepening plan, the
   // /timeline endpoint is the source for per-query history. Eventually a
   // dedicated /evidence endpoint replaces this client-side derivation.
-  const evidence = buildEvidenceFromTimeline(dto.name, data.timeline, data.latestRunDetails, data.queries)
+  // This project-wide evidence has no Target assignments. Advanced Measurement
+  // uses its own frozen assignment classes in the scoped overview adapters.
+  const queryClassifier = compileQueryClassifier(effectiveBrandNames(data.project))
+  const evidence = buildEvidenceFromTimeline(dto.name, data.timeline, data.latestRunDetails, data.queries, queryClassifier)
 
   const sortedRuns = [...data.runs].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   const runItems = sortedRuns.map(r => toRunListItem(r, data.project.displayName || data.project.name))

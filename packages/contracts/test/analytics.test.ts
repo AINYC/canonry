@@ -16,6 +16,8 @@ import {
   sourceBreakdownDtoSchema,
   competitorLandscapeQuerySchema,
   competitorLandscapeResponseSchema,
+  competitorLandscapeModelComparisonSchema,
+  COMPETITOR_LANDSCAPE_MODEL_GROUP_LIMIT,
   parseWindow,
   resolveDateRange,
 } from '../src/analytics.js'
@@ -541,6 +543,68 @@ describe('competitor landscape DTO schemas', () => {
     })
     expect(parsed.observed[0]!.shareOfVoice).toBe(37.5)
     expect(parsed.evidence.mentionCredits).toBe(8)
+    expect(parsed).not.toHaveProperty('modelComparison')
+    expect(parsed.filters).not.toHaveProperty('groupBy')
+    expect(parsed.filters).not.toHaveProperty('model')
+  })
+
+  it('accepts opt-in requested-model grouping and provider-qualified model filters', () => {
+    expect(competitorLandscapeQuerySchema.parse({ groupBy: 'model' })).toEqual({ groupBy: 'model' })
+    expect(competitorLandscapeQuerySchema.parse({
+      provider: ' openai ', model: ' gpt-test ', groupBy: 'model', groupKey: 'north',
+    })).toEqual({ provider: 'openai', model: 'gpt-test', groupBy: 'model', groupKey: 'north' })
+    expect(competitorLandscapeQuerySchema.parse({
+      provider: 'openai', model: 'gpt-test', scope: 'all-markets',
+    })).toEqual({ provider: 'openai', model: 'gpt-test', scope: 'all-markets' })
+  })
+
+  it.each([
+    { model: 'gpt-test' },
+    { provider: '', model: 'gpt-test' },
+    { provider: 'openai', model: ' ' },
+    { groupBy: 'provider' },
+    { groupBy: 'served-model' },
+    { groupBy: 'model', groupKey: 'north', scope: 'all-markets' },
+    { byModel: true },
+  ])('rejects invalid or ambiguous model selection %j', input => {
+    expect(competitorLandscapeQuerySchema.safeParse(input).success).toBe(false)
+  })
+
+  it('preserves requested-model unknowns and separate raw served-model evidence', () => {
+    const group = {
+      provider: 'openai',
+      model: null,
+      servedModels: { status: 'mixed', models: ['gpt-test-2026-08-01'], includesUnknown: true },
+      snapshotCount: 2,
+      project: { ...row, surfaceClass: 'own', mentionCount: 1, citationCount: 0, answeredResults: 2, shareOfVoice: 50 },
+      pinned: [],
+      observed: [{ ...row, mentionCount: 1, citationCount: 1, answeredResults: 2, shareOfVoice: 50 }],
+      otherSources: [],
+      evidence: {
+        answeredResults: 2, sourceResults: 1, missingAnswerTextResults: 0, mentionCredits: 2,
+        incompleteSourceResults: 0, excludedProbeResults: 0, excludedNonCompletedResults: 0,
+      },
+      truncated: false,
+    }
+    const comparison = { basis: 'requested-model', groups: [group], totalGroups: 1, truncated: false }
+    const parsed = competitorLandscapeModelComparisonSchema.parse(comparison)
+    expect(parsed.groups[0]!.model).toBeNull()
+    expect(parsed.groups[0]!.servedModels).toEqual(group.servedModels)
+    expect(competitorLandscapeModelComparisonSchema.safeParse({
+      ...comparison, groups: [{ ...group, model: 'gpt-test', servedModels: { status: 'unknown' } }],
+    }).success).toBe(true)
+    expect(competitorLandscapeModelComparisonSchema.safeParse({
+      ...comparison, groups: [{ ...group, snapshotCount: 0 }],
+    }).success).toBe(false)
+    expect(competitorLandscapeModelComparisonSchema.safeParse({
+      ...comparison, basis: 'served-model',
+    }).success).toBe(false)
+    expect(competitorLandscapeModelComparisonSchema.safeParse({
+      ...comparison, groups: Array.from({ length: COMPETITOR_LANDSCAPE_MODEL_GROUP_LIMIT + 1 }, () => group),
+    }).success).toBe(false)
+    expect(competitorLandscapeModelComparisonSchema.parse({
+      basis: 'requested-model', groups: [], totalGroups: 0, truncated: false,
+    }).groups).toEqual([])
   })
 
   it('accepts a market/group filter and rejects an ambiguous share scale', () => {

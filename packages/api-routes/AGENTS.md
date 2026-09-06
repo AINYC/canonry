@@ -183,6 +183,14 @@ Routes fire lifecycle hooks via `opts` callbacks — `onRunCreated`, `onProvider
   percentages. Compare draft pins with active pins per group. Combine all
   market aliases when identities share a registrable domain.
 - Advanced pinning is a revision-guarded draft mutation. It never publishes.
+- Optional `groupBy=model` adds provider/requested-model groups to the same
+  stored evidence. Trim IDs and retain null/empty IDs as unknown. Never infer
+  requested identity from current settings or served models. Preserve raw
+  served IDs and unknown served evidence separately. `model` requires `provider`
+  and narrows totals and exclusions before grouping. Group only eligible
+  observations. Absent models are unmeasured, not zero. Cap groups at 50 and
+  ranked rows at 100 per group. Retain every pin and all frozen Advanced scopes.
+  This is descriptive, not a matched-query comparison.
 - Advanced query classes follow frozen execution nodes and scoped Target edges.
   Do not combine classes by question text or query ID.
 - Generated domain labels use the shared minimum brand length. Do not convert

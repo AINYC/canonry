@@ -1,6 +1,6 @@
 import { Fragment, useMemo, useState } from 'react'
 import { ChevronRight } from 'lucide-react'
-import { CitationStates, brandLabelFromDomain } from '@ainyc/canonry-contracts'
+import { CitationStates, brandLabelFromDomain, type QueryClass } from '@ainyc/canonry-contracts'
 
 import { Button } from '../ui/button.js'
 import { CitationBadge } from '../shared/CitationBadge.js'
@@ -10,6 +10,7 @@ import {
   useClientTable,
 } from '../shared/DataTableControls.js'
 import { ProviderBadge } from '../shared/ProviderBadge.js'
+import { ToneBadge } from '../shared/ToneBadge.js'
 import { CitationTimeline, mergeProviderHistories } from './CitationTimeline.js'
 import { useDrawer } from '../../hooks/use-drawer.js'
 import { highlightTermsInText, type HighlightTermGroup } from '../../lib/highlight.js'
@@ -17,6 +18,7 @@ import type { CitationInsightVm, CitationState, RunHistoryPoint } from '../../vi
 
 export type CoverageMode = 'citations' | 'mentions'
 type Density = 'compact' | 'detailed'
+type QueryClassSelection = 'all' | QueryClass | 'unclassified'
 type SignalTone = 'positive' | 'negative' | 'neutral' | 'pending'
 
 export interface EvidenceSignalSummary {
@@ -28,12 +30,17 @@ export interface EvidenceSignalSummary {
 interface EvidenceGroup {
   key: string
   phrase: string
+  queryClass: QueryClass | null
   location: string | null
   items: CitationInsightVm[]
   rawItems: CitationInsightVm[]
 }
 
 const ANSWER_PREVIEW_MAX = 320
+
+function queryClassLabel(queryClass: QueryClass | null): string {
+  return queryClass === 'branded' ? 'Branded' : queryClass === 'non-brand' ? 'Non-brand' : 'Unclassified'
+}
 
 function evidenceGroupSearchText(group: EvidenceGroup): string {
   return [
@@ -197,22 +204,28 @@ export function EvidenceTable({
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set())
   const [mode, setMode] = useState<CoverageMode>('mentions')
   const [density, setDensity] = useState<Density>(defaultDensity)
+  const [queryClassSelection, setQueryClassSelection] = useState<QueryClassSelection>('all')
 
   const groups = useMemo(() => {
     const map = new Map<string, EvidenceGroup>()
     for (const rawItem of evidence) {
       const phrase = rawItem.query
+      const queryClass = rawItem.queryClass ?? null
       const location = compareLocations ? (rawItem.location ?? null) : null
-      const key = compareLocations ? JSON.stringify([phrase, location]) : phrase
-      const existing = map.get(key) ?? { key, phrase, location, items: [], rawItems: [] }
+      const key = JSON.stringify([phrase, queryClass, location])
+      const existing = map.get(key) ?? { key, phrase, queryClass, location, items: [], rawItems: [] }
       existing.items.push(projectItemForMode(rawItem, mode))
       existing.rawItems.push(rawItem)
       map.set(key, existing)
     }
     return [...map.values()]
   }, [evidence, mode, compareLocations])
+  const classGroups = useMemo(() => groups.filter(group =>
+    queryClassSelection === 'all'
+    || (queryClassSelection === 'unclassified' ? group.queryClass === null : group.queryClass === queryClassSelection),
+  ), [groups, queryClassSelection])
   const groupsTable = useClientTable({
-    rows: groups,
+    rows: classGroups,
     getSearchText: evidenceGroupSearchText,
   })
   const visibleGroupKeys = groupsTable.rows.map((group) => group.key)
@@ -328,13 +341,31 @@ export function EvidenceTable({
         </div>
       </div>
       {groups.length > 0 ? (
-        <DataTableSearch
-          value={groupsTable.query}
-          onChange={groupsTable.setQuery}
-          label="Filter tracked queries"
-          placeholder="Filter query, location, or provider"
-          className="mb-3 max-w-md"
-        />
+        <div className="mb-3 flex flex-wrap items-center gap-3">
+          <DataTableSearch
+            value={groupsTable.query}
+            onChange={groupsTable.setQuery}
+            label="Filter tracked queries"
+            placeholder="Filter query, location, or provider"
+            className="w-full max-w-md"
+          />
+          <label className="flex items-center gap-2 text-xs text-secondary">
+            Query class
+            <select
+              value={queryClassSelection}
+              onChange={event => {
+                setQueryClassSelection(event.target.value as QueryClassSelection)
+                groupsTable.setPage(1)
+              }}
+              className="h-9 rounded-md border border-default bg-surface px-3 text-sm text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-500"
+            >
+              <option value="all">All queries</option>
+              <option value="branded">Branded</option>
+              <option value="non-brand">Non-brand</option>
+              <option value="unclassified">Unclassified</option>
+            </select>
+          </label>
+        </div>
       ) : null}
       <div className="evidence-table-wrap">
         <table className="evidence-table">
@@ -349,7 +380,7 @@ export function EvidenceTable({
             </tr>
           </thead>
           <tbody>
-            {groupsTable.rows.map(({ key: groupKey, phrase, location, items, rawItems }) => {
+            {groupsTable.rows.map(({ key: groupKey, phrase, queryClass, location, items, rawItems }) => {
               const isExpanded = expandedRows.has(groupKey)
               const states = items.map(i => i.citationState)
               const aggState: CitationState =
@@ -392,6 +423,7 @@ export function EvidenceTable({
                           </span>
                         )}
                         <div className="flex flex-wrap gap-1 mt-1">
+                          <ToneBadge tone="neutral" className="whitespace-nowrap">{queryClassLabel(queryClass)}</ToneBadge>
                           {items.map(item => (
                             <ProviderBadge key={item.id} provider={item.provider} />
                           ))}
@@ -468,7 +500,7 @@ export function EvidenceTable({
           </tbody>
         </table>
       </div>
-      {groupsTable.totalRows === 0 && groupsTable.hasQuery ? (
+      {groupsTable.totalRows === 0 && (groupsTable.hasQuery || queryClassSelection !== 'all') ? (
         <p className="supporting-copy mt-3">No tracked queries match this filter.</p>
       ) : null}
       <DataTablePagination
@@ -477,7 +509,7 @@ export function EvidenceTable({
         visibleRows={groupsTable.rows.length}
         totalRows={groupsTable.totalRows}
         onPageChange={groupsTable.setPage}
-        itemLabel={groupsTable.hasQuery ? 'matches' : 'queries'}
+        itemLabel={groupsTable.hasQuery || queryClassSelection !== 'all' ? 'matches' : 'queries'}
       />
       <p className="sr-only" aria-live="polite">
         Showing {presenceVerb === 'cited' ? 'citations (sources)' : 'mentions (answer text)'}.

@@ -707,7 +707,7 @@ const competitorsInputSchema = z.object({
   project: projectNameSchema,
   request: competitorBatchRequestSchema,
 })
-const competitorLandscapeInputSchema = competitorLandscapeQuerySchema.extend({
+const competitorLandscapeInputSchema = competitorLandscapeQuerySchema.safeExtend({
   project: projectNameSchema,
 }).strict()
 
@@ -1198,7 +1198,7 @@ export const canonryMcpTools = [
   defineTool({
     name: 'canonry_competitor_landscape',
     title: 'Get historical competitor landscape',
-    description: 'Returns pinned competitors first, then observed direct competitors and other cited sources from stored answer/source evidence only. Mention share is percentage points (0..100) from answer text; citations are independent. Advanced reads support one market group or explicit `scope: all-markets`; no provider, discovery, or classifier work runs. When `truncated` is true, ranked observed and other-source lists are capped while pins remain complete.',
+    description: 'Returns pinned competitors first, then observed direct competitors and other cited sources from stored answer/source evidence only. Mention share is percentage points (0..100) from answer text; citations are independent. Optional groupBy: model adds provider/requested-model groups with separate served-model evidence and sample counts. Optional model filters one exact requested model ID and requires provider. Unknown historical models remain explicit. Groups are not a matched-query or equal-weight comparison. Advanced reads support one market group or explicit scope: all-markets. No provider, discovery, or classifier work runs. Ranked lists are capped at 100 observed/other-source rows per group; pins remain complete. Model groups are capped at 50 and disclose truncation.',
     access: 'read',
     tier: 'monitoring',
     inputSchema: competitorLandscapeInputSchema,

@@ -85,12 +85,14 @@ function WindowControl({
 function LandscapeRow({
   row,
   isProject = false,
+  metricsAvailable = true,
   canManage,
   onPin,
   onUnpin,
 }: {
   row: CompetitorLandscapeRow
   isProject?: boolean
+  metricsAvailable?: boolean
   canManage: boolean
   onPin?: CompetitorMutation
   onUnpin?: CompetitorMutation
@@ -100,7 +102,7 @@ function LandscapeRow({
   // look like current evidence. Pinning is the only truthful row action here.
   const canPin = !isProject && canManage && !row.pinned && Boolean(onPin)
   const canUnpin = !isProject && canManage && row.pinned && Boolean(onUnpin)
-  const hasWindowSources = row.sampleUrls.length > 0
+  const hasWindowSources = metricsAvailable && row.sampleUrls.length > 0
   const [mutationPending, setMutationPending] = useState(false)
   const [mutationError, setMutationError] = useState<string | null>(null)
 
@@ -126,9 +128,9 @@ function LandscapeRow({
         {isProject ? <span className="ml-1 text-secondary">(you)</span> : null}
       </th>
       <td className="text-secondary">{isProject ? 'Your brand' : sourceClassLabel(row.surfaceClass)}</td>
-      <td className="tabular-nums text-strong">{formatShare(row.shareOfVoice)}</td>
-      <td className="tabular-nums text-secondary">{row.mentionCount}</td>
-      <td className="tabular-nums text-secondary">{row.citationCount}</td>
+      <td className="tabular-nums text-strong">{metricsAvailable ? formatShare(row.shareOfVoice) : 'Unavailable'}</td>
+      <td className="tabular-nums text-secondary">{metricsAvailable ? row.mentionCount : 'Unavailable'}</td>
+      <td className="tabular-nums text-secondary">{metricsAvailable ? row.citationCount : 'Unavailable'}</td>
       <td className="text-right">
         {canPin || canUnpin || hasWindowSources ? (
           <div className="flex min-w-max items-start justify-end gap-2">
@@ -307,7 +309,7 @@ export function CompetitorLandscape({
                 ) : null}
                 <GroupHeading>Pinned</GroupHeading>
                 {pinned.length > 0 ? pinned.map(row => (
-                  <LandscapeRow key={row.domain} row={{ ...row, pinned: true }} canManage={canManage} onUnpin={onUnpin} />
+                  <LandscapeRow key={row.domain} row={{ ...row, pinned: true }} metricsAvailable={Boolean(landscape)} canManage={canManage} onUnpin={onUnpin} />
                 )) : (
                   <tr><td colSpan={6} className="text-secondary">No pinned competitors.</td></tr>
                 )}

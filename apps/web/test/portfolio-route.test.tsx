@@ -146,9 +146,7 @@ async function renderAt(
   if (measurement?.competitorLandscape) {
     const q = {
       window: measurement.competitorLandscapeKey?.window ?? '30d',
-      ...(measurement.plan.active?.plan.schemaVersion === 2
-        ? { queryClass: measurement.competitorLandscapeKey?.queryClass ?? 'all' }
-        : {}),
+      ...(measurement.plan.active?.plan.schemaVersion === 2 ? { queryClass: measurement.competitorLandscapeKey?.queryClass ?? 'all' } : {}),
       ...(measurement.competitorLandscapeKey?.groupKey ? { groupKey: measurement.competitorLandscapeKey.groupKey } : {}),
       ...(measurement.competitorLandscapeKey?.scope ? { scope: measurement.competitorLandscapeKey.scope } : {}),
     }
@@ -492,6 +490,10 @@ test('a Simple project keeps the existing Overview without advertising advanced 
   const html = await renderAt('/projects/project_citypoint')
 
   expect(html).toContain('Competitor landscape')
+  expect(html.match(/Where competitors are winning/g)).toHaveLength(1)
+  expect(html).toContain('Mention gaps')
+  expect(html).toContain('Citation gaps')
+  expect(html.match(/competitive-summary/g)).toHaveLength(1)
   expect(html).toContain('AI sweep running')
   expect(html).not.toContain('Set up advanced measurement')
   expect(html).not.toContain('Republish setup')
@@ -569,6 +571,7 @@ test('an active setup replaces the Simple Overview with the advanced measurement
   // Competitor history remains available on the legacy Advanced Measurement
   // surface; group-only scope does not exist until a v2 plan is active.
   expect(html).toContain('Competitor landscape')
+  expect(html).not.toContain('Where competitors are winning')
 })
 
 test('a version-two setup never renders version-one class metrics as if they were current', async () => {
@@ -585,6 +588,7 @@ test('a version-two setup never renders version-one class metrics as if they wer
   expect(html).toContain('1 of 1 (100%)')
   expect(html).not.toContain('Republish setup')
   expect(html).not.toContain('Republish setup to enable Non-brand and Branded reporting.')
+  expect(html).not.toContain('Where competitors are winning')
 })
 
 test('a version-two Overview uses server scope, search and pagination and defers evidence until a Property expands', async () => {
@@ -1817,6 +1821,73 @@ test('a query class in the URL selects that class on first paint', async () => {
   const checked = control?.querySelector('[role="radio"][aria-checked="true"]')
   expect(checked?.textContent).toBe('Branded')
   expect(html).toContain('Branded market rival')
+})
+
+test('switching query class refetches the competitor landscape under the matching cache key', async () => {
+  const observed: string[] = []
+  const realFetch = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const raw = input instanceof Request ? input.url : String(input)
+    const url = new URL(raw, window.location.origin)
+    const path = `${decodeURIComponent(url.pathname)}${url.search}`
+    observed.push(path)
+
+    if (path.endsWith('/runs?kind=answer-visibility')) return jsonResponse([])
+    if (path.endsWith('/queries')) return jsonResponse([])
+    if (path.endsWith('/measurement-plan')) return jsonResponse(measurementPlanV2Response(4))
+    if (path.endsWith('/measurement-setup')) return jsonResponse(activeMeasurementSetupResponse(4))
+    if (url.pathname.endsWith('/measurement-overview')) {
+      const queryClass = url.searchParams.get('queryClass') === 'branded' ? 'branded' as const : 'all' as const
+      return jsonResponse(measurementOverviewResponse({
+        queryClass,
+        label: queryClass === 'branded' ? 'Branded Property' : 'All-query Property',
+      }))
+    }
+    if (url.pathname.endsWith('/analytics/competitors')) {
+      const queryClass = url.searchParams.get('queryClass') === 'branded' ? 'branded' as const : 'all' as const
+      const response = competitorLandscapeResponse({
+        scope: { kind: 'all-markets' },
+        pinnedLabel: queryClass === 'branded' ? 'Branded pin' : 'All-query pin',
+        observedLabel: queryClass === 'branded' ? 'Branded rival' : 'All-query rival',
+      })
+      return jsonResponse({
+        ...response,
+        filters: { ...response.filters, queryClass },
+      })
+    }
+    return jsonResponse({ code: 'NOT_FOUND', message: 'not found' }, 404)
+  }) as typeof fetch
+  onTestFinished(() => { globalThis.fetch = realFetch })
+
+  const fixture = createDashboardFixture({})
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const router = createAppRouter(queryClient, { initialEntries: ['/projects/project_citypoint'] })
+  await router.load()
+  const page = render(
+    <QueryClientProvider client={queryClient}>
+      <DashboardProvider value={{ dashboard: fixture.dashboard, health: fixture.health }}>
+        <RouterProvider router={router} />
+      </DashboardProvider>
+    </QueryClientProvider>,
+  )
+
+  expect(await page.findByText('All-query rival')).toBeTruthy()
+  expect(observed.some(path => (
+    path.includes('/analytics/competitors?')
+    && path.includes('scope=all-markets')
+    && path.includes('queryClass=all')
+  ))).toBe(true)
+
+  fireEvent.click(within(page.getByLabelText('Query type')).getByRole('radio', { name: 'Branded' }))
+
+  expect(await page.findByText('Branded Property')).toBeTruthy()
+  expect(await page.findByText('Branded rival')).toBeTruthy()
+  expect(observed.some(path => (
+    path.includes('/analytics/competitors?')
+    && path.includes('scope=all-markets')
+    && path.includes('queryClass=branded')
+  ))).toBe(true)
+  expect(router.state.location.search).toMatchObject({ class: 'branded' })
 })
 
 test('a stale group key in the URL falls back to all properties instead of erroring', async () => {

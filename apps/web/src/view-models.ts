@@ -1,4 +1,4 @@
-import type { ProjectDto, RunDto, RunStatus, GroundingSource, MentionShareDto, MovementComparisonDto, SuggestedQueriesSummaryDto } from '@ainyc/canonry-contracts'
+import type { ProjectDto, QueryClass, RunDto, RunStatus, GroundingSource, MentionShareDto, MovementComparisonDto, SuggestedQueriesSummaryDto } from '@ainyc/canonry-contracts'
 
 export type MetricTone = 'positive' | 'caution' | 'negative' | 'neutral'
 export type HealthState = 'checking' | 'ok' | 'error'
@@ -125,6 +125,8 @@ export interface ModelTransitionVm {
 export interface CitationInsightVm {
   id: string
   query: string
+  /** Project-wide read-time class; unavailable without usable brand identities. */
+  queryClass?: QueryClass | null
   provider: string
   model: string | null
   location: string | null

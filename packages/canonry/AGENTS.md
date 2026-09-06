@@ -264,6 +264,12 @@ Providers are registered at server startup in `server.ts`. Each provider adapter
 
 ## Common Mistakes
 
+- `competitor landscape --by-model` reads stored requested-model groups.
+  Keep served identity separate. A model filter requires a provider.
+  JSONL preserves the complete response as one compact document.
+- Large Aero competitor results can shorten text with explicit omission counts.
+  Preserve the complete structured response in the tool result's `details`.
+
 - **Instantiating `ApiClient` directly** — use `createApiClient()` which handles basePath and config.
 - **Casting API responses** — use typed DTOs from contracts, not `as { ... }`.
 - **Forgetting `--format json` support** — every output command needs it.

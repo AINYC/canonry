@@ -217,6 +217,113 @@ test('buildProjectCommandCenter defaults searchQueries to empty for not-yet-run 
   expect(evidence!.searchQueries).toEqual([])
 })
 
+function queryClassProjectData(): ProjectData {
+  const createdAt = '2026-09-05T00:00:00Z'
+  const queryTexts = [
+    'Is Acme Dental good?',
+    'Smile House reviews',
+    'Compare acmedental.com providers',
+    'Do Bright Teeth accept insurance?',
+    'best dentist near me',
+    'Acme Dentalcare alternatives',
+  ]
+  const run = {
+    id: 'run_query_classes',
+    projectId: 'project_query_classes',
+    kind: 'answer-visibility' as const,
+    status: 'completed' as const,
+    trigger: 'manual' as const,
+    createdAt,
+  }
+  return {
+    project: {
+      id: run.projectId,
+      name: 'query-classes',
+      displayName: 'Acme Dental',
+      canonicalDomain: 'acmedental.com',
+      ownedDomains: ['brightteeth.co.uk'],
+      aliases: ['Smile House'],
+      country: 'US',
+      language: 'en',
+      tags: [],
+      labels: {},
+      providers: ['gemini'],
+      providerModels: {},
+      locations: [],
+      measurement: { marketingHosts: [], brandTerms: [], leadEventNames: ['generate_lead'] },
+      autoExtractBacklinks: false,
+      configSource: 'api',
+      configRevision: 1,
+      createdAt,
+      updatedAt: createdAt,
+    },
+    runs: [run],
+    queries: queryTexts.map((query, index) => ({ id: `q_${index}`, query, createdAt })),
+    competitors: [],
+    timeline: queryTexts.map(query => ({
+      query,
+      runs: [{ runId: run.id, createdAt, citationState: 'not-cited', transition: 'not-cited' }],
+    })),
+    latestRunDetails: [{
+      ...run,
+      snapshots: queryTexts.map((query, index) => ({
+        id: `snapshot_${index}`,
+        runId: run.id,
+        queryId: `q_${index}`,
+        query,
+        provider: 'gemini',
+        model: 'gemini-2.5-flash',
+        citationState: 'not-cited',
+        answerText: '',
+        citedDomains: [],
+        competitorOverlap: [],
+        createdAt,
+      })),
+    }],
+    previousRunDetails: [],
+  }
+}
+
+test('project query evidence classifies display names, aliases, and owned domains with shared word matching', () => {
+  const evidence = buildProjectCommandCenter(queryClassProjectData()).visibilityEvidence
+  expect(evidence.map(row => [row.query, row.queryClass])).toEqual([
+    ['Is Acme Dental good?', 'branded'],
+    ['Smile House reviews', 'branded'],
+    ['Compare acmedental.com providers', 'branded'],
+    ['Do Bright Teeth accept insurance?', 'branded'],
+    ['best dentist near me', 'non-brand'],
+    ['Acme Dentalcare alternatives', 'non-brand'],
+  ])
+})
+
+test('pending query evidence uses the same classification and reclassifies after approved alias changes', () => {
+  const data = queryClassProjectData()
+  data.timeline = []
+  data.latestRunDetails = []
+  data.runs = []
+  const first = buildProjectCommandCenter(data).visibilityEvidence
+  expect(first.every(row => row.citationState === 'pending')).toBe(true)
+  expect(first.map(row => row.queryClass)).toEqual([
+    'branded', 'branded', 'branded', 'branded', 'non-brand', 'non-brand',
+  ])
+
+  data.project.aliases = []
+  expect(buildProjectCommandCenter(data).visibilityEvidence.find(row => row.query === 'Smile House reviews')?.queryClass)
+    .toBe('non-brand')
+})
+
+test('query evidence leaves classification unavailable when there is no usable project identity', () => {
+  const data = queryClassProjectData()
+  data.project.displayName = ''
+  data.project.canonicalDomain = ''
+  data.project.ownedDomains = []
+  data.project.aliases = []
+  expect(buildProjectCommandCenter(data).visibilityEvidence.every(row => row.queryClass === null)).toBe(true)
+  data.timeline = []
+  data.latestRunDetails = []
+  expect(buildProjectCommandCenter(data).visibilityEvidence.every(row => row.queryClass === null)).toBe(true)
+})
+
 test('buildDashboard maps Google settings into the dashboard view model', () => {
   const apiSettings: ApiSettings = {
     providers: [{

@@ -54,6 +54,17 @@ Shared DTOs, enums, Zod schemas, error codes, config validation, and **generic u
 4. Add a test file in `test/<topic>.test.ts` with happy path + edge cases (empty input, invalid input, boundary values).
 5. Migrate any inline duplicates you discover in the same change — don't leave duplication for "later."
 
+### Competitor model comparisons
+
+`competitorLandscapeQuerySchema` accepts optional `groupBy: model` and an exact
+requested `model` filter. A model filter requires `provider`. The optional
+`modelComparison` response groups stored evidence by provider and requested
+model, with independent counts and denominators. Null model identity remains
+unknown. `servedModels` carries separate upstream evidence. Never substitute
+requested identity for missing served identity. Existing aggregate responses
+remain valid without these optional fields. Pins remain project/market identities,
+not model-specific records. The same contract covers Simple and Advanced scopes.
+
 ### Error factory functions
 
 Always use factory functions — never hand-construct error JSON:

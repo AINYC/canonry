@@ -11,6 +11,7 @@ import {
 import {
   brandLabelFromDomain,
   competitorLandscapeQuerySchema,
+  COMPETITOR_LANDSCAPE_MODEL_GROUP_LIMIT,
   hostOf,
   parseStoredMeasurementPlanAnyVersion,
   parseWindow,
@@ -22,6 +23,7 @@ import {
   validationError,
   windowCutoff,
   type CompetitorLandscapeQueryClass,
+  type CompetitorLandscapeModelComparison,
   type CompetitorLandscapeResponse,
 } from '@ainyc/canonry-contracts'
 import { buildCompetitorLandscapeHistory, type CompetitorLandscapeIdentity, type CompetitorLandscapeSurfaceClass } from '@ainyc/canonry-intelligence'
@@ -29,12 +31,15 @@ import { resolveProject, resolveSnapshotAnswerMentioned } from './helpers.js'
 import { projectQueryClassifier } from './mention-share-inputs.js'
 import { activeMeasurementPlan } from './measurement-overview.js'
 import { draftRow, parseStoredAuthoring } from './measurement-draft-repo.js'
+import { classifyModelEvidence } from './model-evidence.js'
 
 type RawQuery = {
   window?: string
   groupKey?: string
   scope?: string
   provider?: string
+  model?: string
+  groupBy?: string
   queryClass?: string
   location?: string
   runId?: string
@@ -110,6 +115,8 @@ export async function competitorLandscapeRoutes(app: FastifyInstance) {
         queryId: querySnapshots.queryId,
         queryText: querySnapshots.queryText,
         provider: querySnapshots.provider,
+        model: querySnapshots.model,
+        servedModel: querySnapshots.servedModel,
         answerMentioned: querySnapshots.answerMentioned,
         answerText: querySnapshots.answerText,
         citedDomains: querySnapshots.citedDomains,
@@ -170,7 +177,7 @@ export async function competitorLandscapeRoutes(app: FastifyInstance) {
         aliases: [],
       }))
     const pinned = mergePins(advanced?.pendingPins ?? [], advanced?.activePinned ?? [], projectPins)
-    const history = buildCompetitorLandscapeHistory({
+    const buildHistory = (selectedSnapshots: typeof snapshots) => buildCompetitorLandscapeHistory({
       project: {
         domain: project.canonicalDomain,
         label: project.displayName,
@@ -178,7 +185,7 @@ export async function competitorLandscapeRoutes(app: FastifyInstance) {
       },
       pinned,
       classifications,
-      snapshots: snapshots.map(snapshot => ({
+      snapshots: selectedSnapshots.map(snapshot => ({
         id: snapshot.id,
         createdAt: snapshot.createdAt,
         answerText: snapshot.answerText,
@@ -188,13 +195,78 @@ export async function competitorLandscapeRoutes(app: FastifyInstance) {
         ...(advanced ? { frozenCompetitors: advanced.runScopes.get(snapshot.runId)?.competitors ?? [] } : {}),
       })),
     })
-    const incompleteSourceResults = snapshots.filter(snapshot => (
+    const history = buildHistory(snapshots)
+    const countIncompleteSources = (selectedSnapshots: typeof snapshots) => selectedSnapshots.filter(snapshot => (
       (snapshot.citedDomains.length > 0 || (snapshot.citedUrls?.length ?? 0) > 0)
       && snapshot.captureStatus !== 'complete'
     )).length
+    const incompleteSourceResults = countIncompleteSources(snapshots)
     const observed = history.observed.slice(0, COMPETITOR_LANDSCAPE_RANKED_ROW_LIMIT)
     const otherSources = history.otherSources.slice(0, COMPETITOR_LANDSCAPE_RANKED_ROW_LIMIT)
     const truncated = observed.length !== history.observed.length || otherSources.length !== history.otherSources.length
+
+    let modelComparison: CompetitorLandscapeModelComparison | undefined
+    if (filters.groupBy === 'model') {
+      // Only observed, eligible models form groups. A configured model or an
+      // excluded-only result is not a measured zero. JSON tuple keys prevent
+      // equal model IDs under different providers from collapsing together.
+      const modelGroups = new Map<string, {
+        provider: string
+        model: string | null
+        snapshots: typeof snapshots
+      }>()
+      for (const snapshot of snapshots) {
+        const model = requestedModel(snapshot.model)
+        const key = JSON.stringify([snapshot.provider, model])
+        const group = modelGroups.get(key)
+        if (group) group.snapshots.push(snapshot)
+        else modelGroups.set(key, { provider: snapshot.provider, model, snapshots: [snapshot] })
+      }
+      const excludedByModel = new Map<string, { probes: number; nonCompleted: number }>()
+      for (const snapshot of inScope) {
+        if (eligibleRuns.has(snapshot.runId)) continue
+        const key = JSON.stringify([snapshot.provider, requestedModel(snapshot.model)])
+        const excluded = excludedByModel.get(key) ?? { probes: 0, nonCompleted: 0 }
+        if (runById.get(snapshot.runId)?.trigger === 'probe') excluded.probes++
+        else excluded.nonCompleted++
+        excludedByModel.set(key, excluded)
+      }
+      const sortedGroups = [...modelGroups.values()].sort((left, right) => (
+        compareStoredIds(left.provider, right.provider)
+        || (left.model === null ? (right.model === null ? 0 : -1)
+          : right.model === null ? 1 : compareStoredIds(left.model, right.model))
+      ))
+      const groups = sortedGroups.slice(0, COMPETITOR_LANDSCAPE_MODEL_GROUP_LIMIT).map(group => {
+        const groupHistory = buildHistory(group.snapshots)
+        const groupObserved = groupHistory.observed.slice(0, COMPETITOR_LANDSCAPE_RANKED_ROW_LIMIT)
+        const groupOtherSources = groupHistory.otherSources.slice(0, COMPETITOR_LANDSCAPE_RANKED_ROW_LIMIT)
+        const excluded = excludedByModel.get(JSON.stringify([group.provider, group.model]))
+        return {
+          provider: group.provider,
+          model: group.model,
+          // Requested identity is never substituted for missing served evidence.
+          servedModels: classifyModelEvidence(group.snapshots.map(snapshot => snapshot.servedModel)),
+          snapshotCount: group.snapshots.length,
+          ...groupHistory,
+          observed: groupObserved,
+          otherSources: groupOtherSources,
+          evidence: {
+            ...groupHistory.evidence,
+            incompleteSourceResults: countIncompleteSources(group.snapshots),
+            excludedProbeResults: excluded?.probes ?? 0,
+            excludedNonCompletedResults: excluded?.nonCompleted ?? 0,
+          },
+          truncated: groupObserved.length !== groupHistory.observed.length
+            || groupOtherSources.length !== groupHistory.otherSources.length,
+        }
+      })
+      modelComparison = {
+        basis: 'requested-model',
+        groups,
+        totalGroups: sortedGroups.length,
+        truncated: groups.length !== sortedGroups.length,
+      }
+    }
 
     const response: CompetitorLandscapeResponse = {
       window,
@@ -219,11 +291,14 @@ export async function competitorLandscapeRoutes(app: FastifyInstance) {
         scope: advanced?.kind === 'all-markets' ? 'all-markets' : 'project',
         groupKey: advanced?.kind === 'group' ? advanced.groupKey! : null,
         provider: filters.provider ?? null,
+        ...(filters.model !== undefined ? { model: filters.model } : {}),
+        ...(filters.groupBy !== undefined ? { groupBy: filters.groupBy } : {}),
         queryClass: filters.queryClass ?? 'all',
         location: filters.location ?? null,
         runId: filters.runId ?? null,
       },
       truncated,
+      ...(modelComparison ? { modelComparison } : {}),
     }
     return reply.send(response)
   })
@@ -349,16 +424,18 @@ function snapshotMatchesFilters(input: {
     queryId: string | null
     queryText: string | null
     provider: string
+    model: string | null
     location: string | null
     measurementExecutionId: string | null
   }
-  filters: { provider?: string; location?: string; queryClass?: CompetitorLandscapeQueryClass }
+  filters: { provider?: string; model?: string; location?: string; queryClass?: CompetitorLandscapeQueryClass }
   advanced: AdvancedScope | null
   queryTextById: ReadonlyMap<string, string>
   queryClassifier: ((queryText: string | null | undefined) => 'branded' | 'non-brand') | null
 }): boolean {
   const { snapshot, filters, advanced, queryTextById, queryClassifier } = input
   if (filters.provider && snapshot.provider !== filters.provider) return false
+  if (filters.model !== undefined && requestedModel(snapshot.model) !== filters.model) return false
   if (filters.location && snapshot.location !== filters.location) return false
   if (advanced) {
     const frozen = advanced.runScopes.get((snapshot as { runId?: string }).runId ?? '')
@@ -381,6 +458,14 @@ function snapshotMatchesFilters(input: {
     if (queryClassifier(queryText) !== filters.queryClass) return false
   }
   return true
+}
+
+function requestedModel(model: string | null): string | null {
+  return model?.trim() || null
+}
+
+function compareStoredIds(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0
 }
 
 function normalizedDomain(value: string): string | null {

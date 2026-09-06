@@ -1,7 +1,7 @@
 import { createApiClient } from '../client.js'
 import { isMachineFormat } from '../cli-error.js'
 import { emitJsonl } from '../cli-output.js'
-import type { CompetitorLandscapeQuery, CompetitorLandscapeResponse } from '@ainyc/canonry-contracts'
+import type { CompetitorLandscapeQuery, CompetitorLandscapeResponse, ModelEvidenceState } from '@ainyc/canonry-contracts'
 
 function getClient() {
   return createApiClient()
@@ -105,6 +105,8 @@ export async function showCompetitorLandscape(project: string, options: Competit
     scope: options.scope,
     groupKey: options.groupKey,
     provider: options.provider,
+    ...(options.groupBy ? { groupBy: options.groupBy } : {}),
+    ...(options.model !== undefined ? { model: options.model } : {}),
     queryClass: options.queryClass,
     location: options.location,
     runId: options.runId,
@@ -128,6 +130,9 @@ function printCompetitorLandscape(data: CompetitorLandscapeResponse): void {
     ? `market ${data.scope.groupKey}`
     : data.scope.kind === 'all-markets' ? 'all markets' : 'project'
   console.log(`Competitor landscape · ${scope} · ${data.window}`)
+  if (data.filters.model !== undefined) {
+    console.log(`Requested model filter: ${data.filters.provider} · ${data.filters.model}`)
+  }
   console.log('Mention share is answer-text evidence; citations are independent source-list evidence.')
   if (data.truncated) console.log('Top 100 observed competitors and top 100 other cited sources shown; pinned competitors are complete.')
   console.log('')
@@ -140,11 +145,37 @@ function printCompetitorLandscape(data: CompetitorLandscapeResponse): void {
     `Evidence: ${data.evidence.answeredResults} answer-text result(s), ${data.evidence.sourceResults} source result(s); `
     + `excluded: ${data.evidence.excludedProbeResults} probe, ${data.evidence.excludedNonCompletedResults} non-completed.`,
   )
+  if (data.modelComparison) printModelComparison(data.modelComparison)
+}
+
+function describeServedModels(evidence: ModelEvidenceState): string {
+  if (evidence.status === 'unknown') return 'Unknown (not disclosed)'
+  if (evidence.status === 'known') return evidence.model
+  return [...evidence.models, ...(evidence.includesUnknown ? ['Unknown (not disclosed)'] : [])].join(', ')
+}
+
+function printModelComparison(comparison: NonNullable<CompetitorLandscapeResponse['modelComparison']>): void {
+  console.log('')
+  console.log(`Model comparison · requested-model basis · ${comparison.groups.length} of ${comparison.totalGroups} groups`)
+  console.log('Groups use stored observations. They do not form a matched-query or equal-weight comparison.')
+  if (comparison.truncated) console.log('The first 50 provider/model groups are shown. Additional groups are omitted.')
+  for (const group of comparison.groups) {
+    console.log('')
+    console.log(`${group.provider} · requested model: ${group.model ?? 'Unknown (not recorded)'}`)
+    console.log(`Served model evidence: ${describeServedModels(group.servedModels)}`)
+    console.log(`Samples: ${group.snapshotCount} snapshot(s), ${group.evidence.answeredResults} answer-text result(s), ${group.evidence.sourceResults} source result(s).`)
+    printLandscapeRows('Your brand', [group.project], true)
+    printLandscapeRows('Pinned competitors', group.pinned, true)
+    printLandscapeRows('Observed competitors', group.observed, true)
+    printLandscapeRows('Other cited sources', group.otherSources, true)
+    if (group.truncated) console.log('Top 100 observed competitors and top 100 other sources shown. Pinned competitors are complete.')
+  }
 }
 
 function printLandscapeRows(
   heading: string,
   rows: readonly CompetitorLandscapeResponse['pinned'][number][],
+  showSampleCount = false,
 ): void {
   console.log(`${heading}:`)
   if (rows.length === 0) {
@@ -153,6 +184,6 @@ function printLandscapeRows(
   }
   for (const row of rows) {
     const sov = row.shareOfVoice === null ? '—' : `${row.shareOfVoice.toFixed(1)}%`
-    console.log(`  ${row.domain}  mention ${row.mentionCount} · citation ${row.citationCount} · SOV ${sov}`)
+    console.log(`  ${row.domain}  mention ${row.mentionCount} · citation ${row.citationCount} · SOV ${sov}${showSampleCount ? ` · answers ${row.answeredResults}` : ''}`)
   }
 }
