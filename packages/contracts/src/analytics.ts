@@ -530,7 +530,12 @@ export const competitorLandscapeRowSchema = z.object({
   pinned: z.boolean(),
   /** One answer-text match at most per result. */
   mentionCount: z.number().int().nonnegative(),
-  /** Percentage points (0..100), null outside the competitive denominator. */
+  /**
+   * Percentage points (0..100). Null outside the competitive denominator, and
+   * null for any selection that pools query classes: a brand wins its own
+   * branded queries by definition, so a pooled ratio flatters the project and
+   * buries every competitor. Counts stay populated either way.
+   */
   shareOfVoice: z.number().min(0).max(100).nullable(),
   /** One source-list credit at most per result. Independent of mentions. */
   citationCount: z.number().int().nonnegative(),
@@ -592,9 +597,9 @@ export const competitorLandscapeResponseSchema = z.object({
   project: competitorLandscapeRowSchema,
   /** Explicit/custom competitors, preserved even with zero observations. */
   pinned: z.array(competitorLandscapeRowSchema),
-  /** Stored-discovery direct competitors, ordered by historical mention SOV. */
+  /** Stored-discovery direct competitors, ordered by historical mention share. */
   observed: z.array(competitorLandscapeRowSchema),
-  /** Aggregators, editorial, unknown, and other cited sources; never SOV competitors. */
+  /** Aggregators, editorial, unknown, and other cited sources; never share-of-voice competitors. */
   otherSources: z.array(competitorLandscapeRowSchema),
   evidence: competitorLandscapeEvidenceSchema,
   /** Present only when groupBy=model; pooled fields remain available and unchanged. */

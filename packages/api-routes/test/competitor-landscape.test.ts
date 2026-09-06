@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { eq } from 'drizzle-orm'
 import Fastify from 'fastify'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished } from 'vitest'
 import {
   apiKeys,
   competitors,
@@ -209,19 +209,20 @@ describe('GET /projects/:name/analytics/competitors', () => {
         excludedNonCompletedResults: 1,
       },
     })
-    expect(body.project).toMatchObject({ domain: 'northwind.example', mentionCount: 1, shareOfVoice: 33.3 })
+    // Pooled read: the counts stand, the ratio is withheld.
+    expect(body.project).toMatchObject({ domain: 'northwind.example', mentionCount: 1, shareOfVoice: null })
     expect(body.pinned).toEqual([expect.objectContaining({
       domain: 'rival.example',
       pinned: true,
       mentionCount: 1,
-      shareOfVoice: 33.3,
+      shareOfVoice: null,
       citationCount: 2,
     })])
     expect(body.observed).toEqual([expect.objectContaining({
       domain: 'challenger.example',
       pinned: false,
       mentionCount: 1,
-      shareOfVoice: 33.3,
+      shareOfVoice: null,
       citationCount: 1,
     })])
     expect(body.otherSources).toEqual([expect.objectContaining({
@@ -298,11 +299,12 @@ describe('GET /projects/:name/analytics/competitors', () => {
     })
     expect(response.statusCode, response.body).toBe(200)
     const body = competitorLandscapeResponseSchema.parse(response.json())
-    expect(body.project).toMatchObject({ mentionCount: 1, shareOfVoice: 100 })
+    const share = (value: number) => (scope ? value : null)
+    expect(body.project).toMatchObject({ mentionCount: 1, shareOfVoice: share(100) })
     expect(body.pinned.find(row => row.domain === 'car.com'))
-      .toMatchObject({ mentionCount: 0, citationCount: 1, shareOfVoice: 0 })
+      .toMatchObject({ mentionCount: 0, citationCount: 1, shareOfVoice: share(0) })
     expect(body.modelComparison!.groups[0]!.pinned.find(row => row.domain === 'car.com'))
-      .toMatchObject({ mentionCount: 0, citationCount: 1, shareOfVoice: 0 })
+      .toMatchObject({ mentionCount: 0, citationCount: 1, shareOfVoice: share(0) })
     expect(body.evidence.answeredResults).toBe(1)
   })
 
@@ -350,7 +352,8 @@ describe('GET /projects/:name/analytics/competitors', () => {
       const body = competitorLandscapeResponseSchema.parse(response.json())
       expect(body.pinned.find(row => row.domain === 'car.com')).toMatchObject({ mentionCount: mentions, citationCount: 1 })
       expect(body.modelComparison!.groups[0]!.pinned.find(row => row.domain === 'car.com')).toMatchObject({ mentionCount: mentions, citationCount: 1 })
-      expect(body.project.shareOfVoice).toBe(mentions ? 50 : 100)
+      // A market scope is not a query class, so this pooled read still withholds it.
+      expect(body.project.shareOfVoice).toBeNull()
     }
   })
 
@@ -382,7 +385,7 @@ describe('GET /projects/:name/analytics/competitors', () => {
     expect(gemini).toMatchObject({
       snapshotCount: 1,
       servedModels: { status: 'known', model: 'different-served-id' },
-      project: { mentionCount: 1, citationCount: 1, shareOfVoice: 100 },
+      project: { mentionCount: 1, citationCount: 1, shareOfVoice: null },
       pinned: [{ domain: 'rival.example', mentionCount: 0, citationCount: 0, answeredResults: 1 }],
       evidence: { answeredResults: 1, excludedProbeResults: 0, excludedNonCompletedResults: 0 },
     })
@@ -394,8 +397,8 @@ describe('GET /projects/:name/analytics/competitors', () => {
     expect(openai).toMatchObject({
       snapshotCount: 3,
       servedModels: { status: 'mixed', models: ['shared-2026-01', 'shared-2026-02'], includesUnknown: true },
-      project: { mentionCount: 0, citationCount: 0, shareOfVoice: 0 },
-      pinned: [{ domain: 'rival.example', mentionCount: 2, citationCount: 2, answeredResults: 3, shareOfVoice: 100 }],
+      project: { mentionCount: 0, citationCount: 0, shareOfVoice: null },
+      pinned: [{ domain: 'rival.example', mentionCount: 2, citationCount: 2, answeredResults: 3, shareOfVoice: null }],
       evidence: { answeredResults: 3, excludedProbeResults: 1, excludedNonCompletedResults: 1 },
     })
     expect(modelComparison!.groups.reduce((sum, group) => sum + group.snapshotCount, 0)).toBe(7)
@@ -443,6 +446,67 @@ describe('GET /projects/:name/analytics/competitors', () => {
       modelComparison: { basis: 'requested-model', totalGroups: 0, groups: [], truncated: false },
       pinned: [{ domain: 'rival.example', answeredResults: 0, shareOfVoice: null }],
     })
+  })
+
+  it('publishes share of voice only for a single query class, and keeps the counts either way', async () => {
+    db.insert(querySnapshots).values([
+      { id: 'sov-branded', queryText: 'Northwind options' },
+      { id: 'sov-non-brand', queryText: 'Housing options' },
+    ].map(row => ({
+      ...marketSnapshot(row.id, 'run_normal', null, 'Northwind and Rival.', 'rival.example'),
+      queryId: null,
+      queryText: row.queryText,
+      model: 'sov-model',
+    }))).run()
+
+    const read = async (query: string) => {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/v1/projects/northwind/analytics/competitors?window=all&provider=openai&model=sov-model&${query}`,
+      })
+      expect(response.statusCode, response.body).toBe(200)
+      return competitorLandscapeResponseSchema.parse(response.json())
+    }
+
+    // One class behind the denominator: the project and its rival split it.
+    for (const queryClass of ['branded', 'non-brand'] as const) {
+      const scoped = await read(`queryClass=${queryClass}`)
+      expect(scoped.evidence.answeredResults).toBe(1)
+      expect(scoped.project).toMatchObject({ mentionCount: 1, shareOfVoice: 50 })
+      expect(scoped.pinned[0]).toMatchObject({ domain: 'rival.example', mentionCount: 1, shareOfVoice: 50 })
+    }
+
+    // Both classes in one basket: the same counts, and no ratio over them.
+    const pooled = await read('queryClass=all')
+    expect(pooled.evidence).toMatchObject({ answeredResults: 2, mentionCredits: 4 })
+    expect(pooled.project).toMatchObject({ mentionCount: 2, shareOfVoice: null })
+    expect(pooled.pinned[0]).toMatchObject({ domain: 'rival.example', mentionCount: 2, shareOfVoice: null })
+
+    // Omitting the filter is the same pooled reading, not a scoped one.
+    expect((await read('groupBy=model')).project.shareOfVoice).toBeNull()
+  })
+
+  it('refuses a class-scoped read it cannot classify instead of reporting an empty landscape', async () => {
+    const previous = db.select().from(projects).where(eq(projects.id, 'project_northwind')).get()!
+    db.update(projects)
+      .set({ displayName: '', canonicalDomain: '', ownedDomains: [] })
+      .where(eq(projects.id, 'project_northwind'))
+      .run()
+    onTestFinished(() => {
+      db.update(projects).set({
+        displayName: previous.displayName,
+        canonicalDomain: previous.canonicalDomain,
+        ownedDomains: previous.ownedDomains,
+      }).where(eq(projects.id, 'project_northwind')).run()
+    })
+
+    const scoped = await app.inject({ method: 'GET', url: '/api/v1/projects/northwind/analytics/competitors?window=all&queryClass=non-brand' })
+    expect(scoped.statusCode, scoped.body).toBe(400)
+    expect(scoped.json().error.message).toContain('brand name or alias')
+
+    // The pooled reading is still honest without a brand, so it still answers.
+    const pooled = await app.inject({ method: 'GET', url: '/api/v1/projects/northwind/analytics/competitors?window=all' })
+    expect(pooled.statusCode, pooled.body).toBe(200)
   })
 
   it.each(['model=model-a', 'provider=openai&model=', 'provider=openai&model=%20%20', 'groupBy=provider', 'groupBy=model&groupKey=regional&scope=all-markets'])(

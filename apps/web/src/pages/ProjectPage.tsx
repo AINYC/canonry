@@ -1757,7 +1757,10 @@ function ProjectPageContent({
     path: { name: projectName },
     query: {
       window: competitorLandscapeWindow,
-      ...(activeMeasurementPlanSchemaVersion === 2 ? { queryClass: advancedMeasurementView.queryClass } : {}),
+      // Simple projects have no class control, so the card asks for the one
+      // class a competitive reading can be built on. Pooling branded queries in
+      // would hand the project its own name back as market share.
+      queryClass: activeMeasurementPlanSchemaVersion === 2 ? advancedMeasurementView.queryClass : 'non-brand' as const,
       ...(competitorLandscapeGroupKey ? { groupKey: competitorLandscapeGroupKey } : {}),
       ...(isAdvancedAllMarkets ? { scope: 'all-markets' as const } : {}),
     },

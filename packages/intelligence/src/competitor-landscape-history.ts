@@ -3,9 +3,8 @@ import {
   brandLabelFromDomain,
   compileBrandAliases,
   hostMatchesAnyDomain,
-  hostMatchesDomain,
   hostOf,
-  matcherMatchesText,
+  matchedAliasKeys,
   MIN_DOMAIN_BRAND_KEY_LENGTH,
   registrableDomain,
   type BrandAliasMatcher,
@@ -56,6 +55,19 @@ export interface CompetitorLandscapeHistoryOptions {
   /** Discovery's persisted exact-host type. This read never invokes discovery/LLM work. */
   classifications: ReadonlyMap<string, CompetitorLandscapeSurfaceClass>
   snapshots: readonly CompetitorLandscapeHistorySnapshot[]
+  /**
+   * May a share of voice be published for this selection?
+   *
+   * Share of voice is a ratio over a denominator, so it is only meaningful
+   * when every result in it answers the same kind of query. A brand wins its
+   * own branded queries almost by definition, so pooling branded and
+   * non-brand results inflates the brand and deflates every competitor: on
+   * real stored evidence one project reads 43.8% pooled against 3.6% on
+   * non-brand alone. Callers that cannot scope to a single class must publish
+   * the counts and omit the ratio rather than pass a pooled basket off as a
+   * competitive figure.
+   */
+  shareOfVoiceEligible: boolean
   /** Capped evidence samples keep the response bounded. */
   sampleUrlLimit?: number
 }
@@ -67,7 +79,10 @@ export interface CompetitorLandscapeHistoryRow {
   pinned: boolean
   /** One mention credit at most per answer. */
   mentionCount: number
-  /** Percentage points (0..100), null when this row is outside the competitive denominator. */
+  /**
+   * Percentage points (0..100). Null outside the competitive denominator, and
+   * null whenever the selection pools query classes.
+   */
   shareOfVoice: number | null
   /** One source credit at most per answer. Independent from mentionCount. */
   citationCount: number
@@ -222,6 +237,20 @@ export function buildCompetitorLandscapeHistory(
   let sourceResults = 0
   let missingAnswerTextResults = 0
 
+  const baseEligible = new Map<string, Candidate>()
+  for (const candidate of [...pinned.values(), ...classifiedDirect.values()]) {
+    putCandidate(baseEligible, candidate)
+  }
+  const baseCombined = combineMatchers([...baseEligible.values()].map(candidate => candidate.matcher))
+  const candidateRowsByHost = new Map<string, Array<[string, MutableRow]>>()
+  for (const [domain, row] of candidateRows) {
+    const host = hostOf(domain)
+    if (!host) continue
+    const bucket = candidateRowsByHost.get(host)
+    if (bucket) bucket.push([domain, row])
+    else candidateRowsByHost.set(host, [[domain, row]])
+  }
+
   for (const snapshot of options.snapshots) {
     const text = snapshot.answerText?.trim() ?? ''
     const sources = sourcesOf(snapshot)
@@ -231,16 +260,25 @@ export function buildCompetitorLandscapeHistory(
     if (text !== '') {
       answeredResults++
       if (snapshot.projectMentioned) recordMention(projectRow, snapshot.createdAt)
-      const eligibleCandidates = new Map<string, Candidate>()
-      for (const candidate of [...pinned.values(), ...classifiedDirect.values()]) {
-        putCandidate(eligibleCandidates, candidate)
+      // One segmentation of the answer for the whole eligible set, then a key
+      // lookup per candidate. Matching each candidate separately re-normalized
+      // the full answer once per competitor per snapshot.
+      const frozen = frozenBySnapshot.get(snapshot.id)
+      let eligibleCandidates = baseEligible
+      let combined = baseCombined
+      if (frozen) {
+        eligibleCandidates = new Map(baseEligible)
+        for (const candidate of frozen.values()) putCandidate(eligibleCandidates, candidate)
+        combined = combineMatchers([...eligibleCandidates.values()].map(candidate => candidate.matcher))
       }
-      for (const candidate of frozenBySnapshot.get(snapshot.id)?.values() ?? []) {
-        putCandidate(eligibleCandidates, candidate)
-      }
-      for (const candidate of eligibleCandidates.values()) {
-        if (matcherMatchesText(candidate.matcher, text)) {
-          recordMention(candidateRows.get(candidate.domain)!, snapshot.createdAt)
+      const matchedKeys = matchedAliasKeys(combined, text)
+      if (matchedKeys.size > 0) {
+        for (const candidate of eligibleCandidates.values()) {
+          for (const key of candidate.matcher.keys) {
+            if (!matchedKeys.has(key)) continue
+            recordMention(candidateRows.get(candidate.domain)!, snapshot.createdAt)
+            break
+          }
         }
       }
     }
@@ -261,14 +299,20 @@ export function buildCompetitorLandscapeHistory(
         }
         continue
       }
-      for (const [domain, row] of candidateRows) {
-        if (!hostMatchesDomain(normalized, domain)) continue
-        if (seenCitationDomains.has(domain)) {
-          recordSampleUrl(row, source, sampleUrlLimit)
-          continue
+      // Same rule as hostMatchesDomain (equal host or a subdomain of it), but
+      // resolved by looking up each label suffix of the source host instead of
+      // re-parsing every candidate domain for every source.
+      const sourceHost = hostOf(normalized)
+      if (!sourceHost) continue
+      for (const suffix of hostSuffixes(sourceHost)) {
+        for (const [domain, row] of candidateRowsByHost.get(suffix) ?? []) {
+          if (seenCitationDomains.has(domain)) {
+            recordSampleUrl(row, source, sampleUrlLimit)
+            continue
+          }
+          seenCitationDomains.add(domain)
+          recordCitation(row, snapshot.createdAt, source, sampleUrlLimit)
         }
-        seenCitationDomains.add(domain)
-        recordCitation(row, snapshot.createdAt, source, sampleUrlLimit)
       }
     }
   }
@@ -278,13 +322,14 @@ export function buildCompetitorLandscapeHistory(
   const mentionCredits = projectRow.mentionCount
     + competitiveRows.reduce((sum, row) => sum + row.mentionCount, 0)
 
+  const competitive = options.shareOfVoiceEligible
   return {
-    project: finalizeRow(projectRow, answeredResults, mentionCredits, true),
+    project: finalizeRow(projectRow, answeredResults, mentionCredits, competitive),
     pinned: [...pinned.values()].map(candidate => (
-      finalizeRow(candidateRows.get(candidate.domain)!, answeredResults, mentionCredits, true)
+      finalizeRow(candidateRows.get(candidate.domain)!, answeredResults, mentionCredits, competitive)
     )),
     observed: [...observed.values()]
-      .map(candidate => finalizeRow(candidateRows.get(candidate.domain)!, answeredResults, mentionCredits, true))
+      .map(candidate => finalizeRow(candidateRows.get(candidate.domain)!, answeredResults, mentionCredits, competitive))
       .filter(row => row.mentionCount > 0 || row.citationCount > 0)
       .sort(compareCompetitiveRows),
     otherSources: [...others.values()]
@@ -292,6 +337,27 @@ export function buildCompetitorLandscapeHistory(
       .sort(compareOtherRows),
     evidence: { answeredResults, sourceResults, missingAnswerTextResults, mentionCredits },
   }
+}
+
+function combineMatchers(matchers: readonly BrandAliasMatcher[]): BrandAliasMatcher {
+  const keys = new Set<string>()
+  let longest = 0
+  for (const matcher of matchers) {
+    for (const key of matcher.keys) keys.add(key)
+    if (matcher.longest > longest) longest = matcher.longest
+  }
+  return { keys, longest }
+}
+
+/** `a.b.c` -> `a.b.c`, `b.c`, `c`: every host that `a.b.c` equals or is a subdomain of. */
+function hostSuffixes(host: string): string[] {
+  const suffixes = [host]
+  let index = host.indexOf('.')
+  while (index !== -1) {
+    suffixes.push(host.slice(index + 1))
+    index = host.indexOf('.', index + 1)
+  }
+  return suffixes
 }
 
 function normalizedHosts(domains: readonly string[]): string[] {
@@ -429,6 +495,7 @@ function finalizeRow(
   row: MutableRow,
   answeredResults: number,
   mentionCredits: number,
+  /** False for other-source rows, and for any selection that pools query classes. */
   competitive: boolean,
 ): CompetitorLandscapeHistoryRow {
   return {

@@ -23,6 +23,7 @@ describe('buildCompetitorLandscapeHistory', () => {
     const result = buildCompetitorLandscapeHistory({
       project: { domain: 'acme.example', label: 'Acme', domains: ['acme.example', 'owned.platform.example'] },
       pinned: [{ domain: 'rival.platform.example', label: 'Rival' }],
+      shareOfVoiceEligible: true,
       classifications: new Map(),
       snapshots: [snapshot({
         answerText: 'Rival is another option.',
@@ -41,6 +42,7 @@ describe('buildCompetitorLandscapeHistory', () => {
     const result = buildCompetitorLandscapeHistory({
       project: { domain: 'shop.platform.example', label: 'Shop', domains: ['shop.platform.example'] },
       pinned: [],
+      shareOfVoiceEligible: true,
       classifications: new Map(),
       snapshots: [
         snapshot({ id: 'owned', citedUrls: ['https://shop.platform.example/product', 'https://blog.shop.platform.example/post'] }),
@@ -62,6 +64,7 @@ describe('buildCompetitorLandscapeHistory', () => {
         domains: ['acme.example'],
       },
       pinned: [{ domain: 'pinned.example', label: 'Pinned' }],
+      shareOfVoiceEligible: true,
       classifications: new Map([
         ['rival.example', 'direct-competitor'],
         ['news.example', 'editorial-media'],
@@ -150,6 +153,7 @@ describe('buildCompetitorLandscapeHistory', () => {
         { domain: 'pinned.example', label: 'Pinned' },
         { domain: 'zero.example', label: 'Zero' },
       ],
+      shareOfVoiceEligible: true,
       classifications: new Map([['rival.example', 'direct-competitor']]),
       snapshots: [
         snapshot({
@@ -179,6 +183,7 @@ describe('buildCompetitorLandscapeHistory', () => {
     const result = buildCompetitorLandscapeHistory({
       project: { domain: 'acme.example', label: 'Acme', domains: ['acme.example'] },
       pinned: [{ domain: 'rival-holdings.example', label: 'Rival Holdings' }],
+      shareOfVoiceEligible: true,
       classifications: new Map(),
       snapshots: [snapshot({
         answerText: 'Rival Holdings is another option.',
@@ -195,6 +200,7 @@ describe('buildCompetitorLandscapeHistory', () => {
     const result = buildCompetitorLandscapeHistory({
       project: { domain: 'acme.example', label: 'Acme', domains: ['acme.example'] },
       pinned: [generated, { ...generated, domain: 'www.car.com' }],
+      shareOfVoiceEligible: true,
       classifications: new Map(),
       snapshots: [
         snapshot({
@@ -217,6 +223,7 @@ describe('buildCompetitorLandscapeHistory', () => {
     const result = buildCompetitorLandscapeHistory({
       project: { domain: 'acme.example', label: 'Acme', domains: ['acme.example'] },
       pinned: [],
+      shareOfVoiceEligible: true,
       classifications: new Map([['car.com', 'direct-competitor']]),
       snapshots: [snapshot({
         answerText: 'Acme helps you rent a car.',
@@ -239,6 +246,7 @@ describe('buildCompetitorLandscapeHistory', () => {
         { domain: 'www.ibm.com', label: 'IBM' },
         { domain: 'car.com', label: 'car', labelSource: 'domain' },
       ],
+      shareOfVoiceEligible: true,
       classifications: new Map(),
       snapshots: [snapshot({
         answerText: 'IBM and CAR are both options.',
@@ -256,6 +264,7 @@ describe('buildCompetitorLandscapeHistory', () => {
     const result = buildCompetitorLandscapeHistory({
       project: { domain: 'acme.example', label: 'Acme', domains: ['acme.example'] },
       pinned: [],
+      shareOfVoiceEligible: true,
       classifications: new Map([
         ['classified-only.example', 'direct-competitor'],
         ['zero-activity.example', 'direct-competitor'],
@@ -282,4 +291,26 @@ describe('buildCompetitorLandscapeHistory', () => {
     ]))
     expect(result.observed.some(row => row.domain === 'zero-activity.example')).toBe(false)
   })
+
+  it('withholds share of voice when the selection pools query classes, keeping the counts', () => {
+    const options = {
+      project: { domain: 'acme.example', label: 'Acme', domains: ['acme.example'] },
+      pinned: [{ domain: 'rival.example', label: 'Rival' }],
+      classifications: new Map(),
+      snapshots: [
+        snapshot({ id: 's1', answerText: 'Acme is the pick.', projectMentioned: true }),
+        snapshot({ id: 's2', answerText: 'Rival is the pick.' }),
+      ],
+    } as const
+
+    const scoped = buildCompetitorLandscapeHistory({ ...options, shareOfVoiceEligible: true })
+    expect(scoped.project).toMatchObject({ mentionCount: 1, shareOfVoice: 50 })
+    expect(scoped.pinned[0]).toMatchObject({ mentionCount: 1, shareOfVoice: 50 })
+
+    const pooled = buildCompetitorLandscapeHistory({ ...options, shareOfVoiceEligible: false })
+    expect(pooled.project).toMatchObject({ mentionCount: 1, shareOfVoice: null })
+    expect(pooled.pinned[0]).toMatchObject({ mentionCount: 1, shareOfVoice: null })
+    expect(pooled.evidence.mentionCredits).toBe(scoped.evidence.mentionCredits)
+  })
+
 })

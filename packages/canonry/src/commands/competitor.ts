@@ -134,6 +134,11 @@ function printCompetitorLandscape(data: CompetitorLandscapeResponse): void {
     console.log(`Requested model filter: ${data.filters.provider} · ${data.filters.model}`)
   }
   console.log('Mention share is answer-text evidence; citations are independent source-list evidence.')
+  console.log(
+    data.filters.queryClass === 'all'
+      ? 'Share of voice is blank: branded and non-brand queries are pooled here. Add --query-class non-brand for a ratio.'
+      : `Counting ${data.filters.queryClass} queries only.`,
+  )
   if (data.truncated) console.log('Top 100 observed competitors and top 100 other cited sources shown; pinned competitors are complete.')
   console.log('')
   printLandscapeRows('Your brand', [data.project])

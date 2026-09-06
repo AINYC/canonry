@@ -146,7 +146,11 @@ async function renderAt(
   if (measurement?.competitorLandscape) {
     const q = {
       window: measurement.competitorLandscapeKey?.window ?? '30d',
-      ...(measurement.plan.active?.plan.schemaVersion === 2 ? { queryClass: measurement.competitorLandscapeKey?.queryClass ?? 'all' } : {}),
+      // Simple projects have no class control, so the card always asks for the
+      // one class a share of voice can be built on.
+      queryClass: measurement.plan.active?.plan.schemaVersion === 2
+        ? measurement.competitorLandscapeKey?.queryClass ?? 'all'
+        : 'non-brand',
       ...(measurement.competitorLandscapeKey?.groupKey ? { groupKey: measurement.competitorLandscapeKey.groupKey } : {}),
       ...(measurement.competitorLandscapeKey?.scope ? { scope: measurement.competitorLandscapeKey.scope } : {}),
     }
@@ -1036,7 +1040,7 @@ test('cached competitor history remains visible when its background refresh fail
     getApiV1ProjectsByNameAnalyticsCompetitorsQueryKey({
       client: heyClient,
       path: { name: projectName },
-      query: { window: '30d' },
+      query: { window: '30d', queryClass: 'non-brand' },
     }),
     competitorLandscapeResponse({ pinnedLabel: 'Cached pin', observedLabel: 'Cached observed rival' }),
   )
@@ -1054,7 +1058,7 @@ test('cached competitor history remains visible when its background refresh fail
     getApiV1ProjectsByNameAnalyticsCompetitorsQueryKey({
       client: heyClient,
       path: { name: projectName },
-      query: { window: '30d' },
+      query: { window: '30d', queryClass: 'non-brand' },
     }),
   )?.status).toBe('error'))
   expect(page.getByRole('rowheader', { name: 'Cached pin' })).toBeTruthy()

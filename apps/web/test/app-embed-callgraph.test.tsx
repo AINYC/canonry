@@ -113,7 +113,7 @@ const emptyCompetitorLandscape = {
     scope: 'project',
     groupKey: null,
     provider: null,
-    queryClass: 'all',
+    queryClass: 'non-brand',
     location: null,
     runId: null,
   },
@@ -155,7 +155,7 @@ test('embed project overview only issues reads covered by the overview server al
       if (path === '/api/v1/projects/citypoint/insights') return jsonResponse([])
       if (path === '/api/v1/projects/citypoint/overview') return jsonResponse(null)
       if (path === '/api/v1/projects/citypoint/analytics/metrics') return jsonResponse(emptyMetrics)
-      if (path === '/api/v1/projects/citypoint/analytics/competitors?window=30d') return jsonResponse(emptyCompetitorLandscape)
+      if (path === '/api/v1/projects/citypoint/analytics/competitors?window=30d&queryClass=non-brand') return jsonResponse(emptyCompetitorLandscape)
       if (path === '/api/v1/projects/citypoint/citations/visibility') return jsonResponse(emptyCitationVisibility)
 
       if (path.startsWith('/api/v1/')) {
@@ -185,12 +185,12 @@ test('embed project overview only issues reads covered by the overview server al
   await waitFor(() => {
     expect(observed.has('/api/v1/projects/citypoint/citations/visibility')).toBe(true)
     expect(observed.has('/api/v1/projects/citypoint/analytics/metrics')).toBe(true)
-    expect(observed.has('/api/v1/projects/citypoint/analytics/competitors?window=30d')).toBe(true)
+    expect(observed.has('/api/v1/projects/citypoint/analytics/competitors?window=30d&queryClass=non-brand')).toBe(true)
   })
 
   expect(disallowed).toEqual([])
   expect(observedMethods.filter(request => request.path.includes('/analytics/competitors'))).toEqual([
-    { path: '/api/v1/projects/citypoint/analytics/competitors?window=30d', method: 'GET' },
+    { path: '/api/v1/projects/citypoint/analytics/competitors?window=30d&queryClass=non-brand', method: 'GET' },
   ])
   expect(Array.from(observed).some(path => path.startsWith('/api/v1/settings'))).toBe(false)
 })

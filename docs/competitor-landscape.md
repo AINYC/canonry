@@ -24,6 +24,7 @@ project pins + frozen market competitors + stored classifications
 - `observed` contains stored direct-competitor identities that were mentioned or cited in the selected window.
 - `otherSources` contains cited aggregators, editorial sites, unknown domains, and other non-competitive surfaces. These rows do not enter share of voice.
 - Mention share is `row mention credits / (project + direct-competitor mention credits)`, expressed as percentage points from 0 to 100. Each answer gives a brand at most one mention credit.
+- Share of voice needs one query class behind it. `queryClass=all`, and omitting the parameter, pool branded and non-brand queries, and a brand wins its own branded queries by definition. Pooled readings return `shareOfVoice: null` on every row and publish the counts instead. Request `queryClass=branded` or `queryClass=non-brand` for a ratio. A project with no brand name or alias cannot split the classes, so a class-scoped read on one is refused rather than answered with an empty landscape.
 - Citation count is independent from mention count. Each answer gives a domain at most one citation credit.
 
 Observed competitors sort by mention count, then citation count. Other sources sort by citation count. The server returns at most 100 observed rows and 100 other-source rows and sets `truncated`. Pinned rows are never capped. Each row includes at most three stored sample URLs.

@@ -106,6 +106,14 @@ export async function competitorLandscapeRoutes(app: FastifyInstance) {
       .all()
       .map(row => [row.id, row.query]))
     const queryClassifier = projectQueryClassifier(project)
+    // Simple projects split classes from the query text. Without a usable brand
+    // alias there is no split, and every result would silently fail the class
+    // filter and read as an empty landscape rather than as an unanswerable one.
+    if (!advanced && filters.queryClass && filters.queryClass !== 'all' && !queryClassifier) {
+      throw validationError(
+        `Query class "${filters.queryClass}" needs a brand name or alias on this project. Add one, or omit queryClass for a pooled landscape.`,
+      )
+    }
 
     const allSnapshots = candidateRuns.length === 0
       ? []
@@ -185,6 +193,10 @@ export async function competitorLandscapeRoutes(app: FastifyInstance) {
       },
       pinned,
       classifications,
+      // Share of voice needs one query class behind it. `all` pools branded and
+      // non-brand, where a brand wins its own name by definition, so the ratio
+      // is withheld and only the counts are published.
+      shareOfVoiceEligible: filters.queryClass !== undefined && filters.queryClass !== 'all',
       snapshots: selectedSnapshots.map(snapshot => ({
         id: snapshot.id,
         createdAt: snapshot.createdAt,

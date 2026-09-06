@@ -16,6 +16,19 @@ const WINDOW_OPTIONS: readonly { value: CompetitorLandscapeWindow; label: string
   { value: 'all', label: 'All' },
 ]
 
+/**
+ * Say which queries the numbers came from. Share of voice is a ratio, so a
+ * pooled basket is not just less precise, it points the wrong way: a brand wins
+ * its own branded queries by definition.
+ */
+function queryClassNote(queryClass: CompetitorLandscapeResponse['filters']['queryClass'] | undefined): string {
+  switch (queryClass) {
+    case 'non-brand': return 'Counts queries that do not name your brand.'
+    case 'branded': return 'Counts queries that name your brand.'
+    default: return 'Counts every tracked query, so share of voice is not shown.'
+  }
+}
+
 function formatShare(share: number | null): string {
   return share === null ? 'Not measured' : `${share.toFixed(1)}%`
 }
@@ -270,6 +283,7 @@ export function CompetitorLandscape({
           <p className="eyebrow eyebrow-soft">Competitive</p>
           <h2 id="competitor-landscape-title">Competitor landscape</h2>
           {scopeLabel ? <p className="supporting-copy mt-1">{scopeLabel}</p> : null}
+          {landscape ? <p className="supporting-copy mt-1">{queryClassNote(landscape.filters?.queryClass)}</p> : null}
         </div>
         <WindowControl value={window} onChange={onWindowChange} />
       </div>
@@ -294,7 +308,7 @@ export function CompetitorLandscape({
                 <tr>
                   <th scope="col">Competitor</th>
                   <th scope="col">Type</th>
-                  <th scope="col">Mention SOV</th>
+                  <th scope="col">Share of voice</th>
                   <th scope="col">Mentions</th>
                   <th scope="col">Citations</th>
                   <th scope="col"><span className="sr-only">Actions</span></th>
