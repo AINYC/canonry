@@ -1,6 +1,6 @@
 # Canonry <img src="https://raw.githubusercontent.com/Canonry/canonry/main/apps/web/public/favicon-32.png" alt="Canonry canary icon" width="24" />
 
-[![npm version](https://img.shields.io/npm/v/@canonry/canonry)](https://www.npmjs.com/package/@canonry/canonry) [![Node.js >= 22.14](https://img.shields.io/badge/node-%3E%3D22.14-brightgreen)](https://nodejs.org)
+[![npm version](https://img.shields.io/npm/v/@canonry/canonry)](https://www.npmjs.com/package/@canonry/canonry)
 
 **Give your agent the evidence, tools, and skills to run AEO.**
 
@@ -54,15 +54,13 @@ If a Canonry installation or connected plugin/MCP is available, use it. Do not c
 
 ### Start locally
 
-Requires Node.js 22.14 or later, below version 27.
-
 1. Install Canonry.
 
    ```bash
    npm install -g @canonry/canonry
    ```
 
-2. Create the local configuration, SQLite database, and full-instance API key.
+2. Initialize Canonry.
 
    ```bash
    cnry bootstrap
@@ -74,9 +72,7 @@ Requires Node.js 22.14 or later, below version 27.
    cnry serve
    ```
 
-4. Open [http://127.0.0.1:4100/setup](http://127.0.0.1:4100/setup).
-   If prompted, create a dashboard password.
-   Enter your domain and approve the public-site crawl.
+4. Open [http://127.0.0.1:4100/setup](http://127.0.0.1:4100/setup) and follow the setup to scan your site.
 
 The crawl saves a Page Health baseline. AI Visibility is optional and has a separate setup.
 
@@ -102,14 +98,6 @@ If the scan fails or is cancelled, read the error with `cnry run show <run-id> -
 
 </details>
 
-<details>
-<summary>Configuration and data location</summary>
-
-Canonry stores `config.yaml` and `data.db` in `~/.canonry` by default.
-For another private directory, set `CANONRY_CONFIG_DIR` before `bootstrap`, `serve`, and later CLI commands. Use the same value each time.
-
-</details>
-
 ## Explore the evidence
 
 Your agent and dashboard use the same project API. The dashboard makes trends, exact answers, and site findings available for human review.
@@ -124,15 +112,10 @@ Track brand mentions and citations over time, by query and answer engine. Find a
 
 *Track your share of answer-engine brand mentions over time.*
 
-<details>
-<summary>Inspect citation gaps and exact sources</summary>
-
 ![Canonry AI Visibility citation map across queries and answer engines](https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/ai-visibility-diagnostics.png)
 
 The citation map shows mention and citation coverage across queries and engines.
 [Rank cited domains and pages](skills/canonry/references/canonry-cli.md#cited-source-rankings-cnry-sources), then inspect the exact answers and URLs behind each result.
-
-</details>
 
 <details>
 <summary>Configure a provider and run visibility checks</summary>
@@ -196,14 +179,9 @@ Use [versioned measurement plans](docs/mcp.md#tool-surface) for portfolios of lo
 Investigate visibility changes with evidence from search and local performance, crawler visits, AI page fetches, referrals, and conversions.
 Site audits show technical findings alongside that evidence.
 
-<details>
-<summary>See the Site Map and Page Health view</summary>
-
 ![Canonry Site Map graph](https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/dashboard.png)
 
 *Map crawlable pages and the internal links that connect them.*
-
-</details>
 
 ## Act on the evidence
 
