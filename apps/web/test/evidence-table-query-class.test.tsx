@@ -5,11 +5,16 @@ import { EvidenceTable } from '../src/components/project/EvidenceTable.js'
 import { createDashboardFixture } from '../src/mock-data.js'
 import type { CitationInsightVm } from '../src/view-models.js'
 
+const { openEvidence } = vi.hoisted(() => ({ openEvidence: vi.fn() }))
+
 vi.mock('../src/hooks/use-drawer.js', () => ({
-  useDrawer: () => ({ openEvidence: vi.fn() }),
+  useDrawer: () => ({ openEvidence }),
 }))
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.clearAllMocks()
+})
 
 function evidence(query: string, queryClass: 'branded' | 'non-brand' | null, overrides: Partial<CitationInsightVm> = {}): CitationInsightVm {
   const seed = createDashboardFixture({}).dashboard.projects[0]!.visibilityEvidence[0]!
@@ -29,6 +34,24 @@ test('labels each query class without confusing it with the mention or citation 
   expect(within(screen.getByText('Imported question').closest('tr')!).getByText('Unclassified')).toBeTruthy()
   expect(screen.getByRole('combobox', { name: 'Query class' })).toHaveProperty('value', 'all')
   expect(screen.getByRole('tab', { name: 'Mentions' }).getAttribute('aria-selected')).toBe('true')
+})
+
+test('query rows remain expandable by mouse and keyboard and open answer evidence', () => {
+  render(<EvidenceTable evidence={[evidence('Best widgets', 'non-brand')]} />)
+
+  const row = screen.getByText('Best widgets').closest('tr')!
+  expect(row.getAttribute('aria-expanded')).toBe('false')
+  expect(screen.queryByRole('button', { name: 'View', exact: true })).toBeNull()
+
+  fireEvent.click(row)
+  expect(row.getAttribute('aria-expanded')).toBe('true')
+  fireEvent.click(screen.getByRole('button', { name: 'View', exact: true }))
+  expect(openEvidence).toHaveBeenCalledWith('Best widgets')
+
+  fireEvent.keyDown(row, { key: 'Enter' })
+  expect(row.getAttribute('aria-expanded')).toBe('false')
+  fireEvent.keyDown(row, { key: ' ' })
+  expect(row.getAttribute('aria-expanded')).toBe('true')
 })
 
 test('class filtering composes with search and both independent evidence signals', () => {

@@ -62,7 +62,78 @@ function renderLandscape(overrides: Partial<React.ComponentProps<typeof Competit
   return { ...render(<CompetitorLandscape {...props} />), props }
 }
 
+function observedRows(count: number) {
+  return Array.from({ length: count }, (_, index) => row({
+    domain: `observed-${index + 1}.example`,
+    label: `Observed rival ${index + 1}`,
+    mentionCount: count - index,
+  }))
+}
+
 describe('CompetitorLandscape', () => {
+  test.each([
+    { kind: 'project' },
+    { kind: 'group', groupKey: 'north' },
+    { kind: 'all-markets' },
+  ] as const)('shows all pins and five observed competitors in $kind scope', (scope) => {
+    const pinned = Array.from({ length: 7 }, (_, index) => row({
+      domain: `pinned-${index}.example`, label: `Pinned rival ${index}`, pinned: true,
+    }))
+    renderLandscape({ landscape: landscape({ scope, pinned, observed: observedRows(8) }) })
+
+    for (const pin of pinned) expect(screen.getByRole('rowheader', { name: pin.label })).toBeTruthy()
+    expect(screen.getByRole('rowheader', { name: 'Observed rival 5' })).toBeTruthy()
+    expect(screen.queryByRole('rowheader', { name: 'Observed rival 6' })).toBeNull()
+    expect(screen.getByText('Showing 5 of 8 observed competitors.')).toBeTruthy()
+    const brand = screen.getByRole('rowheader', { name: /Canonry/ }).closest('tr')!
+    expect(within(brand).getByText('50.0%')).toBeTruthy()
+
+    const showAll = screen.getByRole('button', { name: 'Show all 8 observed competitors' })
+    expect(showAll.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(showAll)
+    expect(screen.getByRole('rowheader', { name: 'Observed rival 8' })).toBeTruthy()
+    expect(screen.getByText('Showing 8 of 8 observed competitors.')).toBeTruthy()
+    expect(within(brand).getByText('50.0%')).toBeTruthy()
+    expect(screen.getByText(/20 answer results and 21 source results/)).toBeTruthy()
+
+    const showFewer = screen.getByRole('button', { name: 'Show fewer observed competitors' })
+    expect(showFewer.getAttribute('aria-expanded')).toBe('true')
+    fireEvent.click(showFewer)
+    expect(screen.queryByRole('rowheader', { name: 'Observed rival 6' })).toBeNull()
+    for (const pin of pinned) expect(screen.getByRole('rowheader', { name: pin.label })).toBeTruthy()
+  })
+
+  test.each([0, 1, 5])('does not offer expansion for %s observed competitors', (count) => {
+    renderLandscape({ landscape: landscape({ observed: observedRows(count) }) })
+    expect(screen.queryByRole('button', { name: /Show all/ })).toBeNull()
+    expect(screen.queryByText(/Showing \d+ of \d+ observed competitors/)).toBeNull()
+  })
+
+  test.each([
+    { canWrite: false, isEmbed: false },
+    { canWrite: true, isEmbed: true },
+  ])('allows read-only expansion without revealing write actions (%j)', (access) => {
+    renderLandscape({ ...access, landscape: landscape({ observed: observedRows(8) }) })
+    fireEvent.click(screen.getByRole('button', { name: 'Show all 8 observed competitors' }))
+    expect(screen.getByRole('rowheader', { name: 'Observed rival 8' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /^(Pin|Unpin) / })).toBeNull()
+    expect(screen.queryByText('Manage competitors')).toBeNull()
+  })
+
+  test('keeps expansion during a refresh but resets it for a different window or market', () => {
+    const data = landscape({ observed: observedRows(8) })
+    const { props, rerender } = renderLandscape({ landscape: data })
+    fireEvent.click(screen.getByRole('button', { name: 'Show all 8 observed competitors' }))
+    rerender(<CompetitorLandscape {...props} landscape={{ ...data, observed: observedRows(9) }} />)
+    expect(screen.getByRole('rowheader', { name: 'Observed rival 9' })).toBeTruthy()
+
+    rerender(<CompetitorLandscape {...props} window="7d" landscape={{ ...data, window: '7d' }} />)
+    expect(screen.queryByRole('rowheader', { name: 'Observed rival 6' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Show all 8 observed competitors' }))
+    rerender(<CompetitorLandscape {...props} window="7d" landscape={{ ...data, window: '7d', scope: { kind: 'group', groupKey: 'north' } }} />)
+    expect(screen.queryByRole('rowheader', { name: 'Observed rival 6' })).toBeNull()
+  })
+
   test('keeps zero-observation pins before observed competitors in one semantic table', () => {
     const { container } = renderLandscape()
 
@@ -217,7 +288,7 @@ describe('CompetitorLandscape', () => {
   test('states when ranked observed rows are truncated while pins remain complete', () => {
     renderLandscape({ landscape: landscape({ truncated: true }) })
 
-    expect(screen.getByText('Showing the top 100 observed competitors and other sources. Pinned competitors are complete.')).not.toBeNull()
+    expect(screen.getByText('Results are limited to the top 100 observed competitors and other sources. Pinned competitors are complete.')).not.toBeNull()
   })
 
   test('marks Advanced draft-only competitors as pending publication', () => {

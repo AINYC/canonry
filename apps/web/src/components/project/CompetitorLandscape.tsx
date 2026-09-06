@@ -16,6 +16,8 @@ const WINDOW_OPTIONS: readonly { value: CompetitorLandscapeWindow; label: string
   { value: 'all', label: 'All' },
 ]
 
+const OBSERVED_PREVIEW_LIMIT = 5
+
 /**
  * Say which queries the numbers came from. Share of voice is a ratio, so a
  * pooled basket is not just less precise, it points the wrong way: a brand wins
@@ -183,6 +185,52 @@ function GroupHeading({ children }: { children: string }) {
   )
 }
 
+function ObservedCompetitors({
+  rows,
+  canManage,
+  onPin,
+}: {
+  rows: readonly CompetitorLandscapeRow[]
+  canManage: boolean
+  onPin?: CompetitorMutation
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const visibleRows = expanded ? rows : rows.slice(0, OBSERVED_PREVIEW_LIMIT)
+
+  return (
+    <tbody>
+      <GroupHeading>Observed in this window</GroupHeading>
+      {visibleRows.length > 0 ? visibleRows.map(row => (
+        <LandscapeRow key={row.domain} row={{ ...row, pinned: false }} canManage={canManage} onPin={onPin} />
+      )) : (
+        <tr><td colSpan={6} className="text-secondary">No direct competitors were observed in this window.</td></tr>
+      )}
+      {rows.length > OBSERVED_PREVIEW_LIMIT ? (
+        <tr>
+          <td colSpan={6}>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-sm text-secondary">
+                Showing {visibleRows.length} of {rows.length} observed competitors.
+              </span>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="min-h-11 text-sm"
+                aria-expanded={expanded}
+                aria-label={expanded ? 'Show fewer observed competitors' : `Show all ${rows.length} observed competitors`}
+                onClick={() => setExpanded(value => !value)}
+              >
+                {expanded ? 'Show fewer' : `Show all ${rows.length}`}
+              </Button>
+            </div>
+          </td>
+        </tr>
+      ) : null}
+    </tbody>
+  )
+}
+
 function ManageCompetitors({ onAddCompetitor }: { onAddCompetitor: CompetitorMutation }) {
   const inputId = useId()
   const [domain, setDomain] = useState('')
@@ -327,17 +375,17 @@ export function CompetitorLandscape({
                 )) : (
                   <tr><td colSpan={6} className="text-secondary">No pinned competitors.</td></tr>
                 )}
-                {landscape ? (
-                  <>
-                    <GroupHeading>Observed in this window</GroupHeading>
-                    {observed.length > 0 ? observed.map(row => (
-                      <LandscapeRow key={row.domain} row={{ ...row, pinned: false }} canManage={canManage} onPin={onPin} />
-                    )) : (
-                      <tr><td colSpan={6} className="text-secondary">No direct competitors were observed in this window.</td></tr>
-                    )}
-                  </>
-                ) : null}
               </tbody>
+              {landscape ? (
+                <ObservedCompetitors
+                  // Refreshes and pin changes keep the operator's choice. A new
+                  // project, window, or measurement scope starts compact again.
+                  key={JSON.stringify([window, landscape.project.domain, landscape.scope, landscape.filters])}
+                  rows={observed}
+                  canManage={canManage}
+                  onPin={onPin}
+                />
+              ) : null}
             </table>
           </div>
 
@@ -354,7 +402,7 @@ export function CompetitorLandscape({
 
           {landscape?.truncated ? (
             <p className="text-sm text-secondary">
-              Showing the top 100 observed competitors and other sources. Pinned competitors are complete.
+              Results are limited to the top 100 observed competitors and other sources. Pinned competitors are complete.
             </p>
           ) : null}
 

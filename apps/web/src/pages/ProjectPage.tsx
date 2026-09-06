@@ -2521,7 +2521,7 @@ function ProjectPageContent({
             eyebrow="Tracked coverage"
             title="Query evidence"
             meta={`${model.queryCounts.total} ${model.queryCounts.total === 1 ? 'query' : 'queries'}`}
-            defaultOpen={isEmbed()}
+            defaultOpen
           >
             {!isEmbed() && (
               <div className="mb-3 flex items-center justify-end">

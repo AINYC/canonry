@@ -504,6 +504,19 @@ test('a Simple project keeps the existing Overview without advertising advanced 
   expect(html).not.toContain('Latest measurement')
 })
 
+test.each([false, true])('Simple query evidence starts expanded (embed: %s)', async (embed) => {
+  const html = await renderAt(
+    '/projects/project_citypoint',
+    embed ? { enabled: true } : undefined,
+  )
+  const document = new DOMParser().parseFromString(html, 'text/html')
+  const section = document.querySelector<HTMLDetailsElement>('#evidence-section')
+
+  expect(section).not.toBeNull()
+  expect(section!.open).toBe(true)
+  expect(section!.querySelector('.evidence-table')).not.toBeNull()
+})
+
 test('a Simple project loads pinned and historical competitors from the stored-evidence read', async () => {
   const html = await renderAt('/projects/project_citypoint', undefined, {
     plan: { active: null },
