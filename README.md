@@ -18,7 +18,7 @@ Canonry is an **agent-first, open-source AEO operating platform.**
 
 `npm install -g @canonry/canonry`
 
-![Data sources feed Canonry from above. Evidence flows left to your agent and dashboard UI. Agent commands flow right through execution tools, while webhook events reach external systems.](https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/measure-act.svg)
+![ChatGPT, Google Analytics, server-side traffic, and other external sources feed Canonry from above. Evidence returns to your agent and dashboard UI; agent commands flow through Canonry to publishing, indexing, and ChatGPT Ads. Webhooks connect your systems.](https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/measure-act.svg)
 
 **Give your agent a job:**
 
