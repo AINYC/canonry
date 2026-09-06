@@ -46,6 +46,11 @@ export async function executeResearchRun(db: DatabaseClient, registry: ProviderR
     if (!provider || isBrowserProvider(run.provider)) {
       throw new Error('Configured API provider is unavailable.')
     }
+    // Retained queued batches may predate the HTTP guard. Refuse them before
+    // spending rather than completing an answer with an unsent location.
+    if (provider.config.measurementReady === false && run.location) {
+      throw new Error('Text-only research routes do not support location context. Start a new run without a location or select a native provider.')
+    }
     const period = getCurrentUsageDay()
     const connectionScope = provider.config.connectionId ? `connection:${provider.config.connectionId}` : run.provider
     // Keep native research's historical project budget, but gateway routes

@@ -64,6 +64,33 @@ function buildApp() {
 }
 
 describe('engine route settings API', () => {
+  it('reports hosted routes without credentials as unavailable while retaining keyless routes', async () => {
+    const { app, connections, routes } = buildApp()
+    for (const preset of ['vercel-ai-gateway', 'litellm', 'custom-openai-compatible'] as const) {
+      const connection = normalizeEngineConnection({
+        id: preset, label: preset, preset,
+        ...(preset === 'custom-openai-compatible' ? { baseUrl: 'https://gateway.example/v1' } : {}),
+        quota: { maxConcurrency: 1, maxRequestsPerMinute: 10, maxRequestsPerDay: 100 },
+      })
+      connections.push(connection)
+      routes.push(engineRouteConfigSchema.parse({
+        id: `route:${preset}`, label: preset, connectionId: connection.id,
+        modelId: 'model', revision: 1, source: 'configured', capabilities: { kind: 'text-only' },
+      }))
+    }
+    try {
+      const response = await app.inject({ method: 'GET', url: '/api/v1/settings/engine-routes' })
+      expect(response.statusCode).toBe(200)
+      expect(response.json().routes).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'route:vercel-ai-gateway', readiness: { state: 'unavailable', measurementReady: false } }),
+        expect.objectContaining({ id: 'route:litellm', readiness: { state: 'text-ready', measurementReady: false } }),
+        expect.objectContaining({ id: 'route:custom-openai-compatible', readiness: { state: 'text-ready', measurementReady: false } }),
+      ]))
+    } finally {
+      await app.close()
+    }
+  })
+
   it('reports invalid connection and route path IDs as client errors without writing', async () => {
     const { app, connections, routes } = buildApp()
     connections.push(normalizeEngineConnection({

@@ -1,6 +1,7 @@
 import { complete, type Context, type Model } from '@mariozechner/pi-ai'
 import {
   assertEngineRouteCanMeasure,
+  engineConnectionAllowsUnauthenticatedText,
   engineConnectionModelCatalogResponseSchema,
   type EngineConnectionConfig,
   type EngineConnectionModelCatalogItem,
@@ -16,6 +17,8 @@ import {
 import { runEngineRouteText } from './engine-route-text-execution.js'
 import type { DatabaseClient } from '@ainyc/canonry-db'
 
+export { engineConnectionAllowsUnauthenticatedText } from '@ainyc/canonry-contracts'
+
 const MODEL_CATALOG_TIMEOUT_MS = 8_000
 const MODEL_CATALOG_MAX_BYTES = 1_000_000
 const MODEL_CATALOG_MAX_ITEMS = 500
@@ -29,13 +32,6 @@ const MODEL_CATALOG_MAX_ITEMS = 500
 const UNAUTHENTICATED_TEXT_ROUTE_API_KEY = 'canonry-unauthenticated-route'
 
 type TextConnectionCredential = Pick<EngineConnectionConfig, 'preset' | 'apiKey'>
-
-/** Hosted gateway presets always require their own credential. */
-export function engineConnectionAllowsUnauthenticatedText(
-  connection: Pick<EngineConnectionConfig, 'preset'>,
-): boolean {
-  return connection.preset === 'litellm' || connection.preset === 'custom-openai-compatible'
-}
 
 /**
  * Resolve the exact value passed to pi-ai without consulting provider env

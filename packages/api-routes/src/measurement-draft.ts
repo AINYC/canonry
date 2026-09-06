@@ -7,10 +7,12 @@ import {
   MEASUREMENT_GROUP_MEMBERSHIP_CSV_MAX_BYTES,
   alreadyExists,
   canonicalMeasurementPlanV2Json,
+  brandKeyFromText,
   brandLabelFromDomain,
   effectiveBrandNames,
   MEASUREMENT_PAGE_DEFAULT_LIMIT,
   MEASUREMENT_PAGE_MAX_LIMIT,
+  MIN_DOMAIN_BRAND_KEY_LENGTH,
   measurementCompiledChecksumConflict,
   measurementDraftCreateRequestSchema,
   measurementDraftCompetitorSchema,
@@ -374,8 +376,13 @@ function pinCompetitorInAuthoring(
   const sourceGroup = authoring.groups[groupIndex]!
   const existingIndex = sourceGroup.competitors.findIndex(competitor => hostOf(competitor.domain) === domain)
   const existing = existingIndex === -1 ? null : sourceGroup.competitors[existingIndex]!
-  const label = input.label ?? existing?.label ?? brandLabelFromDomain(domain) ?? domain
-  const aliases = input.aliases ?? existing?.aliases ?? [label]
+  const domainLabel = brandLabelFromDomain(domain)
+  // Domain-only pinning approves the competitor, not an ambiguous short
+  // word as its brand. Keep generated labels safe without rewriting any
+  // previously curated/published identity or manufacturing brand aliases.
+  const generatedLabel = brandKeyFromText(domainLabel).length >= MIN_DOMAIN_BRAND_KEY_LENGTH ? domainLabel : domain
+  const label = input.label ?? existing?.label ?? generatedLabel
+  const aliases = input.aliases ?? existing?.aliases ?? (input.label ? [input.label] : [])
   const stableKey = existing?.stableKey ?? nextCompetitorStableKey(sourceGroup, domain)
   const competitor: MeasurementV2Competitor = measurementDraftCompetitorSchema.parse({ stableKey, label, domain, aliases })
   const competitors = existingIndex === -1

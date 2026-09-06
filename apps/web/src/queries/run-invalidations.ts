@@ -8,6 +8,7 @@ import {
 
 import { heyClient } from '../api.js'
 import { invalidateProjectQueryDomain } from './query-invalidation.js'
+import { invalidateCompetitorLandscapes } from './competitor-landscape-refresh.js'
 
 /**
  * Map a run kind to the SDK operation prefixes it invalidates.
@@ -17,15 +18,13 @@ import { invalidateProjectQueryDomain } from './query-invalidation.js'
  * new `RunKind` variant requires extending this switch — TypeScript will
  * fail compilation at the `_exhaustive` line if a case is ever missed.
  *
- * `_projectName` is unused today (every invalidation is either an exact
- * top-level key or an op-id prefix, neither of which is project-scoped) but
- * stays on the signature: it is what a future per-project hand-authored key
- * would need, and all four call sites already pass it.
+ * Competitor-history invalidation is project-scoped; other domains retain
+ * their existing operation-prefix invalidation rules.
  */
 export function invalidateQueriesForRunKind(
   queryClient: QueryClient,
   kind: RunKind,
-  _projectName: string,
+  projectName: string,
 ): void {
   // Exact-key invalidations for the two top-level lists. We do NOT prefix
   // match `'getApiV1Projects'` here because that would also invalidate
@@ -42,6 +41,10 @@ export function invalidateQueriesForRunKind(
 
   switch (kind) {
     case RunKinds['answer-visibility']:
+      // Mark every stored-history scope stale, but let the refreshed run set
+      // trigger its single active read. Poll-driven completions and embeds use
+      // that same revision path without requiring a notification observer.
+      void invalidateCompetitorLandscapes(queryClient, projectName, 'none')
       // No explicit `['analytics-metrics', project]` invalidation here. That
       // key's last segment is `analyticsRevision` (`VisibilityTrendSection`,
       // fed by `latestVisibilityRevision` in `use-project-dashboard.ts`).
@@ -91,6 +94,9 @@ export function invalidateQueriesForRunKind(
       return
     case RunKinds['aeo-discover-seed']:
     case RunKinds['aeo-discover-probe']:
+      // Discovery can update the saved source classifications without changing
+      // the answer-visibility run set.
+      void invalidateCompetitorLandscapes(queryClient, projectName)
       return
     case RunKinds['gbp-sync']:
       void invalidateProjectQueryDomain(queryClient, 'gbp')

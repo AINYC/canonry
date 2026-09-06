@@ -5,7 +5,7 @@ import type { EngineRouteConfig } from '@ainyc/canonry-api-client'
 
 import { fetchSettings, isEmbed, type ApiProject } from '../../api.js'
 import { Button } from '../ui/button.js'
-import { describeError } from '@ainyc/canonry-contracts'
+import { describeError, engineConnectionAllowsUnauthenticatedText } from '@ainyc/canonry-contracts'
 import { useAccount } from '../../contexts/account-context.js'
 import { EngineRoutesReadOnlySummary } from '../settings/EngineRoutesSettings.js'
 
@@ -214,15 +214,18 @@ function ProjectEngineSettingsBody({
     ))
   }, [catalog, configured, connectionsById, engineRoutes, models, selected])
   const researchRoutes = useMemo<ResearchRoute[]>(() => {
-    const routes: ResearchRoute[] = engineRoutes.map(route => ({
-      id: route.source === 'implicit-native' ? legacyProviderId(route.id) : route.id,
-      label: route.label,
-      source: route.source,
-      capabilities: route.capabilities,
-      unavailable: route.source === 'implicit-native'
-        ? !configured.has(legacyProviderId(route.id))
-        : !connectionsById.has(route.connectionId),
-    }))
+    const routes: ResearchRoute[] = engineRoutes.map(route => {
+      const connection = connectionsById.get(route.connectionId)
+      return {
+        id: route.source === 'implicit-native' ? legacyProviderId(route.id) : route.id,
+        label: route.label,
+        source: route.source,
+        capabilities: route.capabilities,
+        unavailable: route.source === 'implicit-native'
+          ? !configured.has(legacyProviderId(route.id))
+          : !connection || !(connection.secretConfigured || engineConnectionAllowsUnauthenticatedText(connection)),
+      }
+    })
     if (researchProvider && !routes.some(route => route.id === researchProvider)) {
       routes.push({
         id: researchProvider,
@@ -236,7 +239,10 @@ function ProjectEngineSettingsBody({
       researchRouteOrder(left) - researchRouteOrder(right) || left.label.localeCompare(right.label)
     ))
   }, [configured, connectionsById, engineRoutes, researchProvider])
-  const selectableSweepIds = new Set(rows.filter(row => row.sweepEligible).map(row => row.id))
+  // Readiness decides what can be newly selected, not what saved intent survives.
+  // Removing a key temporarily must not delete a checked native provider or its
+  // model override when the operator saves an unrelated research preference.
+  const selectableSweepIds = new Set(rows.filter(row => row.kind === 'native').map(row => row.id))
   const selectedSweepIds = selected.filter(id => selectableSweepIds.has(id))
   const selectedNativeProviders = new Set(
     rows
@@ -417,7 +423,7 @@ function ProjectEngineSettingsBody({
         )}
       </fieldset>
       {rows.every(route => !route.sweepEligible) && <p className="mt-3 text-sm text-secondary">Configure an answer engine in <Link to="/settings" className="text-link">global Settings</Link> before choosing a sweep route. Research can still use a configured text-only route below.</p>}
-      {!automatic && selectedSweepIds.length === 0 && <p role="alert" className="text-sm text-negative-400">Choose at least one available sweep route.</p>}
+      {!automatic && selectedSweepIds.length === 0 && <p role="alert" className="text-sm text-negative-400">Choose at least one native sweep route.</p>}
       {researchRoutes.length > 0 && (
         <div className="mt-5 border-t border-default pt-4">
           <label className="text-sm font-medium text-secondary" htmlFor="project-research-route">Research route</label>
@@ -430,7 +436,7 @@ function ProjectEngineSettingsBody({
             {researchRoutes.map(route => <option key={route.id} value={route.id} disabled={route.unavailable}>{route.label}{!isServerVerifiedMeasurementRoute(route) ? ' — text-only' : ''}{route.unavailable ? ' — unavailable' : ''}</option>)}
           </select>
           <p className="mt-1 project-engine-help">Text-only routes are allowed for research. They cannot run answer-visibility sweeps.</p>
-          {researchRoutes.find(route => route.id === researchProvider)?.unavailable && <p className="mt-1 project-engine-help text-caution-400">The saved research route is unavailable because its connection is missing. Choose another route to replace it.</p>}
+          {researchRoutes.find(route => route.id === researchProvider)?.unavailable && <p className="mt-1 project-engine-help text-caution-400">The saved research route is unavailable. Check its connection and required API key, or choose another route.</p>}
         </div>
       )}
       {error && <p role="alert" className="text-sm text-negative-400">{error}</p>}

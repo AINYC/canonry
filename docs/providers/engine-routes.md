@@ -78,6 +78,10 @@ An explicit `--base-url` overrides a preset default. Changing a connection's
 endpoint changes the policy for every attached route, so Canonry advances each
 affected route revision.
 
+A Vercel AI Gateway connection needs an API key before its routes become
+available for research or discovery classification. LiteLLM and custom
+OpenAI-compatible connections can work without a key.
+
 ## Text-only is not sweep-ready
 
 Configured generic routes are **text-only**. They can serve
@@ -96,6 +100,11 @@ When a text-only route runs research, Canonry records the answer
 text and its answer-text mentions. Canonry records no grounding sources, cited
 domains, search queries, served model, or negative citation claim. Its citation
 state is unavailable, not `not-cited`.
+
+Text-only research does not use the project's default location. An explicit
+location is rejected because these routes cannot send location context.
+Queued text-only requests with a saved location fail before any provider call.
+Native research keeps its existing location behavior.
 
 ## Select a route for project research
 
@@ -120,6 +129,10 @@ uses the same field:
 spec:
   researchProvider: route:research-gateway
 ```
+
+Changing research settings preserves saved native sweep providers and model
+choices, even when a provider key is temporarily unavailable.
+Remove a sweep provider explicitly to change that selection.
 
 ## Evidence and identity boundaries
 

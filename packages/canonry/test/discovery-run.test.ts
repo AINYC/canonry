@@ -15,6 +15,8 @@ import {
 } from '@ainyc/canonry-db'
 import type { DiscoveryDeps } from '@ainyc/canonry-api-routes'
 import type { LocationContext } from '@ainyc/canonry-contracts'
+import { engineRouteConfigSchema, normalizeEngineConnection } from '@ainyc/canonry-contracts'
+import { createOpenAiCompatibleTextRouteAdapter } from '../src/engine-routes.js'
 import { ProviderRegistry } from '../src/provider-registry.js'
 import {
   buildClassificationPrompt,
@@ -705,6 +707,7 @@ describe('buildDefaultDeps classification provider', () => {
       adapter: {
         name: 'route:gateway-classifier',
         displayName: 'Gateway Classifier',
+        validateConfig: () => ({ ok: true }),
         generateText: async () => {
           routeTextCalls += 1
           return 'aurora-solar.com => direct-competitor'
@@ -737,6 +740,52 @@ describe('buildDefaultDeps classification provider', () => {
     expect(result).toEqual({ 'aurora-solar.com': 'direct-competitor' })
     expect(routeTextCalls).toBe(1)
     expect(geminiTextCalls).toBe(0)
+  })
+
+  it.each([
+    { preset: 'vercel-ai-gateway' as const, apiKey: undefined, useRoute: false },
+    { preset: 'vercel-ai-gateway' as const, apiKey: 'configured-key', useRoute: true },
+    { preset: 'litellm' as const, apiKey: undefined, useRoute: true },
+    { preset: 'custom-openai-compatible' as const, apiKey: undefined, useRoute: true },
+  ])('checks credential readiness for $preset ($apiKey)', async ({ preset, apiKey, useRoute }) => {
+    const registry = new ProviderRegistry()
+    let nativeCalls = 0
+    let routeCalls = 0
+    const quota = { maxConcurrency: 1, maxRequestsPerMinute: 10, maxRequestsPerDay: 100 }
+    registry.register({
+      name: 'gemini',
+      generateText: async () => {
+        nativeCalls++
+        return 'rival.example => direct-competitor'
+      },
+    } as never, { provider: 'gemini', apiKey: 'native-key', quotaPolicy: quota })
+    const connection = normalizeEngineConnection({
+      id: 'classifier', label: 'Classifier', preset, apiKey, quota,
+      ...(preset === 'custom-openai-compatible' ? { baseUrl: 'https://gateway.example/v1' } : {}),
+    })
+    const route = engineRouteConfigSchema.parse({
+      id: 'route:classifier', label: 'Classifier', connectionId: connection.id,
+      modelId: 'classifier-model', revision: 1, source: 'configured', capabilities: { kind: 'text-only' },
+    })
+    registry.register({
+      ...createOpenAiCompatibleTextRouteAdapter({ connection, route }),
+      generateText: async () => {
+        routeCalls++
+        return 'rival.example => direct-competitor'
+      },
+    }, {
+      provider: route.id, connectionId: connection.id, measurementReady: false,
+      apiKey, baseUrl: connection.baseUrl, model: route.modelId, quotaPolicy: quota,
+    })
+
+    const classified = await buildDefaultDeps(registry).classifyDomains({
+      project: { id: 'p', name: 'alpha', brandNames: ['Alpha'], canonicalDomains: ['alpha.example'], competitorDomains: [] },
+      icpDescription: 'agencies', domains: ['rival.example'],
+    })
+
+    expect(classified).toEqual({ 'rival.example': 'direct-competitor' })
+    expect(routeCalls).toBe(useRoute ? 1 : 0)
+    expect(nativeCalls).toBe(useRoute ? 0 : 1)
   })
 })
 

@@ -2,6 +2,7 @@ import React from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, onTestFinished, test, vi } from 'vitest'
+import type { EngineConnectionPublicDto } from '@ainyc/canonry-api-client'
 
 import { ProjectEngineSettingsSection } from '../src/components/project/ProjectEngineSettingsSection.js'
 import { AccountProvider } from '../src/contexts/account-context.js'
@@ -37,7 +38,7 @@ const settings = {
 function renderSection(
   onSave = vi.fn().mockResolvedValue(undefined),
   project = { name: 'demo', providers: [] as string[], providerModels: {} as Record<string, string> },
-  settingsBody: typeof settings = settings,
+  settingsBody: Omit<typeof settings, 'engineConnections'> & { engineConnections: EngineConnectionPublicDto[] } = settings,
 ) {
   const restore = mockFetch(url => {
     if (url.split('?')[0]!.endsWith('/settings')) return jsonResponse(settingsBody)
@@ -123,6 +124,51 @@ test('save drops overrides for engines that are not selected', async () => {
   act(() => { fireEvent.click(screen.getByRole('button', { name: 'Save engines' })) })
   // openai is not a selected engine, so its lingering override must not persist.
   await waitFor(() => expect(onSave).toHaveBeenCalledWith({ providers: ['gemini'], providerModels: { gemini: 'gemini-2.5-pro' } }))
+})
+
+test('a research-only save preserves checked native engines and models while their key is unavailable', async () => {
+  const onSave = renderSection(undefined, {
+    name: 'demo', providers: ['gemini', 'openai'], providerModels: { openai: 'gpt-5-mini' }, researchProvider: null,
+  })
+  const openai = await screen.findByLabelText('openai') as HTMLInputElement
+  expect(openai.checked).toBe(true)
+  expect(screen.getByText('Not configured, skipped')).toBeTruthy()
+  fireEvent.change(screen.getByLabelText('Research route'), { target: { value: 'route:research-gateway' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save engines' }))
+  await waitFor(() => expect(onSave).toHaveBeenCalledWith({
+    providers: ['gemini', 'openai'], providerModels: { openai: 'gpt-5-mini' }, researchProvider: 'route:research-gateway',
+  }))
+})
+
+test('an unavailable-only native selection can save research without being replaced by automatic sweeps', async () => {
+  const onSave = renderSection(undefined, {
+    name: 'demo', providers: ['openai'], providerModels: { openai: 'gpt-5-mini' }, researchProvider: null,
+  })
+  await screen.findByLabelText('Research route')
+  fireEvent.change(screen.getByLabelText('Research route'), { target: { value: 'route:research-gateway' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save engines' }))
+  await waitFor(() => expect(onSave).toHaveBeenCalledWith({
+    providers: ['openai'], providerModels: { openai: 'gpt-5-mini' }, researchProvider: 'route:research-gateway',
+  }))
+})
+
+test('explicitly deselecting an unavailable native engine still removes its saved model', async () => {
+  const onSave = renderSection(undefined, {
+    name: 'demo', providers: ['gemini', 'openai'], providerModels: { openai: 'gpt-5-mini' },
+  })
+  const openai = await screen.findByLabelText('openai')
+  fireEvent.click(openai)
+  fireEvent.click(screen.getByRole('button', { name: 'Save engines' }))
+  await waitFor(() => expect(onSave).toHaveBeenCalledWith({ providers: ['gemini'], providerModels: {} }))
+})
+
+test.each(['vercel-ai-gateway', 'litellm', 'custom-openai-compatible'] as const)('research readiness respects keyless policy for %s', async preset => {
+  renderSection(undefined, { name: 'demo', providers: ['gemini'], providerModels: {} }, {
+    ...settings,
+    engineConnections: [{ ...settings.engineConnections[0]!, preset, secretConfigured: false }],
+  })
+  const research = await screen.findByLabelText('Research route')
+  expect((research.querySelector('option[value="route:research-gateway"]') as HTMLOptionElement).disabled).toBe(preset === 'vercel-ai-gateway')
 })
 
 test('migrates native route selections and model overrides to legacy providers', async () => {

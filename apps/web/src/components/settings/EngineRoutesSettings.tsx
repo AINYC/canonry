@@ -9,7 +9,7 @@ import {
   putApiV1SettingsEngineRoutesByIdMutation,
 } from '@ainyc/canonry-api-client/react-query'
 import type { EngineConnectionPublicDto, EngineRouteConfig } from '@ainyc/canonry-api-client'
-import { describeError } from '@ainyc/canonry-contracts'
+import { describeError, engineConnectionAllowsUnauthenticatedText } from '@ainyc/canonry-contracts'
 
 import { heyClient, isEmbed } from '../../api.js'
 import { Button } from '../ui/button.js'
@@ -59,6 +59,8 @@ function sourceOrder(source: EngineRouteConfig['source']): number {
 
 function routeReadiness(route: EngineRouteConfig, connection: EngineConnectionPublicDto | undefined): { label: string; tone: 'positive' | 'caution' | 'negative' } {
   if (route.source !== 'implicit-native' && !connection) return { label: 'Connection missing', tone: 'negative' }
+  if (route.source !== 'implicit-native' && connection && !connection.secretConfigured
+    && !engineConnectionAllowsUnauthenticatedText(connection)) return { label: 'API key missing', tone: 'negative' }
   const serverVerified = route.source === 'implicit-native'
     && route.capabilities.kind === 'verified-measurement'
   if (!serverVerified) return { label: 'Text-only', tone: 'caution' }

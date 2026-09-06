@@ -28,6 +28,19 @@ project pins + frozen market competitors + stored classifications
 
 Observed competitors sort by mention count, then citation count. Other sources sort by citation count. The server returns at most 100 observed rows and 100 other-source rows and sets `truncated`. Pinned rows are never capped. Each row includes at most three stored sample URLs.
 
+## Existing projects
+
+Existing competitors remain pinned. Saved sweeps supply historical mentions and citations without new provider requests or changes to provider settings.
+The dashboard defaults to 30 days. The All window includes older evidence.
+
+Known direct competitors appear under Observed when the selected history contains matching mentions or citations.
+Unknown domains remain under Other cited sources until discovery classifies them or an operator pins them.
+Ordinary visibility sweeps capture answers and sources, but do not classify unknown domains or create pins.
+
+Missing historical answers and URLs remain unavailable. Stored domain citations still count, even without a stored URL.
+Simple observations without usable query text remain in All, but do not enter either explicit query-class filter.
+Advanced Measurement retains the query classes from its frozen Target assignments.
+
 ## Retroactive pins
 
 Adding a Simple-project competitor changes the identity set used by the next read. Canonry immediately re-evaluates the selected historical window against already stored answer text and source URLs. It does not rerun old prompts and does not rewrite old snapshots.

@@ -26,7 +26,7 @@ import {
   type CompetitorLandscapeModelComparison,
   type CompetitorLandscapeResponse,
 } from '@ainyc/canonry-contracts'
-import { buildCompetitorLandscapeHistory, type CompetitorLandscapeSurfaceClass } from '@ainyc/canonry-intelligence'
+import { buildCompetitorLandscapeHistory, type CompetitorLandscapeIdentity, type CompetitorLandscapeSurfaceClass } from '@ainyc/canonry-intelligence'
 import { resolveProject, resolveSnapshotAnswerMentioned } from './helpers.js'
 import { projectQueryClassifier } from './mention-share-inputs.js'
 import { activeMeasurementPlan } from './measurement-overview.js'
@@ -45,17 +45,21 @@ type RawQuery = {
   runId?: string
 }
 
+interface LandscapePin extends CompetitorLandscapeIdentity {
+  aliases: string[]
+}
+
 interface FrozenPlanScope {
   executionNodeKeys: Set<string>
   queryClassesByExecution: Map<string, Set<'branded' | 'non-brand'>>
-  competitors: Array<{ domain: string; label: string; aliases: string[] }>
+  competitors: LandscapePin[]
 }
 
 interface AdvancedScope {
   kind: 'group' | 'all-markets'
   groupKey?: string
-  activePinned: Array<{ domain: string; label: string; aliases: string[] }>
-  pendingPins: Array<{ domain: string; label: string; aliases: string[] }>
+  activePinned: LandscapePin[]
+  pendingPins: LandscapePin[]
   activeRevision: number
   draft: { etag: string; pendingCompetitorDomains: string[] } | null
   runScopes: Map<string, FrozenPlanScope>
@@ -169,6 +173,7 @@ export async function competitorLandscapeRoutes(app: FastifyInstance) {
       .map(row => ({
         domain: row.domain,
         label: brandLabelFromDomain(row.domain) || row.domain,
+        labelSource: 'domain' as const,
         aliases: [],
       }))
     const pinned = mergePins(advanced?.pendingPins ?? [], advanced?.activePinned ?? [], projectPins)
@@ -393,7 +398,7 @@ function pendingDraftPins(
   activePlan: Extract<ReturnType<typeof parseStoredMeasurementPlanAnyVersion>, { schemaVersion: 2 }>,
   kind: AdvancedScope['kind'],
   groupKey: string | undefined,
-): Array<{ domain: string; label: string; aliases: string[] }> {
+): LandscapePin[] {
   const groups = kind === 'group'
     ? authoring.groups.filter(group => group.stableKey === groupKey)
     : authoring.groups
@@ -447,6 +452,9 @@ function snapshotMatchesFilters(input: {
   if (filters.queryClass && filters.queryClass !== 'all') {
     if (!queryClassifier) return false
     const queryText = (snapshot.queryId ? queryTextById.get(snapshot.queryId) : undefined) ?? snapshot.queryText
+    // A missing legacy question proves neither query class. Keep its evidence
+    // in All, but do not turn an unavailable question into a non-brand result.
+    if (!queryText?.trim()) return false
     if (queryClassifier(queryText) !== filters.queryClass) return false
   }
   return true
@@ -465,9 +473,9 @@ function normalizedDomain(value: string): string | null {
 }
 
 function mergePins(
-  ...collections: ReadonlyArray<ReadonlyArray<{ domain: string; label: string; aliases: string[] }>>
-): Array<{ domain: string; label: string; aliases: string[] }> {
-  const result: Array<{ domain: string; label: string; aliases: string[] }> = []
+  ...collections: ReadonlyArray<ReadonlyArray<LandscapePin>>
+): LandscapePin[] {
+  const result: LandscapePin[] = []
   const indexByDomain = new Map<string, number>()
   for (const candidate of collections.flat()) {
     const domain = normalizedDomain(candidate.domain)
@@ -483,7 +491,11 @@ function mergePins(
       ...existing,
       // Keep the first identity as the display identity, but preserve every
       // market's names for answer-text matching after eTLD+1 deduplication.
-      aliases: [...new Set([...existing.aliases, candidate.label, ...candidate.aliases])],
+      aliases: [...new Set([
+        ...existing.aliases,
+        ...(candidate.labelSource === 'domain' ? [] : [candidate.label]),
+        ...candidate.aliases,
+      ])],
     }
   }
   return result

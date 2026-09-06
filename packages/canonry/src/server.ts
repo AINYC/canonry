@@ -1053,7 +1053,9 @@ export async function createServer(opts: {
       .filter(provider => provider.configured)
       .map(provider => provider.name);
     const configuredRoutes = registry.getAll()
-      .filter(provider => provider.adapter.mode === 'api' && provider.config.connectionId !== undefined)
+      .filter(provider => provider.adapter.mode === 'api'
+        && provider.config.connectionId !== undefined
+        && provider.adapter.validateConfig(provider.config).ok)
       .map(provider => provider.adapter.name);
     return [...new Set([...configuredNative, ...configuredRoutes])];
   };

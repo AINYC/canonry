@@ -6,6 +6,7 @@ import {
   hostMatchesDomain,
   hostOf,
   matcherMatchesText,
+  MIN_DOMAIN_BRAND_KEY_LENGTH,
   registrableDomain,
   type BrandAliasMatcher,
 } from '@ainyc/canonry-contracts'
@@ -37,6 +38,8 @@ export interface CompetitorLandscapeHistorySnapshot {
 export interface CompetitorLandscapeIdentity {
   domain: string
   label: string
+  /** Generated display labels are not operator-approved brand aliases. */
+  labelSource?: 'domain' | 'curated'
   /** Curated frozen aliases (Advanced Measurement) supplement the display label. */
   aliases?: readonly string[]
 }
@@ -108,6 +111,7 @@ interface MutableRow {
 interface Candidate {
   domain: string
   label: string
+  labelSource: 'domain' | 'curated'
   aliases: readonly string[]
   surfaceClass: CompetitorLandscapeSurfaceClass
   pinned: boolean
@@ -134,6 +138,7 @@ export function buildCompetitorLandscapeHistory(
     putCandidate(pinned, candidateFor({
       domain,
       label: identity.label,
+      labelSource: identity.labelSource,
       aliases: identity.aliases,
       pinned: true,
       surfaceClass: 'direct-competitor',
@@ -153,6 +158,7 @@ export function buildCompetitorLandscapeHistory(
     putCandidate(classifiedDirect, candidateFor({
       domain,
       label: brandLabelFromDomain(domain) || domain,
+      labelSource: 'domain',
       pinned: false,
       surfaceClass,
     }))
@@ -169,6 +175,7 @@ export function buildCompetitorLandscapeHistory(
       const candidate = candidateFor({
         domain,
         label: identity.label,
+        labelSource: identity.labelSource,
         aliases: identity.aliases,
         pinned: false,
         surfaceClass: 'direct-competitor',
@@ -189,6 +196,7 @@ export function buildCompetitorLandscapeHistory(
       const candidate = candidateFor({
         domain,
         label: brandLabelFromDomain(domain) || domain,
+        labelSource: 'domain',
         pinned: false,
         surfaceClass,
       })
@@ -300,21 +308,24 @@ function normalizeDomain(value: string): string | null {
 function candidateFor(input: {
   domain: string
   label: string
+  labelSource?: 'domain' | 'curated'
   aliases?: readonly string[]
   surfaceClass: CompetitorLandscapeSurfaceClass
   pinned: boolean
 }): Candidate {
   const host = hostOf(input.domain)
+  const labelSource = input.labelSource ?? 'curated'
+  const domainLabel = brandLabelFromDomain(input.domain)
   const identityAliases = [...new Set(input.aliases ?? [])]
   const matcherAliases = [
-    input.label,
+    ...(labelSource === 'curated' ? [input.label] : []),
     ...identityAliases,
-    brandLabelFromDomain(input.domain),
+    ...(brandKeyFromText(domainLabel).length >= MIN_DOMAIN_BRAND_KEY_LENGTH ? [domainLabel] : []),
     host,
   ].filter((value): value is string => (
     typeof value === 'string' && brandKeyFromText(value).length >= MIN_BRAND_ALIAS_KEY_LENGTH
   ))
-  return { ...input, aliases: identityAliases, matcher: compileBrandAliases(matcherAliases) }
+  return { ...input, labelSource, aliases: identityAliases, matcher: compileBrandAliases(matcherAliases) }
 }
 
 function putCandidate(target: Map<string, Candidate>, candidate: Candidate): void {
@@ -326,7 +337,12 @@ function mergeCandidates(primary: Candidate, additional: Candidate): Candidate {
   return candidateFor({
     domain: primary.domain,
     label: primary.label,
-    aliases: [...new Set([...primary.aliases, additional.label, ...additional.aliases])],
+    labelSource: primary.labelSource,
+    aliases: [...new Set([
+      ...primary.aliases,
+      ...(additional.labelSource === 'curated' ? [additional.label] : []),
+      ...additional.aliases,
+    ])],
     surfaceClass: preferredSurfaceClass(primary.surfaceClass, additional.surfaceClass),
     pinned: primary.pinned || additional.pinned,
   })

@@ -94,6 +94,13 @@ export const engineConnectionConfigSchema = engineConnectionBaseSchema.extend({
 })
 export type EngineConnectionConfig = z.output<typeof engineConnectionConfigSchema>
 
+/** Hosted gateways require a credential; local/custom endpoints may be keyless. */
+export function engineConnectionAllowsUnauthenticatedText(
+  connection: Pick<EngineConnectionConfig, 'preset'>,
+): boolean {
+  return connection.preset === 'litellm' || connection.preset === 'custom-openai-compatible'
+}
+
 const engineConnectionUpsertFieldsSchema = engineConnectionBaseSchema.omit({ id: true }).extend({
   baseUrl: endpointSchema.optional(),
 })

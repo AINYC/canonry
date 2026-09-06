@@ -106,6 +106,7 @@ import { invalidateProjectQueryDomain } from '../queries/query-invalidation.js'
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery } from '@tanstack/react-query'
 import { getApiV1ProjectsOptions } from '@ainyc/canonry-api-client/react-query'
 import { useProjectDashboard } from '../queries/use-project-dashboard.js'
+import { useCompetitorLandscapeRefresh } from '../queries/competitor-landscape-refresh.js'
 import { useInitialDashboard } from '../contexts/dashboard-context.js'
 import { useAccount } from '../contexts/account-context.js'
 import type { ProjectCommandCenterVm, RunHistoryPoint } from '../view-models.js'
@@ -1288,6 +1289,7 @@ export function ProjectPage(props: { tab: ProjectPageTab }) {
     commandCenter: model,
     isLoading: dashboardLoading,
     latestVisibilityRevision,
+    competitorHistoryRevision,
     refetch,
   } = useProjectDashboard(lookupProjectName)
   const isLoading = (!nameFromContext && projectsListQuery.isLoading) || dashboardLoading
@@ -1346,6 +1348,7 @@ export function ProjectPage(props: { tab: ProjectPageTab }) {
     model={model}
     refetch={refetch}
     latestVisibilityRevision={latestVisibilityRevision}
+    competitorHistoryRevision={competitorHistoryRevision}
     {...props}
   />
 }
@@ -1418,11 +1421,13 @@ function ProjectPageContent({
   model,
   refetch,
   latestVisibilityRevision,
+  competitorHistoryRevision,
 }: {
   tab: ProjectPageTab
   model: ProjectCommandCenterVm
   refetch: () => Promise<void>
   latestVisibilityRevision: string
+  competitorHistoryRevision: string
 }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -1701,7 +1706,16 @@ function ProjectPageContent({
     enabled: competitorLandscapeReadEnabled,
     staleTime: 0,
     refetchOnMount: 'always',
+    // CLI/agent classification and pin changes do not emit browser mutations.
+    refetchOnWindowFocus: 'always',
   })
+  useCompetitorLandscapeRefresh(projectName, JSON.stringify([
+    competitorHistoryRevision,
+    model.competitors.map(competitor => competitor.domain).sort(),
+    model.project.canonicalDomain, model.project.ownedDomains, model.project.aliases, model.project.displayName,
+    activeMeasurementRevision,
+    measurementSetupQuery.data?.draft?.etag ?? null,
+  ]), competitorLandscapeReadEnabled)
   const competitorLandscapeError = !competitorLandscapeQuery.isError
     ? undefined
     : competitorLandscapeQuery.data === undefined
@@ -2003,7 +2017,7 @@ function ProjectPageContent({
       // frame key moves. If `refetch()` fails, the project detail query polls
       // every PROJECT_DETAIL_REFRESH_MS, so the rotation still lands.
       void refetch()
-      void competitorLandscapeQuery.refetch()
+      // The refreshed pin set changes the landscape revision above.
       return true
     } catch (err) {
       addToast({
@@ -2034,7 +2048,7 @@ function ProjectPageContent({
       await apiRemoveCompetitorById(projectName, competitor.id)
       // See handleAddCompetitor: the frame key rotation is the refetch.
       void refetch()
-      void competitorLandscapeQuery.refetch()
+      // The refreshed pin set changes the landscape revision above.
       return true
     } catch (err) {
       addToast({
@@ -2074,7 +2088,6 @@ function ProjectPageContent({
       // exposes the pending draft pin straight away, and Setup picks up the
       // draft state for the explicit publish step.
       void Promise.allSettled([
-        competitorLandscapeQuery.refetch(),
         measurementSetupQuery.refetch(),
       ])
       addToast({

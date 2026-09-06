@@ -40,11 +40,13 @@ function setup(opts: {
   const registry = new ProviderRegistry()
   const models: string[] = []
   const trackedCalls: string[] = []
+  const trackedLocations: unknown[] = []
   const textCalls: string[] = []
   registry.register({
     name: 'test',
-    executeTrackedQuery: async (_input: { query: string }, config: { model?: string }) => {
+    executeTrackedQuery: async (_input: { query: string; location?: unknown }, config: { model?: string }) => {
       trackedCalls.push(_input.query)
+      trackedLocations.push(_input.location)
       if (opts.textOnly) throw new Error('text-only route must not execute a tracked query')
       models.push(config.model ?? '')
       if (_input.query === 'bad') await opts.blockBad
@@ -68,9 +70,36 @@ function setup(opts: {
     ...(opts.textOnly ? { measurementReady: false, connectionId: 'gateway-one' } : {}),
     quotaPolicy: { maxConcurrency: 2, maxRequestsPerMinute: 100, maxRequestsPerDay: 10 },
   })
-  return { db, registry, models, trackedCalls, textCalls }
+  return { db, registry, models, trackedCalls, trackedLocations, textCalls }
 }
 describe('executeResearchRun', () => {
+  it('refuses queued text-only batches with unsupported location before charging or calling a provider', async () => {
+    const { db, registry, trackedCalls, textCalls } = setup({ textOnly: true })
+    db.update(researchRuns).set({ location: { label: 'New York', city: 'New York', country: 'US' } }).run()
+
+    await executeResearchRun(db, registry, 'r', 'p')
+
+    expect(db.select().from(researchRuns).get()).toMatchObject({
+      status: 'failed', completedQueries: 0, failedQueries: 2,
+      error: expect.stringContaining('do not support location context'),
+    })
+    expect(db.select().from(researchRunQueries).all().every(row => row.status === 'failed' && row.answerText === null)).toBe(true)
+    expect(trackedCalls).toEqual([])
+    expect(textCalls).toEqual([])
+    expect(db.select().from(usageCounters).all()).toEqual([])
+  })
+
+  it('continues forwarding location for native research batches', async () => {
+    const { db, registry, trackedLocations } = setup({ failQueries: false })
+    const location = { label: 'New York', city: 'New York', country: 'US' }
+    db.update(researchRuns).set({ location }).run()
+
+    await executeResearchRun(db, registry, 'r', 'p')
+
+    expect(db.select().from(researchRuns).get()?.status).toBe('completed')
+    expect(trackedLocations).toEqual([location, location])
+  })
+
   it('does not double-charge the shared adapter daily quota for a prepaid generic research batch', async () => {
     const { db, registry, textCalls } = setup({ textOnly: true })
     const original = registry.get('test')!

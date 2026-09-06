@@ -190,6 +190,68 @@ describe('buildCompetitorLandscapeHistory', () => {
     expect(result.pinned[0]).toMatchObject({ mentionCount: 1, shareOfVoice: 100 })
   })
 
+  it('does not promote short generated labels into aliases when duplicate identities merge', () => {
+    const generated = { domain: 'car.com', label: 'car', labelSource: 'domain' as const }
+    const result = buildCompetitorLandscapeHistory({
+      project: { domain: 'acme.example', label: 'Acme', domains: ['acme.example'] },
+      pinned: [generated, { ...generated, domain: 'www.car.com' }],
+      classifications: new Map(),
+      snapshots: [
+        snapshot({
+          id: 'ordinary-word',
+          answerText: 'Acme helps you rent a car.',
+          projectMentioned: true,
+          frozenCompetitors: [generated],
+        }),
+        snapshot({ id: 'written-domain', answerText: 'Compare car.com.', citedDomains: ['car.com'] }),
+      ],
+    })
+
+    expect(result.pinned).toEqual([expect.objectContaining({
+      domain: 'car.com', mentionCount: 1, citationCount: 1, shareOfVoice: 50,
+    })])
+    expect(result.evidence.mentionCredits).toBe(2)
+  })
+
+  it('applies the safe domain label threshold to automatically observed competitors', () => {
+    const result = buildCompetitorLandscapeHistory({
+      project: { domain: 'acme.example', label: 'Acme', domains: ['acme.example'] },
+      pinned: [],
+      classifications: new Map([['car.com', 'direct-competitor']]),
+      snapshots: [snapshot({
+        answerText: 'Acme helps you rent a car.',
+        projectMentioned: true,
+        citedDomains: ['car.com'],
+      })],
+    })
+
+    expect(result.observed).toEqual([expect.objectContaining({
+      domain: 'car.com', mentionCount: 0, citationCount: 1, shareOfVoice: 0,
+    })])
+    expect(result.project.shareOfVoice).toBe(100)
+  })
+
+  it('preserves explicitly curated short labels and aliases across merged identities', () => {
+    const result = buildCompetitorLandscapeHistory({
+      project: { domain: 'acme.example', label: 'Acme', domains: ['acme.example'] },
+      pinned: [
+        { domain: 'ibm.com', label: 'ibm', labelSource: 'domain' },
+        { domain: 'www.ibm.com', label: 'IBM' },
+        { domain: 'car.com', label: 'car', labelSource: 'domain' },
+      ],
+      classifications: new Map(),
+      snapshots: [snapshot({
+        answerText: 'IBM and CAR are both options.',
+        frozenCompetitors: [{ domain: 'car.com', label: 'car', labelSource: 'domain', aliases: ['CAR'] }],
+      })],
+    })
+
+    expect(result.pinned).toEqual([
+      expect.objectContaining({ domain: 'ibm.com', mentionCount: 1, shareOfVoice: 50 }),
+      expect.objectContaining({ domain: 'car.com', mentionCount: 1, shareOfVoice: 50 }),
+    ])
+  })
+
   it('includes classified and frozen direct competitors mentioned without citations, but hides zero-activity observed rows', () => {
     const result = buildCompetitorLandscapeHistory({
       project: { domain: 'acme.example', label: 'Acme', domains: ['acme.example'] },

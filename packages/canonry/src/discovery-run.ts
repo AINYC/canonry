@@ -261,7 +261,9 @@ export function buildDefaultDeps(registry: ProviderRegistry): DiscoveryDeps {
   // configured route has no evidence adapter, but its plain-text transport is
   // suitable for the one post-probe domain-classification call.
   const classificationProvider = (registry.getAll?.() ?? []).find(provider =>
-    provider.adapter.name.startsWith('route:') && provider.config.measurementReady === false,
+    provider.adapter.name.startsWith('route:')
+    && provider.config.measurementReady === false
+    && provider.adapter.validateConfig(provider.config).ok,
   ) ?? gemini
 
   /** Resolve a seed-capable provider or fail fast with a remediation. */

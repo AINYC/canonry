@@ -128,6 +128,16 @@ test('lists native and configured routes with their actual measurement readiness
   expect(screen.getByText('Text-only routes can power Aero and research. Native answer engines run visibility sweeps.')).toBeTruthy()
 })
 
+test('marks a hosted gateway route unavailable when its required API key is missing', async () => {
+  renderSettings({ settingsBody: {
+    ...settings,
+    engineConnections: [{ ...settings.engineConnections[0]!, preset: 'vercel-ai-gateway', secretConfigured: false }],
+  } })
+  await screen.findByText('Team GPT')
+  expect(screen.getByText('API key missing')).toBeTruthy()
+  expect(screen.queryByText('Text-only')).toBeNull()
+})
+
 test('keeps routes first, then the route catalog editor, before the connection table', async () => {
   renderSettings()
 

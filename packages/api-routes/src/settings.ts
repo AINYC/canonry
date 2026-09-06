@@ -12,6 +12,7 @@ import type {
 import {
   AppError,
   buildEngineRouteSummaryDto,
+  engineConnectionAllowsUnauthenticatedText,
   engineConnectionEndpointChanged,
   engineConnectionInputSchema,
   engineConnectionModelCatalogResponseSchema,
@@ -105,14 +106,17 @@ export async function settingsRoutes(app: FastifyInstance, opts: SettingsRoutesO
   // viewers and project-scoped keys may choose/describe routes without seeing
   // connection ids, endpoint URLs, credential state, or provider settings.
   app.get('/settings/engine-routes', async () => {
-    const connectionIds = new Set(resolveSettingList(opts.engineConnections).map(connection => connection.id))
+    const connections = new Map(resolveSettingList(opts.engineConnections).map(connection => [connection.id, connection]))
+    const readyConnectionIds = new Set([...connections.values()]
+      .filter(connection => connection.secretConfigured || engineConnectionAllowsUnauthenticatedText(connection))
+      .map(connection => connection.id))
     return engineRouteSummaryResponseSchema.parse({
       routes: resolveSettingList(opts.engineRoutes)
         // Configured gateway routes depend on a configured connection. Native
         // virtual routes use a host-owned adapter instead.
         .map(route => buildEngineRouteSummaryDto(route, {
           connectionAvailable: route.source === 'configured'
-            ? connectionIds.has(route.connectionId)
+            ? readyConnectionIds.has(route.connectionId)
             : undefined,
         }))
         .sort((left, right) => left.label.localeCompare(right.label) || left.id.localeCompare(right.id)),
