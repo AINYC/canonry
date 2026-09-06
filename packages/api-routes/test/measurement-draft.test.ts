@@ -7,6 +7,7 @@ import { eq } from 'drizzle-orm'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   MEASUREMENT_GROUP_MEMBERSHIP_CSV_MAX_BYTES,
+  canonicalMeasurementPlanV2,
   measurementDraftApplyGroupMembershipResponseSchema,
   measurementDraftCompilePreviewResponseSchema,
   measurementDraftDiffPreviewResponseSchema,
@@ -1054,6 +1055,68 @@ async function publish(session: DraftSession, expectedActiveRevision: number | n
 }
 
 describe('measurement draft publish', () => {
+  it.each(['changed', 'removed'])('refuses automatic pin seeding when a frozen location was %s, but permits an explicit draft review', async change => {
+    const session = await readyDraft()
+    await session.run('upsert-group', { group: { stableKey: 'catalog', label: 'Catalog', targetKeys: ['widgets'], competitors: [] } })
+    const published = await publish(session, null)
+    expect(published.statusCode, published.body).toBe(200)
+    db.update(projects).set({ locations: change === 'removed' ? [] : [
+      { label: 'nyc', city: 'Newark', region: 'NJ', country: 'US' },
+    ] }).where(eq(projects.id, 'prj_northwind')).run()
+    const pinned = await action('pin-competitor', { payload: { expectedActiveRevision: 1, groupKey: 'catalog', domain: 'rival.example' } })
+    expect(pinned.statusCode, pinned.body).toBe(400)
+    expect(pinned.json().error.message).toMatch(/Published location.*differs/)
+    expect(db.select().from(measurementPlanDrafts).all()).toEqual([])
+    const explicitDraft = await action('create', { payload: { expectedActiveRevision: 1 } })
+    expect(explicitDraft.statusCode, explicitDraft.body).toBe(200)
+    const assignments = (await request('GET', '/measurement-plan/draft/assignments')).json().items
+    expect(assignments).toEqual(expect.arrayContaining([
+      expect.objectContaining({ contextOverride: expect.objectContaining({ locations: ['nyc'] }) }),
+    ]))
+  })
+
+  it.each(['create', 'pin-competitor'])('preserves frozen per-Target models and location fan-out when %s seeds an active v2 draft', async operation => {
+    const locations = [
+      { label: 'nyc', city: 'New York', region: 'NY', country: 'US' },
+      { label: 'la', city: 'Los Angeles', region: 'CA', country: 'US' },
+    ]
+    db.update(projects).set({ locations }).where(eq(projects.id, 'prj_northwind')).run()
+    const session = await DraftSession.start()
+    await session.run('upsert-target', { target: WIDGETS_TARGET })
+    await session.run('upsert-target', { target: GADGETS_TARGET })
+    const sharedQuery = queryId('best widget supplier')
+    await session.run('apply-assignments', {
+      targetKey: 'widgets', queryIds: [sharedQuery],
+      contextOverride: { providers: ['openai'], models: { openai: 'frozen-model-a' }, locations: [] },
+    })
+    await session.run('apply-assignments', {
+      targetKey: 'gadgets', queryIds: [sharedQuery],
+      contextOverride: { providers: ['openai'], models: { openai: 'frozen-model-b' }, locations: ['nyc', 'la'] },
+    })
+    await session.run('upsert-group', { group: { stableKey: 'catalog', label: 'Catalog', targetKeys: ['widgets', 'gadgets'], competitors: [] } })
+    const original = canonicalMeasurementPlanV2((await action('compile-preview')).json().plan)
+    const published = await publish(session, null)
+    expect(published.statusCode, published.body).toBe(200)
+    expect(original.executionNodes).toHaveLength(3)
+    db.update(projects).set({
+      providers: ['gemini'], providerModels: { gemini: 'new-default-model' },
+      locations: [...locations, { label: 'chi', city: 'Chicago', region: 'IL', country: 'US' }],
+    }).where(eq(projects.id, 'prj_northwind')).run()
+
+    const seeded = await action(operation, { payload: {
+      expectedActiveRevision: 1,
+      ...(operation === 'pin-competitor' ? { groupKey: 'catalog', domain: 'rival.example', label: 'Rival' } : {}),
+    } })
+    expect(seeded.statusCode, seeded.body).toBe(200)
+    const preview = await action('compile-preview')
+    expect(preview.statusCode, preview.body).toBe(200)
+    expect(preview.json().ok).toBe(true)
+    const actual = canonicalMeasurementPlanV2(preview.json().plan)
+    expect(actual.executionNodes).toEqual(original.executionNodes)
+    expect(actual.assignments).toEqual(original.assignments)
+    expect(actual.usageEdges).toEqual(original.usageEdges)
+  })
+
   it('publishes the reviewed content in one transaction and clears the draft', async () => {
     const session = await readyDraft()
     const published = await publish(session, null)
@@ -1271,10 +1334,33 @@ describe('measurement draft publish', () => {
 })
 
 describe('measurement setup state', () => {
+  it('reports provider readiness with the run preflight selection rules', async () => {
+    runnableProviders = ['perplexity']
+    expect((await request('GET', '/measurement-setup')).json()).toMatchObject({
+      answerVisibilityProviderReady: false,
+    })
+
+    db.update(projects).set({ providers: [] }).where(eq(projects.id, 'prj_northwind')).run()
+    expect((await request('GET', '/measurement-setup')).json()).toMatchObject({
+      answerVisibilityProviderReady: true,
+    })
+
+    runnableProviders = []
+    expect((await request('GET', '/measurement-setup')).json()).toMatchObject({
+      answerVisibilityProviderReady: false,
+    })
+  })
+
   it('returns exactly one state in the fixed precedence', async () => {
     const simple = await request('GET', '/measurement-setup')
     expect(measurementSetupResponseSchema.safeParse(simple.json()).success).toBe(true)
-    expect(simple.json()).toMatchObject({ state: 'simple', nextAction: 'start_setup', mode: 'simple', activeRevision: null })
+    expect(simple.json()).toMatchObject({
+      state: 'simple',
+      nextAction: 'start_setup',
+      mode: 'simple',
+      answerVisibilityProviderReady: true,
+      activeRevision: null,
+    })
 
     const session = await readyDraft()
     expect((await request('GET', '/measurement-setup')).json()).toMatchObject({

@@ -28,6 +28,19 @@ project pins + frozen market competitors + stored classifications
 
 Observed competitors sort by mention count, then citation count. Other sources sort by citation count. The server returns at most 100 observed rows and 100 other-source rows and sets `truncated`. Pinned rows are never capped. Each row includes at most three stored sample URLs.
 
+## Existing projects
+
+Existing competitors remain pinned. Saved sweeps supply historical mentions and citations without new provider requests or changes to provider settings.
+The dashboard defaults to 30 days. The All window includes older evidence.
+
+Known direct competitors appear under Observed when the selected history contains matching mentions or citations.
+Unknown domains remain under Other cited sources until discovery classifies them or an operator pins them.
+Ordinary visibility sweeps capture answers and sources, but do not classify unknown domains or create pins.
+
+Missing historical answers and URLs remain unavailable. Stored domain citations still count, even without a stored URL.
+Simple observations without usable query text remain in All, but do not enter either explicit query-class filter.
+Advanced Measurement retains the query classes from its frozen Target assignments.
+
 ## Retroactive pins
 
 Adding a Simple-project competitor changes the identity set used by the next read. Canonry immediately re-evaluates the selected historical window against already stored answer text and source URLs. It does not rerun old prompts and does not rewrite old snapshots.
@@ -42,7 +55,10 @@ This means a newly pinned brand can acquire historical mentions and citations wh
 | Advanced market | Project pins plus that market's frozen competitors | Usage edges and query classes frozen into each contributing run revision | A pin updates a draft. A published draft becomes active measurement configuration. |
 | Advanced all markets | Union of project pins and every market's identities | Raw in-scope evidence across all markets | Read-only because there is no single target market. Percentages are recomputed from raw evidence, never averaged from market percentages. |
 
-Draft-only market pins are disclosed in `marketState.draft.pendingCompetitorDomains`. Historical runs keep the competitors and execution membership frozen in the plan revision they used, so later market edits do not rewrite the past.
+Draft-only market pins appear in `marketState.draft.pendingCompetitorDomains`.
+Project pins and active or pending-draft market competitors express current operator intent. They reinterpret selected stored history.
+Historical-only identities and aliases match only answers from runs that used their frozen revision.
+All-markets scope combines aliases when multiple markets name the same registrable domain.
 
 ## API, CLI, and MCP
 

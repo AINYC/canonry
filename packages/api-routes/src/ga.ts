@@ -8,7 +8,7 @@ import type { GA4ChannelBreakdownDto, ResolvedDateRange } from '@ainyc/canonry-c
 import { resolveProject, writeAuditLog } from './helpers.js'
 import { assertNotProjectScoped } from './auth.js'
 import { buildSessionHistory } from './ga-session-history.js'
-import { buildAiReferralDailySeries, normalizeAiTrafficClass, summarizeAiReferralCounts } from './ga-ai-referral-aggregation.js'
+import { buildAiReferralDailySeries, normalizeAiTrafficClass, pickWinningAttributionDimension, summarizeAiReferralCounts } from './ga-ai-referral-aggregation.js'
 import {
   getAccessToken,
   fetchTrafficByLandingPage,
@@ -118,19 +118,46 @@ function buildChannelBreakdown(input: {
 // because the row IS a per-page breakdown). Feeding it per-landing-page rows
 // and treating the result as a total collapses the tuple to one page. See the
 // conservation invariant at the top of `ga-ai-referral-aggregation.ts`.
-function pickWinningDimension<T extends { sessions: number | null }>(
+/**
+ * Keep every row belonging to the winning attribution lens for each group.
+ *
+ * The lens is chosen per group by TOTAL sessions across all of that lens's
+ * rows, then all of its rows survive. That matters because one lens legitimately
+ * emits several rows for a source: organic and paid ChatGPT traffic are separate
+ * rows under the same session lens and must both be kept.
+ *
+ * The group key is the source (plus landing page where the breakdown needs it)
+ * and deliberately excludes medium and traffic class. Both are labels the lens
+ * assigns rather than properties of the visit, so keying on either splits one
+ * visit across groups and lets it survive twice. GA4 reports the manual-UTM lens
+ * with medium '(not set)' where the session lens reports 'ai-assistant', which
+ * is how one ChatGPT visit came to be counted as two.
+ */
+function keepWinningDimensionRows<T extends { sessions: number | null, sourceDimension: string }>(
   rows: T[],
-  tupleKey: (row: T) => string,
+  groupKey: (row: T) => string,
 ): T[] {
-  const winners = new Map<string, T>()
+  const sessionsByGroupAndDimension = new Map<string, Map<string, number>>()
   for (const row of rows) {
-    const key = tupleKey(row)
-    const existing = winners.get(key)
-    if (!existing || (row.sessions ?? 0) > (existing.sessions ?? 0)) {
-      winners.set(key, row)
+    const key = groupKey(row)
+    let byDimension = sessionsByGroupAndDimension.get(key)
+    if (!byDimension) {
+      byDimension = new Map<string, number>()
+      sessionsByGroupAndDimension.set(key, byDimension)
     }
+    byDimension.set(
+      row.sourceDimension,
+      (byDimension.get(row.sourceDimension) ?? 0) + (row.sessions ?? 0),
+    )
   }
-  return [...winners.values()].sort((a, b) => (b.sessions ?? 0) - (a.sessions ?? 0))
+  const winningDimension = new Map<string, string>()
+  for (const [key, byDimension] of sessionsByGroupAndDimension) {
+    const winner = pickWinningAttributionDimension(byDimension)
+    if (winner) winningDimension.set(key, winner)
+  }
+  return rows
+    .filter((row) => winningDimension.get(groupKey(row)) === row.sourceDimension)
+    .sort((a, b) => (b.sessions ?? 0) - (a.sessions ?? 0))
 }
 
 type GaDatabase = FastifyInstance['db']
@@ -1317,13 +1344,10 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
     // (source, medium, landingPage) for `aiReferralLandingPages`. The cross-
     // cutting / session-only totals (`aiSessionsDeduped`, `aiSessionsBySession`)
     // are computed independently below and are unaffected.
-    const aiReferrals = pickWinningDimension(
-      aiReferralRows,
-      (r) => `${r.source}\0${r.medium}\0${r.trafficClass}`,
-    )
-    const aiReferralLandingPages = pickWinningDimension(
+    const aiReferrals = keepWinningDimensionRows(aiReferralRows, (r) => r.source)
+    const aiReferralLandingPages = keepWinningDimensionRows(
       aiReferralLandingPageRows,
-      (r) => `${r.source}\0${r.medium}\0${r.trafficClass}\0${r.landingPage}`,
+      (r) => `${r.source}\0${r.landingPage}`,
     )
 
     // SessionSource, firstUserSource, and manual UTM rows are overlapping
@@ -1336,8 +1360,12 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
         source: gaSocialReferrals.source,
         medium: gaSocialReferrals.medium,
         channelGroup: gaSocialReferrals.channelGroup,
+        // No `users`. ga_social_referrals is keyed
+        // (project, date, source, medium, channel_group) and its users column
+        // is GA's COUNT DISTINCT at that grain, so summing over the window's
+        // dates counts a returning visitor once per day they returned. Same
+        // conclusion the AI-referral surfaces reached in 4.135.0.
         sessions: sql<number>`SUM(${gaSocialReferrals.sessions})`,
-        users: sql<number>`SUM(${gaSocialReferrals.users})`,
       })
       .from(gaSocialReferrals)
       .where(and(...socialConditions))
@@ -1350,7 +1378,6 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
     const socialTotals = app.db
       .select({
         sessions: sql<number>`SUM(${gaSocialReferrals.sessions})`,
-        users: sql<number>`SUM(${gaSocialReferrals.users})`,
       })
       .from(gaSocialReferrals)
       .where(and(...socialConditions))
@@ -1432,10 +1459,8 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
         medium: r.medium,
         channelGroup: r.channelGroup,
         sessions: r.sessions ?? 0,
-        users: r.users ?? 0,
       })),
       socialSessions,
-      socialUsers: socialTotals?.users ?? 0,
       channelBreakdown,
       organicSharePct: total > 0 ? Math.round((totalOrganicSessions / total) * 100) : 0,
       aiSharePct: total > 0 ? Math.round((aiSummary.deduped.sessions / total) * 100) : 0,
@@ -1499,8 +1524,11 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
         trafficClass: gaAiReferrals.trafficClass,
         landingPage: sql<string>`COALESCE(${gaAiReferrals.landingPageNormalized}, ${gaAiReferrals.landingPage})`,
         sourceDimension: gaAiReferrals.sourceDimension,
+        // No `users`: ga-ai-referral-aggregation states the rule for this
+        // table, that there is no grain at which the stored users column may be
+        // added up. ga4AiReferralDtoSchema.users was deprecated for this in
+        // 4.135.0; the history endpoint kept emitting one.
         sessions: sql<number>`SUM(${gaAiReferrals.sessions})`,
-        users: sql<number>`SUM(${gaAiReferrals.users})`,
       })
       .from(gaAiReferrals)
       .where(and(...conditions))

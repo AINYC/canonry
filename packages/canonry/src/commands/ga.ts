@@ -277,13 +277,13 @@ export async function gaTraffic(project: string, opts?: GaRangeOptions & { limit
       console.log(`  Social Sessions:         ${result.socialSessions} (${share}% of total)`)
     }
     console.log('  SOCIAL REFERRAL SOURCES')
-    console.log(`  ${'SOURCE'.padEnd(25)}  ${'MEDIUM'.padEnd(15)}  ${'CHANNEL'.padEnd(chanWidth)}  ${'SESSIONS'.padEnd(10)}${'USERS'.padEnd(8)}`)
-    console.log(`  ${'─'.repeat(25)}  ${'─'.repeat(15)}  ${'─'.repeat(chanWidth)}  ${'─'.repeat(10)}${'─'.repeat(8)}`)
+    console.log(`  ${'SOURCE'.padEnd(25)}  ${'MEDIUM'.padEnd(15)}  ${'CHANNEL'.padEnd(chanWidth)}  ${'SESSIONS'.padEnd(10)}`)
+    console.log(`  ${'─'.repeat(25)}  ${'─'.repeat(15)}  ${'─'.repeat(chanWidth)}  ${'─'.repeat(10)}`)
 
     for (const ref of result.socialReferrals) {
       const chanLabel = ref.channelGroup === 'Paid Social' ? 'paid' : 'organic'
       console.log(
-        `  ${ref.source.padEnd(25)}  ${ref.medium.padEnd(15)}  ${chanLabel.padEnd(chanWidth)}  ${String(ref.sessions).padEnd(10)}${String(ref.users).padEnd(8)}`,
+        `  ${ref.source.padEnd(25)}  ${ref.medium.padEnd(15)}  ${chanLabel.padEnd(chanWidth)}  ${String(ref.sessions).padEnd(10)}`,
       )
     }
     console.log()
@@ -292,13 +292,13 @@ export async function gaTraffic(project: string, opts?: GaRangeOptions & { limit
   if (result.topPages.length > 0) {
     const pageWidth = Math.min(60, Math.max(15, ...result.topPages.map((r) => r.landingPage.length)))
     console.log(`  TOP LANDING PAGES`)
-    console.log(`  ${'PAGE'.padEnd(pageWidth)}  ${'SESSIONS'.padEnd(10)}${'ORGANIC'.padEnd(10)}${'USERS'.padEnd(8)}`)
-    console.log(`  ${'─'.repeat(pageWidth)}  ${'─'.repeat(10)}${'─'.repeat(10)}${'─'.repeat(8)}`)
+    console.log(`  ${'PAGE'.padEnd(pageWidth)}  ${'SESSIONS'.padEnd(10)}${'ORGANIC'.padEnd(10)}`)
+    console.log(`  ${'─'.repeat(pageWidth)}  ${'─'.repeat(10)}${'─'.repeat(10)}`)
 
     for (const row of result.topPages) {
       const page = row.landingPage.length > pageWidth ? row.landingPage.slice(0, pageWidth - 3) + '...' : row.landingPage
       console.log(
-        `  ${page.padEnd(pageWidth)}  ${String(row.sessions).padEnd(10)}${String(row.organicSessions).padEnd(10)}${String(row.users).padEnd(8)}`,
+        `  ${page.padEnd(pageWidth)}  ${String(row.sessions).padEnd(10)}${String(row.organicSessions).padEnd(10)}`,
       )
     }
   }
@@ -382,12 +382,12 @@ export async function gaAiReferralHistory(project: string, opts?: GaRangeOptions
   const sourceWidth = Math.min(30, Math.max(10, ...result.map((r) => r.source.length)))
   const attrWidth = 12
   console.log(`GA4 AI Referral History for "${project}":\n`)
-  console.log(`  ${'DATE'.padEnd(dateWidth)}  ${'SOURCE'.padEnd(sourceWidth)}  ${'ATTRIBUTION'.padEnd(attrWidth)}  ${'SESSIONS'.padEnd(10)}${'USERS'.padEnd(8)}`)
-  console.log(`  ${'─'.repeat(dateWidth)}  ${'─'.repeat(sourceWidth)}  ${'─'.repeat(attrWidth)}  ${'─'.repeat(10)}${'─'.repeat(8)}`)
+  console.log(`  ${'DATE'.padEnd(dateWidth)}  ${'SOURCE'.padEnd(sourceWidth)}  ${'ATTRIBUTION'.padEnd(attrWidth)}  ${'SESSIONS'.padEnd(10)}`)
+  console.log(`  ${'─'.repeat(dateWidth)}  ${'─'.repeat(sourceWidth)}  ${'─'.repeat(attrWidth)}  ${'─'.repeat(10)}`)
   for (const row of result) {
     const dimLabel = row.sourceDimension === 'first_user' ? 'first-visit' : row.sourceDimension === 'manual_utm' ? 'utm' : 'session'
     console.log(
-      `  ${row.date.padEnd(dateWidth)}  ${row.source.padEnd(sourceWidth)}  ${dimLabel.padEnd(attrWidth)}  ${String(row.sessions).padEnd(10)}${String(row.users).padEnd(8)}`,
+      `  ${row.date.padEnd(dateWidth)}  ${row.source.padEnd(sourceWidth)}  ${dimLabel.padEnd(attrWidth)}  ${String(row.sessions).padEnd(10)}`,
     )
   }
 }
@@ -556,7 +556,6 @@ export async function gaSocialReferralSummary(project: string, opts?: { trend?: 
     if (isMachineFormat(opts.format)) {
       console.log(JSON.stringify({
         socialSessions: traffic.socialSessions,
-        socialUsers: traffic.socialUsers,
         totalSessions: traffic.totalSessions,
         socialSharePct: traffic.socialSharePct,
         windowStart: traffic.windowStart,
@@ -572,7 +571,6 @@ export async function gaSocialReferralSummary(project: string, opts?: { trend?: 
     const trendWindow = windowLine(traffic)
     if (trendWindow) console.log(`${trendWindow}\n`)
     console.log(`  Sessions: ${traffic.socialSessions} (${traffic.socialSharePct}% of ${traffic.totalSessions} total)`)
-    console.log(`  Users:    ${traffic.socialUsers}`)
     console.log()
 
     const fmtTrend = (pct: number | null) => pct === null ? 'n/a' : `${pct >= 0 ? '+' : ''}${pct}%`
@@ -597,7 +595,6 @@ export async function gaSocialReferralSummary(project: string, opts?: { trend?: 
   if (isMachineFormat(opts?.format)) {
     console.log(JSON.stringify({
       socialSessions: traffic.socialSessions,
-      socialUsers: traffic.socialUsers,
       totalSessions: traffic.totalSessions,
       socialSharePct: traffic.socialSharePct,
       windowStart: traffic.windowStart,
@@ -612,7 +609,6 @@ export async function gaSocialReferralSummary(project: string, opts?: { trend?: 
   const socialWindow = windowLine(traffic)
   if (socialWindow) console.log(`${socialWindow}\n`)
   console.log(`  Sessions: ${traffic.socialSessions} (${traffic.socialSharePct}% of ${traffic.totalSessions} total)`)
-  console.log(`  Users:    ${traffic.socialUsers}`)
   if (traffic.socialReferrals.length > 0) {
     console.log()
     console.log('  TOP SOURCES')
@@ -644,7 +640,6 @@ export async function gaAttribution(project: string, opts?: { trend?: boolean; f
         paidAiSessionsBySession: traffic.paidAiSessionsBySession,
         organicAiSessionsBySession: traffic.organicAiSessionsBySession,
         socialSessions: traffic.socialSessions,
-        socialUsers: traffic.socialUsers,
         directSessions: traffic.totalDirectSessions,
         aiSharePct: traffic.aiSharePct,
         aiSharePctBySession: traffic.aiSharePctBySession,
@@ -729,7 +724,6 @@ export async function gaAttribution(project: string, opts?: { trend?: boolean; f
       paidAiSessionsBySession: traffic.paidAiSessionsBySession,
       organicAiSessionsBySession: traffic.organicAiSessionsBySession,
       socialSessions: traffic.socialSessions,
-      socialUsers: traffic.socialUsers,
       directSessions: traffic.totalDirectSessions,
       aiSharePct: traffic.aiSharePct,
       aiSharePctBySession: traffic.aiSharePctBySession,

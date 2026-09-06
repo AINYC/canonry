@@ -102,6 +102,11 @@ declare module 'fastify' {
 
 export { registerOAuthRoutes, registerOAuthAdminRoutes, resolveOAuthAccessToken } from './oauth.js'
 export { hashApiKey } from './auth.js'
+export {
+  mergeGscQueryTotalsWithFallback,
+  readGscQueryDailyRows,
+  readLatestGscDataDate,
+} from './gsc-totals.js'
 export type { OAuthRoutesOptions } from './oauth.js'
 export type { CredentialChecker } from './user-session.js'
 export * from './notifications/alert.js'
@@ -184,6 +189,8 @@ export interface ApiRoutesOptions {
   onProjectDeleting?: ProjectRoutesOptions['onProjectDeleting']
   /** Callback when a project is created or updated */
   onProjectUpserted?: (projectId: string, projectName: string) => void
+  /** Post-commit callback for newly created projects. Errors are logged and isolated by the route. */
+  onProjectCreated?: (projectId: string, projectName: string) => void
   /**
    * Callback when a project's normalized alias set changes. Wire this up to
    * trigger a fire-and-forget mention-fields backfill so historical snapshots
@@ -495,6 +502,7 @@ export async function apiRoutes(app: FastifyInstance, opts: ApiRoutesOptions) {
       onProjectDeleting: opts.onProjectDeleting,
       onProjectDeleted: opts.onProjectDeleted,
       onProjectUpserted: opts.onProjectUpserted,
+      onProjectCreated: opts.onProjectCreated,
       onAliasesChanged: opts.onAliasesChanged,
       providerAdapters: opts.providerAdapters,
     } satisfies ProjectRoutesOptions)
@@ -530,6 +538,7 @@ export async function apiRoutes(app: FastifyInstance, opts: ApiRoutesOptions) {
     await api.register(applyRoutes, {
       onScheduleUpdated: opts.onScheduleUpdated,
       onProjectUpserted: opts.onProjectUpserted,
+      onProjectCreated: opts.onProjectCreated,
       onAliasesChanged: opts.onAliasesChanged,
       providerAdapters: opts.providerAdapters,
       allowLoopbackWebhooks: opts.allowLoopbackWebhooks,

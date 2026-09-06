@@ -642,14 +642,15 @@ describe('traffic source cutover staging', () => {
       method: 'POST', url: '/api/v1/projects/test-project/traffic/connect/cloudflare', payload: queueBody,
     })
     const queueSourceId = JSON.parse(queue.payload).sourceId as string
-    h.db.update(schedules).set({ enabled: false }).where(eq(schedules.kind, 'traffic-sync')).run()
+    const futureVersion = '2100-01-01T00:00:00.000Z'
+    h.db.update(schedules).set({ enabled: false, updatedAt: futureVersion }).where(eq(schedules.kind, 'traffic-sync')).run()
 
     const reconnected = await h.app.inject({
       method: 'POST', url: '/api/v1/projects/test-project/traffic/connect/cloudflare', payload: queueBody,
     })
     expect(reconnected.statusCode).toBe(200)
     expect(h.db.select().from(schedules).where(eq(schedules.kind, 'traffic-sync')).get())
-      .toEqual(expect.objectContaining({ sourceId: queueSourceId, enabled: false }))
+      .toEqual(expect.objectContaining({ sourceId: queueSourceId, enabled: false, updatedAt: futureVersion }))
 
     const cloudRun = await h.app.inject({
       method: 'POST',
@@ -661,12 +662,14 @@ describe('traffic source cutover staging', () => {
       method: 'POST', url: `/api/v1/projects/test-project/traffic/sources/${cloudRunSourceId}/activate`,
     })
     expect(activatedCloudRun.statusCode).toBe(200)
+    expect(h.db.select().from(schedules).where(eq(schedules.kind, 'traffic-sync')).get()?.updatedAt)
+      .toBe('2100-01-01T00:00:00.001Z')
     const reactivatedQueue = await h.app.inject({
       method: 'POST', url: `/api/v1/projects/test-project/traffic/sources/${queueSourceId}/activate`,
     })
     expect(reactivatedQueue.statusCode).toBe(200)
     expect(h.db.select().from(schedules).where(eq(schedules.kind, 'traffic-sync')).get())
-      .toEqual(expect.objectContaining({ sourceId: queueSourceId, enabled: false }))
+      .toEqual(expect.objectContaining({ sourceId: queueSourceId, enabled: false, updatedAt: '2100-01-01T00:00:00.002Z' }))
   })
 
   it('rebinds an existing traffic-sync schedule when a pull adapter connects as authority', async () => {

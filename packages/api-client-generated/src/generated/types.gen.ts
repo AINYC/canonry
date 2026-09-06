@@ -7199,6 +7199,7 @@ export type MeasurementSetupResponse = {
     state: 'republish_required' | 'setup_in_progress' | 'awaiting_first_run' | 'operational' | 'simple';
     nextAction: 'republish_setup' | 'continue_setup' | 'run_measurement' | 'view_measurement' | 'start_setup';
     mode: 'simple' | 'draft-only' | 'active-v1' | 'active-v2';
+    answerVisibilityProviderReady: boolean;
     activeRevision: number | null;
     activeSchemaVersion: 1 | 2 | null;
     draft: {
@@ -8256,7 +8257,7 @@ export type ProjectReportDto = {
         topLandingPages: Array<{
             page: string;
             sessions: number;
-            users: number;
+            users?: number;
             organicSessions: number;
         }>;
         channelBreakdown: Array<{
@@ -8359,6 +8360,7 @@ export type ProjectReportDto = {
         topCrawledPaths: Array<{
             path: string;
             verifiedHits: number;
+            unverifiedHits: number;
             distinctOperators: number;
         }>;
         referralProducts: Array<{
@@ -8369,6 +8371,7 @@ export type ProjectReportDto = {
         dailyTrend: Array<{
             date: string;
             verifiedCrawlerHits: number;
+            unverifiedCrawlerHits: number;
             userFetchHits: number;
             referralArrivals: number;
         }>;
@@ -15834,6 +15837,10 @@ export type DeleteApiV1ProjectsByNameScheduleData = {
          * Schedulable run kind. Defaults to "answer-visibility" for backward compatibility.
          */
         kind?: SchedulableRunKind;
+        /**
+         * Delete only the schedule version carrying this exact updatedAt timestamp. A mismatch returns 409.
+         */
+        expectedUpdatedAt?: string;
     };
     url: '/api/v1/projects/{name}/schedule';
 };
@@ -15843,6 +15850,10 @@ export type DeleteApiV1ProjectsByNameScheduleErrors = {
      * Schedule not found.
      */
     404: ErrorEnvelope;
+    /**
+     * The schedule changed since the caller loaded it.
+     */
+    409: ErrorEnvelope;
 };
 
 export type DeleteApiV1ProjectsByNameScheduleError = DeleteApiV1ProjectsByNameScheduleErrors[keyof DeleteApiV1ProjectsByNameScheduleErrors];
@@ -15900,6 +15911,10 @@ export type PutApiV1ProjectsByNameScheduleData = {
         providers?: Array<string>;
         enabled?: boolean;
         sourceId?: string;
+        /**
+         * Update only this exact version; null creates only while absent. Omit for legacy unconditional behavior.
+         */
+        expectedUpdatedAt?: string | null;
     };
     path: {
         /**
@@ -15921,6 +15936,10 @@ export type PutApiV1ProjectsByNameScheduleErrors = {
      * Invalid payload (e.g. sourceId missing for kind=traffic-sync, or providers set for kind=traffic-sync).
      */
     400: ErrorEnvelope;
+    /**
+     * The schedule changed since the caller loaded it.
+     */
+    409: ErrorEnvelope;
 };
 
 export type PutApiV1ProjectsByNameScheduleError = PutApiV1ProjectsByNameScheduleErrors[keyof PutApiV1ProjectsByNameScheduleErrors];
@@ -15937,6 +15956,27 @@ export type PutApiV1ProjectsByNameScheduleResponses = {
 };
 
 export type PutApiV1ProjectsByNameScheduleResponse = PutApiV1ProjectsByNameScheduleResponses[keyof PutApiV1ProjectsByNameScheduleResponses];
+
+export type GetApiV1ProjectsByNameSchedulesData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/schedules';
+};
+
+export type GetApiV1ProjectsByNameSchedulesResponses = {
+    /**
+     * Schedules returned.
+     */
+    200: Array<ScheduleDto>;
+};
+
+export type GetApiV1ProjectsByNameSchedulesResponse = GetApiV1ProjectsByNameSchedulesResponses[keyof GetApiV1ProjectsByNameSchedulesResponses];
 
 export type GetApiV1NotificationsEventsData = {
     body?: never;

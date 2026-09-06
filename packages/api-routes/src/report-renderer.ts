@@ -1780,7 +1780,6 @@ function renderGa(report: ProjectReportDto): string {
     <tr>
       <td class="page-cell">${formatLandingPageHtml(p.page)}</td>
       <td class="numeric">${formatNumber(p.sessions)}</td>
-      <td class="numeric">${formatNumber(p.users)}</td>
       <td class="numeric">${formatNumber(p.organicSessions)}</td>
     </tr>`).join('')
 
@@ -1804,7 +1803,7 @@ function renderGa(report: ProjectReportDto): string {
     </div>
     <div class="chart-card"><h3>Top landing pages</h3>
       <table class="report-table">
-        <thead><tr><th>Page</th><th class="numeric">Sessions</th><th class="numeric">Users</th><th class="numeric">Organic</th></tr></thead>
+        <thead><tr><th>Page</th><th class="numeric">Sessions</th><th class="numeric">Organic</th></tr></thead>
         <tbody>${pageRows}</tbody>
       </table>
     </div>
@@ -2048,10 +2047,15 @@ function renderServerActivity(report: ProjectReportDto, audience: ReportAudience
     </tr>`
   }).join('')
 
+  // Total hits, with the verified share beside it. The table is ordered by
+  // total, so showing only the verified count made rows look mis-sorted, and on
+  // a source that cannot verify at all (Vercel logs carry no client IP) every
+  // cell read 0 next to a populated headline tile.
   const pathRows = sa.topCrawledPaths.map(p => `
     <tr>
       <td class="page-cell">${formatLandingPageHtml(p.path)}</td>
-      <td class="numeric">${formatNumber(p.verifiedHits)}</td>
+      <td class="numeric">${formatNumber(p.verifiedHits + (p.unverifiedHits ?? 0))}</td>
+      <td class="numeric meta">${formatNumber(p.verifiedHits)}</td>
       <td class="numeric">${p.distinctOperators}</td>
     </tr>`).join('')
 
@@ -2112,7 +2116,7 @@ function renderServerActivity(report: ProjectReportDto, audience: ReportAudience
     ${pathRows ? `<div class="chart-card"><h3>Top crawled paths</h3>
       <p class="meta">Pages AI bots fetched most often (verified only, last ${windowLabel}).</p>
       <table class="report-table">
-        <thead><tr><th>Path</th><th class="numeric">Verified hits</th><th class="numeric">Distinct operators</th></tr></thead>
+        <thead><tr><th>Path</th><th class="numeric">Hits</th><th class="numeric">Verified</th><th class="numeric">Distinct operators</th></tr></thead>
         <tbody>${pathRows}</tbody>
       </table>
     </div>` : ''}

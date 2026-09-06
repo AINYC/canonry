@@ -149,12 +149,16 @@ describe('init jsonl degrade (config-exists short-circuit)', () => {
 // ---------------------------------------------------------------------------
 const mockListen = vi.fn()
 const mockClose = vi.fn()
+const mockCloseIdleConnections = vi.fn()
+const mockWaitForServerRuntimeStartup = vi.fn()
 vi.mock('@ainyc/canonry-db', () => ({
   createClient: () => ({}),
   migrate: vi.fn(),
 }))
 vi.mock('../src/server.js', () => ({
-  createServer: async () => ({ listen: mockListen, close: mockClose }),
+  createServer: async () => ({ listen: mockListen, close: mockClose, server: { closeIdleConnections: mockCloseIdleConnections } }),
+  isLoopbackBindHost: (host: string | undefined) => host == null || host === '' || host === 'localhost' || host === '127.0.0.1' || host === '::1',
+  waitForServerRuntimeStartup: () => mockWaitForServerRuntimeStartup(),
 }))
 vi.mock('../src/telemetry.js', () => ({
   trackEvent: vi.fn(),
@@ -172,6 +176,7 @@ describe('serve jsonl degrade', () => {
     mockConfigExists.mockReturnValue(true)
     mockListen.mockResolvedValue(undefined)
     mockClose.mockResolvedValue(undefined)
+    mockWaitForServerRuntimeStartup.mockResolvedValue(undefined)
   })
 
   it('jsonl emits the same JSON document as json', async () => {
@@ -188,8 +193,52 @@ describe('serve jsonl degrade', () => {
     const { serveCommand } = await import('../src/commands/serve.js')
     const logs = await withLog(() => serveCommand('text'))
     expect(logs.join('\n')).toContain('Canonry server running at')
-    expect(logs.join('\n')).toContain('/setup')
+    expect(logs.join('\n')).toContain('/setup to map your site and run your first Page Health scan')
     expect(logs.some(l => l.trim().startsWith('{'))).toBe(false)
+  })
+
+  it('closes the Fastify app when listen fails', async () => {
+    mockListen.mockRejectedValueOnce(new Error('listen EADDRINUSE: address already in use 127.0.0.1:4100'))
+    const { serveCommand } = await import('../src/commands/serve.js')
+
+    await expect(serveCommand('json')).rejects.toMatchObject({ code: 'SERVE_START_FAILED' })
+    expect(mockClose).toHaveBeenCalledOnce()
+    expect(mockWaitForServerRuntimeStartup).not.toHaveBeenCalled()
+  })
+
+  it('closes the listening app when critical runtime startup fails', async () => {
+    mockWaitForServerRuntimeStartup.mockRejectedValueOnce(new Error('scheduler startup failed'))
+    const { serveCommand } = await import('../src/commands/serve.js')
+
+    await expect(serveCommand('json')).rejects.toMatchObject({
+      code: 'SERVE_START_FAILED',
+      message: expect.stringContaining('scheduler startup failed'),
+    })
+    expect(mockListen).toHaveBeenCalledOnce()
+    expect(mockClose).toHaveBeenCalledOnce()
+  })
+
+  it('sweeps idle connections while closing after a post-bind runtime startup failure', async () => {
+    const { serveCommand } = await import('../src/commands/serve.js')
+    let finishClose!: () => void
+    mockClose.mockReturnValueOnce(new Promise<void>(resolve => { finishClose = resolve }))
+    mockWaitForServerRuntimeStartup.mockRejectedValueOnce(new Error('scheduler startup failed'))
+    vi.useFakeTimers()
+    try {
+      const failed = expect(serveCommand('json')).rejects.toMatchObject({
+        code: 'SERVE_START_FAILED',
+        message: expect.stringContaining('scheduler startup failed'),
+      })
+      await vi.advanceTimersByTimeAsync(500)
+      expect(mockClose).toHaveBeenCalledOnce()
+      expect(mockCloseIdleConnections).toHaveBeenCalledTimes(2)
+      finishClose()
+      await failed
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      finishClose()
+      vi.useRealTimers()
+    }
   })
 })
 

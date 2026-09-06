@@ -18,14 +18,13 @@ import {
   RunKinds,
   RunStatuses,
   measurementDraftEtag,
-  normalizeMeasurementExecutionQueryText,
   surfaceClassFromCompetitorType,
   validationError,
   windowCutoff,
   type CompetitorLandscapeQueryClass,
   type CompetitorLandscapeResponse,
 } from '@ainyc/canonry-contracts'
-import { buildCompetitorLandscapeHistory, type CompetitorLandscapeSurfaceClass } from '@ainyc/canonry-intelligence'
+import { buildCompetitorLandscapeHistory, type CompetitorLandscapeIdentity, type CompetitorLandscapeSurfaceClass } from '@ainyc/canonry-intelligence'
 import { resolveProject, resolveSnapshotAnswerMentioned } from './helpers.js'
 import { projectQueryClassifier } from './mention-share-inputs.js'
 import { activeMeasurementPlan } from './measurement-overview.js'
@@ -41,18 +40,21 @@ type RawQuery = {
   runId?: string
 }
 
+interface LandscapePin extends CompetitorLandscapeIdentity {
+  aliases: string[]
+}
+
 interface FrozenPlanScope {
   executionNodeKeys: Set<string>
-  queryClasses: Map<string, Set<'branded' | 'non-brand'>>
-  queryClassesByText: Map<string, Set<'branded' | 'non-brand'>>
-  competitors: Array<{ domain: string; label: string; aliases: string[] }>
+  queryClassesByExecution: Map<string, Set<'branded' | 'non-brand'>>
+  competitors: LandscapePin[]
 }
 
 interface AdvancedScope {
   kind: 'group' | 'all-markets'
   groupKey?: string
-  activePinned: Array<{ domain: string; label: string; aliases: string[] }>
-  pendingPins: Array<{ domain: string; label: string; aliases: string[] }>
+  activePinned: LandscapePin[]
+  pendingPins: LandscapePin[]
   activeRevision: number
   draft: { etag: string; pendingCompetitorDomains: string[] } | null
   runScopes: Map<string, FrozenPlanScope>
@@ -143,7 +145,9 @@ export async function competitorLandscapeRoutes(app: FastifyInstance) {
     }).from(domainClassifications).where(eq(domainClassifications.projectId, project.id)).all()
     const classifications = new Map<string, CompetitorLandscapeSurfaceClass>()
     for (const row of classificationRows) {
-      const domain = normalizedDomain(row.domain)
+      // Classifications are persisted per exact cited host. Keep that identity
+      // here; the history engine resolves deterministic eTLD+1 conflicts.
+      const domain = hostOf(row.domain)
       if (!domain) continue
       const storedClass = surfaceClassFromCompetitorType(row.competitorType)
       const surfaceClass: CompetitorLandscapeSurfaceClass = storedClass === 'direct-competitor'
@@ -162,15 +166,10 @@ export async function competitorLandscapeRoutes(app: FastifyInstance) {
       .map(row => ({
         domain: row.domain,
         label: brandLabelFromDomain(row.domain) || row.domain,
+        labelSource: 'domain' as const,
         aliases: [],
       }))
     const pinned = mergePins(advanced?.pendingPins ?? [], advanced?.activePinned ?? [], projectPins)
-    const historicalDirect = advanced
-      ? mergePins(...snapshots.flatMap(snapshot => {
-        const frozen = advanced.runScopes.get(snapshot.runId)
-        return frozen ? [frozen.competitors] : []
-      }))
-      : []
     const history = buildCompetitorLandscapeHistory({
       project: {
         domain: project.canonicalDomain,
@@ -178,7 +177,6 @@ export async function competitorLandscapeRoutes(app: FastifyInstance) {
         domains: [project.canonicalDomain, ...(project.ownedDomains ?? [])],
       },
       pinned,
-      historicalDirect,
       classifications,
       snapshots: snapshots.map(snapshot => ({
         id: snapshot.id,
@@ -187,6 +185,7 @@ export async function competitorLandscapeRoutes(app: FastifyInstance) {
         projectMentioned: resolveSnapshotAnswerMentioned(snapshot, project),
         citedDomains: snapshot.citedDomains,
         citedUrls: snapshot.citedUrls,
+        ...(advanced ? { frozenCompetitors: advanced.runScopes.get(snapshot.runId)?.competitors ?? [] } : {}),
       })),
     })
     const incompleteSourceResults = snapshots.filter(snapshot => (
@@ -294,34 +293,28 @@ function scopeForFrozenPlan(
     : plan.groups
   if (groups.length === 0) return null
   const targetKeys = new Set(groups.flatMap(group => group.targetKeys))
-  const executionNodeKeys = new Set(plan.usageEdges
-    .filter(edge => targetKeys.has(edge.targetKey))
-    .map(edge => edge.executionNodeKey))
-  const queryClasses = new Map<string, Set<'branded' | 'non-brand'>>()
+  const scopedUsageEdges = plan.usageEdges.filter(edge => targetKeys.has(edge.targetKey))
+  const executionNodeKeys = new Set(scopedUsageEdges.map(edge => edge.executionNodeKey))
+  const scopedUsages = new Set(scopedUsageEdges.map(edge => JSON.stringify([
+    edge.executionNodeKey, edge.targetKey, edge.queryId,
+  ])))
+  const queryClassesByExecution = new Map<string, Set<'branded' | 'non-brand'>>()
   for (const assignment of plan.assignments) {
-    if (!targetKeys.has(assignment.targetKey)) continue
-    const classes = queryClasses.get(assignment.queryId) ?? new Set<'branded' | 'non-brand'>()
+    if (!scopedUsages.has(JSON.stringify([
+      assignment.executionNodeKey, assignment.targetKey, assignment.queryId,
+    ]))) continue
+    const classes = queryClassesByExecution.get(assignment.executionNodeKey) ?? new Set<'branded' | 'non-brand'>()
     classes.add(assignment.queryClass)
-    queryClasses.set(assignment.queryId, classes)
-  }
-  const queryClassesByText = new Map<string, Set<'branded' | 'non-brand'>>()
-  for (const snapshot of plan.querySnapshots) {
-    const classes = queryClasses.get(snapshot.queryId)
-    if (!classes) continue
-    const normalizedText = normalizeMeasurementExecutionQueryText(snapshot.queryText)
-    const classesForText = queryClassesByText.get(normalizedText) ?? new Set<'branded' | 'non-brand'>()
-    for (const queryClass of classes) classesForText.add(queryClass)
-    queryClassesByText.set(normalizedText, classesForText)
+    queryClassesByExecution.set(assignment.executionNodeKey, classes)
   }
   return {
     executionNodeKeys,
-    queryClasses,
-    queryClassesByText,
-    competitors: groups.flatMap(group => group.competitors.map(competitor => ({
+    queryClassesByExecution,
+    competitors: mergePins(groups.flatMap(group => group.competitors.map(competitor => ({
       domain: competitor.domain,
       label: competitor.label,
       aliases: competitor.aliases,
-    }))),
+    })))),
   }
 }
 
@@ -330,7 +323,7 @@ function pendingDraftPins(
   activePlan: Extract<ReturnType<typeof parseStoredMeasurementPlanAnyVersion>, { schemaVersion: 2 }>,
   kind: AdvancedScope['kind'],
   groupKey: string | undefined,
-): Array<{ domain: string; label: string; aliases: string[] }> {
+): LandscapePin[] {
   const groups = kind === 'group'
     ? authoring.groups.filter(group => group.stableKey === groupKey)
     : authoring.groups
@@ -371,11 +364,10 @@ function snapshotMatchesFilters(input: {
     const frozen = advanced.runScopes.get((snapshot as { runId?: string }).runId ?? '')
     if (!frozen || !snapshot.measurementExecutionId || !frozen.executionNodeKeys.has(snapshot.measurementExecutionId)) return false
     if (filters.queryClass && filters.queryClass !== 'all') {
-      const queryClasses = snapshot.queryId
-        ? frozen.queryClasses.get(snapshot.queryId)
-        : snapshot.queryText
-          ? frozen.queryClassesByText.get(normalizeMeasurementExecutionQueryText(snapshot.queryText))
-          : undefined
+      // One question can have different classes on different Target/context
+      // usages. Its frozen execution identity survives query deletion and must
+      // not inherit a sibling usage's class through query ID or text fallback.
+      const queryClasses = frozen.queryClassesByExecution.get(snapshot.measurementExecutionId)
       if (!queryClasses?.has(filters.queryClass)) return false
     }
     return true
@@ -383,6 +375,9 @@ function snapshotMatchesFilters(input: {
   if (filters.queryClass && filters.queryClass !== 'all') {
     if (!queryClassifier) return false
     const queryText = (snapshot.queryId ? queryTextById.get(snapshot.queryId) : undefined) ?? snapshot.queryText
+    // A missing legacy question proves neither query class. Keep its evidence
+    // in All, but do not turn an unavailable question into a non-brand result.
+    if (!queryText?.trim()) return false
     if (queryClassifier(queryText) !== filters.queryClass) return false
   }
   return true
@@ -393,15 +388,30 @@ function normalizedDomain(value: string): string | null {
 }
 
 function mergePins(
-  ...collections: ReadonlyArray<ReadonlyArray<{ domain: string; label: string; aliases: string[] }>>
-): Array<{ domain: string; label: string; aliases: string[] }> {
-  const result: Array<{ domain: string; label: string; aliases: string[] }> = []
-  const seen = new Set<string>()
+  ...collections: ReadonlyArray<ReadonlyArray<LandscapePin>>
+): LandscapePin[] {
+  const result: LandscapePin[] = []
+  const indexByDomain = new Map<string, number>()
   for (const candidate of collections.flat()) {
     const domain = normalizedDomain(candidate.domain)
-    if (!domain || seen.has(domain)) continue
-    seen.add(domain)
-    result.push(candidate)
+    if (!domain) continue
+    const existingIndex = indexByDomain.get(domain)
+    if (existingIndex === undefined) {
+      indexByDomain.set(domain, result.length)
+      result.push({ ...candidate, aliases: [...candidate.aliases] })
+      continue
+    }
+    const existing = result[existingIndex]!
+    result[existingIndex] = {
+      ...existing,
+      // Keep the first identity as the display identity, but preserve every
+      // market's names for answer-text matching after eTLD+1 deduplication.
+      aliases: [...new Set([
+        ...existing.aliases,
+        ...(candidate.labelSource === 'domain' ? [] : [candidate.label]),
+        ...candidate.aliases,
+      ])],
+    }
   }
   return result
 }

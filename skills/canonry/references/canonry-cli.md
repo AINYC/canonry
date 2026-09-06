@@ -5,8 +5,8 @@ The CLI is invoked as `cnry` (short form) or `canonry` — both ship with the `@
 ## Server Management
 
 ```bash
-cnry init                                      # interactive setup
-cnry bootstrap                                 # non-interactive setup from env vars
+cnry bootstrap                                 # local config/database; providers optional
+cnry init                                      # optional interactive provider/OAuth setup
 cnry start                                     # start daemon
 cnry stop                                      # stop daemon
 cnry serve                                     # foreground mode
@@ -15,10 +15,11 @@ cnry serve --embed --embed-allow-origin https://app.example.com   # read-only em
 cnry --version
 ```
 
-`cnry init` prompts for credentials and prints the new API key once. An agent
-must pause and ask the operator to run it in a private terminal, without
-pasting the output back. Do not run `init` or secret-bearing `bootstrap` inside
-an agent transcript.
+`cnry bootstrap` is the provider-free Page Health path. It stores state under
+`$CANONRY_CONFIG_DIR` when set, otherwise `~/.canonry`, and prints a new API key
+once. `cnry init` is the optional interactive path when provider/OAuth setup is
+wanted at the same time. An agent must ask the operator to run either
+secret-bearing command in a private terminal without pasting the output back.
 
 ### Read-only embed mode (#716)
 
@@ -173,7 +174,7 @@ Behavior to know when narrating numbers from the report:
 - `citationsTrend` excludes partial runs to avoid skew. A project with only one completed run gets `trend: "unknown"` and the finding "No prior run to compare against." — not "Flat compared to the previous run."
 - Project ownership uses subdomain-aware matching against `project.canonicalDomain` plus any configured `ownedDomains`. `blog.example.com` and `brand.io` count as the project, not as external sources, when those rules apply.
 - Competitor tagging in `aiSourceOrigin.topDomains` uses the same subdomain-aware match — `blog.rival.com` is `isCompetitor: true` when `rival.com` is tracked.
-- AI referral totals dedupe overlapping GA4 attribution dimensions (`session` / `first_user` / `manual_utm`) by picking the largest dimension per `(date, source, medium)`. Two 10-session rows for the same tuple report 10 sessions, not 20.
+- AI referral totals dedupe overlapping GA4 attribution dimensions (`session` / `first_user` / `manual_utm`) by picking the largest dimension per `(date, source)`, breaking ties toward the `session` lens. Medium and traffic class are labels the lens assigns, not properties of the visit, so they are NOT part of the key: GA4 reports the manual-UTM lens with medium `(not set)` where the session lens reports `ai-assistant`, and keying on medium counted one visit twice. Two 10-session rows for the same tuple report 10 sessions, not 20.
 - GSC top-query CTR and avgPosition are impression-weighted, matching GSC's own metric semantics across multi-row queries.
 
 ## Results Export (historical observations)

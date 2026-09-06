@@ -176,11 +176,17 @@ Routes fire lifecycle hooks via `opts` callbacks — `onRunCreated`, `onProvider
 - Include only completed/partial answer-visibility snapshots; count excluded
   probes and non-terminal results in the response.
 - A Simple pin reinterprets stored history at read time. An Advanced market
-  reads the frozen plan revision for each contributing run and unions project
-  pins with that market's active and pending-draft competitors.
+  reads the frozen plan revision for each contributing run. Project pins plus
+  active and pending-draft competitors reinterpret the selected history.
+  Historical-only identities and aliases match only their frozen run revisions.
 - `scope=all-markets` recomputes from raw scoped evidence. Never average market
-  percentages, and compare draft pins with active pins per group.
+  percentages. Compare draft pins with active pins per group. Combine all
+  market aliases when identities share a registrable domain.
 - Advanced pinning is a revision-guarded draft mutation. It never publishes.
+- Advanced query classes follow frozen execution nodes and scoped Target edges.
+  Do not combine classes by question text or query ID.
+- Generated domain labels use the shared minimum brand length. Do not convert
+  them into explicit aliases. Preserve curated names and existing identities.
 
 ### Derived row schemas (drizzle-zod)
 

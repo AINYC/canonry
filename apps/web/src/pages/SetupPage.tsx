@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode, type RefCallback } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { Link } from '@tanstack/react-router'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ONBOARDING_FLOW_VERSION,
   bucketOnboardingCount,
@@ -13,6 +13,7 @@ import { Card } from '../components/ui/card.js'
 import { AdminOnly } from '../components/shared/AccessControls.js'
 import { OnboardingProgress } from '../components/shared/OnboardingProgress.js'
 import { ToneBadge } from '../components/shared/ToneBadge.js'
+import { ProviderConfigForm } from '../components/settings/ProviderConfigForm.js'
 import { addToast } from '../lib/toast-store.js'
 import {
   createProject,
@@ -24,14 +25,25 @@ import {
   heyClient,
   recordOnboardingEvent,
 } from '../api.js'
-import { getApiV1RunsByIdOptions } from '@ainyc/canonry-api-client/react-query'
-import { useTriggerRun } from '../queries/mutations.js'
+import {
+  getApiV1CdpStatusOptions,
+  getApiV1ProjectsByNameMeasurementSetupOptions,
+  getApiV1ProjectsByNameQueriesQueryKey,
+  getApiV1RunsByIdOptions,
+} from '@ainyc/canonry-api-client/react-query'
+import { isProjectDetailQuery, useTriggerRun } from '../queries/mutations.js'
 import { useDashboardOverview as useDashboard } from '../queries/use-dashboard-overview.js'
 import { useHealth } from '../queries/use-health.js'
 import { useInitialDashboard } from '../contexts/dashboard-context.js'
+import { useAccount } from '../contexts/account-context.js'
 import { buildSetupModel, serviceStatusTooltip } from '../lib/health-helpers.js'
 import { asyncHandler } from '../lib/async-handler.js'
 import { summarizeRunError } from '../lib/format-helpers.js'
+import {
+  CDP_PROVIDER_NAME,
+  normalizeProviderName,
+  resolveAiVisibilityProviderReadiness,
+} from '../lib/ai-visibility-provider-readiness.js'
 import {
   createOnboardingEventId,
   getOrCreateOnboardingSessionId,
@@ -51,6 +63,11 @@ const SETUP_STEPS = [
   { label: 'Queries', description: 'Add queries to track' },
   { label: 'Competitors', description: 'Add competitor domains' },
   { label: 'Launch', description: 'Start your first visibility sweep' },
+] as const
+
+const PROJECT_VISIBILITY_STEPS = [
+  { label: 'Queries' },
+  { label: 'First sweep' },
 ] as const
 
 type SetupStep = 0 | 1 | 2 | 3 | 4
@@ -132,6 +149,15 @@ export function SetupPage({
   visibilityProjectName,
   siteHealthOnboarding = false,
 }: SetupPageProps = {}) {
+  const { canWrite } = useAccount()
+  if (visibilityProjectName && canWrite) {
+    return (
+      <SetupPageBody
+        visibilityProjectName={visibilityProjectName}
+        siteHealthOnboarding={siteHealthOnboarding}
+      />
+    )
+  }
   return (
     <AdminOnly title={visibilityProjectName ? 'Set up AI Visibility' : 'Setup'}>
       <SetupPageBody
@@ -144,7 +170,13 @@ export function SetupPage({
 
 function SetupPageBody({ visibilityProjectName, siteHealthOnboarding }: SetupPageProps) {
   const contextDashboard = useInitialDashboard()
-  const { dashboard, isLoading, refetch } = useDashboard()
+  const { isAdmin } = useAccount()
+  // RootLayout and this page are separate observers of the same project query.
+  // Both must pause the zero-project interval while setup owns project creation.
+  const { dashboard, isLoading, refetch } = useDashboard(undefined, {
+    pauseProjectPolling: true,
+    includeSettings: isAdmin,
+  })
   const safeDashboard = dashboard ?? contextDashboard?.dashboard
   const navigate = useNavigate()
   const visibilityHeadingRef = useCallback<RefCallback<HTMLHeadingElement>>((node) => {
@@ -156,7 +188,9 @@ function SetupPageBody({ visibilityProjectName, siteHealthOnboarding }: SetupPag
       return
     }
     void navigate({
-      to: '/projects/$projectName',
+      to: siteHealthOnboarding
+        ? '/projects/$projectName/technical-aeo'
+        : '/projects/$projectName',
       params: { projectName: visibilityProjectName },
       replace: true,
     })
@@ -249,12 +283,15 @@ function ReadySetupPage({
   siteHealthOnboarding?: boolean
 }) {
   const settings = safeDashboard.settings
+  const { isAdmin } = useAccount()
 
   const healthQuery = useHealth(enableLiveStatus, initialHealth)
   const healthSnapshot = healthQuery.data ?? initialHealth ?? { apiStatus: { label: 'API', state: 'checking', detail: 'Checking service health' }, workerStatus: { label: 'Worker', state: 'checking', detail: 'Checking service health' } }
   const model = buildSetupModel(safeDashboard.setup, healthSnapshot, settings)
+  const isProjectScoped = Boolean(visibilityProjectName)
 
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const onboardingSessionId = useRef(getOrCreateOnboardingSessionId()).current
   const recordedOnboardingEvents = useRef(new Set<string>())
   const emitOnboardingEvent = useCallback((
@@ -298,13 +335,17 @@ function ReadySetupPage({
   const hasExistingSuccessfulBaseline = !!resumeProject
     && projectHasSuccessfulBaseline(resumeProject)
   const resumeLoading = !!resumeProject && resumeQueriesQuery.isPending
-  const initialResumeStep = deriveSetupStep({
-    launchReady: model.launchState.enabled,
-    hasProject: !!resumeProject,
-    queryCount: durableQueryCount,
-    competitorCount: durableCompetitors.length,
-    hasRunAttempt: resumeProjectRuns.length > 0 || hasExistingSuccessfulBaseline,
-  })
+  // Project-scoped AI Visibility setup starts with the measurement input, not
+  // instance or project ceremony. Provider readiness gates only the paid run.
+  const initialResumeStep: SetupStep = isProjectScoped
+    ? 2
+    : deriveSetupStep({
+        launchReady: model.launchState.enabled,
+        hasProject: !!resumeProject,
+        queryCount: durableQueryCount,
+        competitorCount: durableCompetitors.length,
+        hasRunAttempt: resumeProjectRuns.length > 0 || hasExistingSuccessfulBaseline,
+      })
   const nextStepAfterSystemCheck = deriveSetupStep({
     launchReady: true,
     hasProject: !!resumeProject,
@@ -315,6 +356,7 @@ function ReadySetupPage({
 
   const [step, setStep] = useState<SetupStep>(initialResumeStep)
   const [resumeApplied, setResumeApplied] = useState(!resumeLoading)
+  const queriesHydrating = isProjectScoped && (resumeLoading || !resumeApplied)
 
   const [projectName, setProjectName] = useState(resumeProject?.project.name ?? '')
   const [displayName, setDisplayName] = useState(resumeProject?.project.displayName ?? '')
@@ -332,7 +374,9 @@ function ReadySetupPage({
       return
     }
     void navigate({
-      to: '/projects/$projectName',
+      to: siteHealthOnboarding
+        ? '/projects/$projectName/technical-aeo'
+        : '/projects/$projectName',
       params: { projectName: createdProjectName },
       // Project-scoped setup replaces the project route on entry. Replace it
       // again on exit so Back cannot reopen a wizard the operator just finished.
@@ -347,10 +391,93 @@ function ReadySetupPage({
   const [queriesGenerated, setQueriesGenerated] = useState(false)
 
   const readyProviders = settings.providerStatuses.filter(p => p.state === 'ready')
-  const [selectedProvider, setSelectedProvider] = useState(readyProviders[0]?.name ?? '')
+  const projectProviders = resumeProject?.project.providers.map(normalizeProviderName) ?? []
+  const runnableApiProviders = readyProviders.filter(provider => (
+    projectProviders.length === 0 || projectProviders.includes(normalizeProviderName(provider.name))
+  ))
+  const configuredApiProviders = readyProviders.map(provider => normalizeProviderName(provider.name))
+  const selectedApiProviderReady = runnableApiProviders.length > 0
+  const selectionCanUseCdp = projectProviders.length === 0 || projectProviders.includes(CDP_PROVIDER_NAME)
+  // Scoped writers cannot read the administrator's provider catalog. The
+  // project-readable setup response exposes readiness without credentials or
+  // instance capability inventory, using the server's exact run preflight.
+  const usesProjectProviderReadiness = isProjectScoped && !isAdmin
+  const projectProviderQuery = useQuery({
+    ...getApiV1ProjectsByNameMeasurementSetupOptions({
+      client: heyClient,
+      path: { name: resumeProjectName ?? '' },
+    }),
+    enabled: usesProjectProviderReadiness && Boolean(resumeProjectName),
+    staleTime: 0,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: 'always',
+    retry: false,
+  })
+  const projectProviderReady = projectProviderQuery.data?.answerVisibilityProviderReady
+  const providerReadinessFailed = usesProjectProviderReadiness && (
+    projectProviderQuery.isError
+    || (projectProviderQuery.isSuccess && typeof projectProviderReady !== 'boolean')
+  )
+  const cdpStatusQuery = useQuery({
+    ...getApiV1CdpStatusOptions({ client: heyClient }),
+    enabled: !usesProjectProviderReadiness && selectionCanUseCdp && !selectedApiProviderReady,
+    staleTime: 60_000,
+    retry: false,
+  })
+  // A registered CDP adapter remains a runnable provider when Chrome is
+  // temporarily disconnected. `browserVersion` is absent only when no adapter
+  // was registered, matching the project-page readiness contract.
+  const cdpConfigured = !selectionCanUseCdp
+    ? false
+    : cdpStatusQuery.isSuccess
+      ? typeof cdpStatusQuery.data.browserVersion === 'string'
+      : cdpStatusQuery.isError ? false : undefined
+  const providerReadiness = usesProjectProviderReadiness
+    ? projectProviderQuery.isSuccess && projectProviderQuery.isFetchedAfterMount && !projectProviderQuery.isFetching
+      ? projectProviderReady
+      : undefined
+    : resolveAiVisibilityProviderReadiness({
+      projectProviders,
+      configuredApiProviders,
+      cdpConfigured,
+    })
+  const runnableProviderCount = runnableApiProviders.length + (cdpConfigured === true ? 1 : 0)
+  const [selectedProvider, setSelectedProvider] = useState(runnableApiProviders[0]?.name ?? '')
   const [generateCount, setGenerateCount] = useState(5)
   const [generatingQueries, setGeneratingQueries] = useState(false)
   const [generateError, setGenerateError] = useState<string | null>(null)
+  const [configuringProvider, setConfiguringProvider] = useState('')
+  const restoreProviderFocus = useRef(false)
+  const providerSelectorRef = useCallback<RefCallback<HTMLSelectElement>>((node) => {
+    if (!node || !restoreProviderFocus.current) return
+    // The keyed form must reset credentials and advanced fields on switch.
+    // Restore only focus the user already had, not focus after background reads.
+    restoreProviderFocus.current = false
+    node.focus({ preventScroll: true })
+  }, [])
+  const [showProviderConfig, setShowProviderConfig] = useState(false)
+  const [researchPromptCopied, setResearchPromptCopied] = useState(false)
+  const [researchCopyError, setResearchCopyError] = useState(false)
+  const configurableProviders = settings.providerStatuses.filter(provider => (
+    normalizeProviderName(provider.name) !== CDP_PROVIDER_NAME
+    && (projectProviders.length === 0 || projectProviders.includes(normalizeProviderName(provider.name)))
+  ))
+  const providerToConfigure = configurableProviders.find(provider => provider.name === configuringProvider)
+    ?? configurableProviders.find(provider => provider.state !== 'ready')
+    ?? configurableProviders.at(0)
+  const researchPrompt = `Help me choose AI Visibility queries for Canonry project ${JSON.stringify(createdProjectName ?? projectName)} (${domain}).
+1. Read the project, its existing tracked queries, and Site Health findings. Ask about my customers, services, and locations if needed, then propose relevant customer queries.
+2. Check the configured connection's capabilities, then use Canonry's Research flow to test a small approved batch. Retrieve saved answers and any available sources. Compare brand mentions separately from site citations; unavailable citation evidence is not a "not cited" result. Text-only routes can inform query research but cannot establish an AI Visibility baseline. Research does not add queries to tracking. If more candidates are needed, propose ICP Discovery separately.
+3. Recommend a short list with reasons. Ask before provider usage. Once I approve, preserve existing queries and return the combined list, one query per line, for me to paste into setup. Do not change tracked queries or launch a visibility sweep.`
+  const copyResearchPrompt = async () => {
+    setResearchCopyError(false)
+    try {
+      await navigator.clipboard.writeText(researchPrompt)
+      setResearchPromptCopied(true)
+    } catch {
+      setResearchCopyError(true)
+    }
+  }
 
   const [competitorsText, setCompetitorsText] = useState(durableCompetitors.join('\n'))
   const [competitorsSaved, setCompetitorsSaved] = useState(durableCompetitors.length > 0)
@@ -417,38 +544,51 @@ function ReadySetupPage({
   const parsedQueries = queriesText.split('\n').map(k => k.trim()).filter(Boolean)
   const parsedCompetitors = competitorsText.split('\n').map(c => c.trim()).filter(Boolean)
   const effectiveQueryCount = Math.max(durableQueryCount, queriesSaved ? parsedQueries.length : 0)
-  const launchBlockedReason = model.launchState.blockedReason
+  const systemBlockReason = onboardingSystemBlockReason({
+    apiReady: healthSnapshot.apiStatus.state === 'ok',
+    databaseConfigured: healthSnapshot.apiStatus.databaseConfigured,
+    workerReady: healthSnapshot.workerStatus.state === 'ok',
+    // A pending CDP read is not yet a confirmed provider failure. The explicit
+    // readiness message below keeps launch disabled until it settles.
+    providerReady: providerReadiness !== false,
+  })
+  const readinessBlockedReason = systemBlockReason && systemBlockReason !== 'no_provider'
+    ? model.launchState.blockedReason
+    : providerReadinessFailed
+      ? 'Provider readiness could not be checked. Try again.'
+      : providerReadiness === undefined
+      ? 'Checking provider readiness before launch.'
+      : systemBlockReason === 'no_provider'
+        ? 'Launch is blocked until a provider allowed by this project is configured.'
+        : undefined
+  const launchBlockedReason = readinessBlockedReason
     ?? (!createdProjectName
       ? 'Create a project before launching the first sweep.'
       : effectiveQueryCount === 0
         ? 'Add at least one query before launching the first sweep.'
         : undefined)
-  const systemBlockReason = onboardingSystemBlockReason({
-    apiReady: healthSnapshot.apiStatus.state === 'ok',
-    databaseConfigured: healthSnapshot.apiStatus.databaseConfigured,
-    workerReady: healthSnapshot.workerStatus.state === 'ok',
-    providerReady: readyProviders.length > 0,
-  })
 
   useEffect(() => {
     if (resumeApplied || resumeLoading) return
-    setStep(initialResumeStep)
+    // Project-scoped setup always starts on queries. Do not reset a fast user
+    // who advances during the render/effect boundary after those queries load.
+    if (!isProjectScoped) setStep(initialResumeStep)
     if (durableQueries.length > 0) {
       setQueriesText(durableQueries.map(query => query.query).join('\n'))
       setQueriesSaved(true)
     }
     setResumeApplied(true)
-  }, [durableQueries, initialResumeStep, resumeApplied, resumeLoading])
+  }, [durableQueries, initialResumeStep, isProjectScoped, resumeApplied, resumeLoading])
 
   useEffect(() => {
-    if (readyProviders.length === 0) {
+    if (runnableApiProviders.length === 0) {
       setSelectedProvider('')
       return
     }
-    if (!readyProviders.some(provider => provider.name === selectedProvider)) {
-      setSelectedProvider(readyProviders[0]!.name)
+    if (!runnableApiProviders.some(provider => provider.name === selectedProvider)) {
+      setSelectedProvider(runnableApiProviders[0]!.name)
     }
-  }, [readyProviders, selectedProvider])
+  }, [runnableApiProviders, selectedProvider])
 
   useEffect(() => {
     if (!resumeApplied) return
@@ -478,6 +618,7 @@ function ReadySetupPage({
   ])
 
   useEffect(() => {
+    if (isProjectScoped) return
     if (!isOnboardingHealthSettled(healthSnapshot) || !systemBlockReason) return
     emitOnboardingEvent({
       flowVersion: ONBOARDING_FLOW_VERSION,
@@ -487,7 +628,7 @@ function ReadySetupPage({
       action: systemBlockReason === 'no_provider' ? 'configure_provider' : 'continue',
       reasonCode: systemBlockReason,
     }, `onboarding.blocked:system:${systemBlockReason}`)
-  }, [emitOnboardingEvent, healthSnapshot, onboardingSessionId, systemBlockReason])
+  }, [emitOnboardingEvent, healthSnapshot, isProjectScoped, onboardingSessionId, systemBlockReason])
 
   const polledRunStatus = launchedRun.data?.status
   const polledSnapshotCount = launchedRun.data?.snapshots?.length ?? 0
@@ -594,7 +735,22 @@ function ReadySetupPage({
     try {
       await setQueries(createdProjectName, queries)
       setQueriesSaved(true)
-      await refetch()
+      if (isProjectScoped) {
+        await Promise.all([
+          queryClient.invalidateQueries({
+            queryKey: getApiV1ProjectsByNameQueriesQueryKey({
+              client: heyClient,
+              path: { name: createdProjectName },
+            }),
+          }),
+          queryClient.invalidateQueries({ predicate: isProjectDetailQuery }),
+          queryClient.invalidateQueries({
+            queryKey: ['setup', 'resume-queries', createdProjectName],
+          }),
+        ])
+      } else {
+        await refetch()
+      }
       emitOnboardingEvent({
         flowVersion: ONBOARDING_FLOW_VERSION,
         onboardingSessionId,
@@ -603,7 +759,7 @@ function ReadySetupPage({
         method: queriesGenerated ? 'generated' : 'manual',
         countBucket: bucketOnboardingCount(queries.length),
       }, 'onboarding.step_completed:queries')
-      setStep(3)
+      setStep(isProjectScoped ? 4 : 3)
     } catch (err) {
       setQueriesError(err instanceof Error ? err.message : 'Failed to save queries')
       emitOnboardingEvent({
@@ -731,16 +887,19 @@ function ReadySetupPage({
       setRunError(launchBlockedReason ?? 'Complete setup before launching the first sweep.')
       const reasonCode = systemBlockReason
         ?? (!createdProjectName ? 'unknown' : effectiveQueryCount === 0 ? 'no_queries' : 'run_rejected')
-      emitOnboardingEvent({
-        flowVersion: ONBOARDING_FLOW_VERSION,
-        onboardingSessionId,
-        event: 'run.requested',
-        origin: 'dashboard_setup',
-        result: 'rejected',
-        providerCountBucket: bucketOnboardingCount(readyProviders.length),
-        queryCountBucket: bucketOnboardingCount(effectiveQueryCount),
-        reasonCode,
-      })
+      // Project-readable readiness is a boolean, not an inventory we can count.
+      if (!usesProjectProviderReadiness) {
+        emitOnboardingEvent({
+          flowVersion: ONBOARDING_FLOW_VERSION,
+          onboardingSessionId,
+          event: 'run.requested',
+          origin: 'dashboard_setup',
+          result: 'rejected',
+          providerCountBucket: bucketOnboardingCount(runnableProviderCount),
+          queryCountBucket: bucketOnboardingCount(effectiveQueryCount),
+          reasonCode,
+        })
+      }
       return
     }
     setRunSaving(true)
@@ -755,34 +914,41 @@ function ReadySetupPage({
       setRunTriggered(true)
       markOnboardingRunLaunched(createdProjectName, run.id)
       launchedThisSessionRunId.current = run.id
-      emitOnboardingEvent({
-        flowVersion: ONBOARDING_FLOW_VERSION,
-        onboardingSessionId,
-        event: 'run.requested',
-        origin: 'dashboard_setup',
-        result: 'queued',
-        providerCountBucket: bucketOnboardingCount(readyProviders.length),
-        queryCountBucket: bucketOnboardingCount(effectiveQueryCount),
-      })
+      if (!usesProjectProviderReadiness) {
+        emitOnboardingEvent({
+          flowVersion: ONBOARDING_FLOW_VERSION,
+          onboardingSessionId,
+          event: 'run.requested',
+          origin: 'dashboard_setup',
+          result: 'queued',
+          providerCountBucket: bucketOnboardingCount(runnableProviderCount),
+          queryCountBucket: bucketOnboardingCount(effectiveQueryCount),
+        })
+      }
       await refetch()
     } catch (err) {
       setRunError(err instanceof Error ? err.message : 'Failed to queue the visibility sweep. Retry when the instance is ready.')
-      emitOnboardingEvent({
-        flowVersion: ONBOARDING_FLOW_VERSION,
-        onboardingSessionId,
-        event: 'run.requested',
-        origin: 'dashboard_setup',
-        result: 'rejected',
-        providerCountBucket: bucketOnboardingCount(readyProviders.length),
-        queryCountBucket: bucketOnboardingCount(effectiveQueryCount),
-        reasonCode: onboardingErrorReason(err, 'run_rejected'),
-      })
+      if (!usesProjectProviderReadiness) {
+        emitOnboardingEvent({
+          flowVersion: ONBOARDING_FLOW_VERSION,
+          onboardingSessionId,
+          event: 'run.requested',
+          origin: 'dashboard_setup',
+          result: 'rejected',
+          providerCountBucket: bucketOnboardingCount(runnableProviderCount),
+          queryCountBucket: bucketOnboardingCount(effectiveQueryCount),
+          reasonCode: onboardingErrorReason(err, 'run_rejected'),
+        })
+      }
     } finally {
       setRunSaving(false)
     }
   }
 
-  const goBack = () => setStep((s) => Math.max(0, s - 1) as SetupStep)
+  const goBack = () => setStep((s) => {
+    if (isProjectScoped) return 2
+    return Math.max(0, s - 1) as SetupStep
+  })
   const completeExistingStep = (
     completedStep: 'project' | 'queries' | 'competitors',
     nextStep: SetupStep,
@@ -808,6 +974,10 @@ function ReadySetupPage({
       method: 'skipped',
       countBucket: '0',
     }, 'onboarding.step_completed:queries')
+    if (isProjectScoped) {
+      openProjectDashboard()
+      return
+    }
     setStep(3)
   }
 
@@ -822,6 +992,125 @@ function ReadySetupPage({
     }, 'onboarding.step_completed:competitors')
     setStep(4)
   }
+
+  const StepSurface = isProjectScoped ? 'section' : Card
+  const providerRefreshAction = providerReadiness !== true || cdpConfigured === true ? (
+    <Button type="button" variant="ghost" size="sm" className="min-h-11" onClick={() => {
+      void refetch()
+      if (selectionCanUseCdp) void cdpStatusQuery.refetch()
+    }}>
+      Check again
+    </Button>
+  ) : null
+  const providerFormVisible = (providerReadiness === false || showProviderConfig) && !!providerToConfigure
+  const providerSetup = isProjectScoped && (step === 2 || step === 4) ? (
+    !isAdmin ? (
+      <section aria-labelledby="setup-provider-heading" className="space-y-2 border-b border-default pb-6 mb-6">
+        <h2 id="setup-provider-heading" className="text-lg font-semibold text-heading">Answer engine provider</h2>
+        <p className="max-w-prose text-sm text-secondary">
+          Provider settings are managed by an administrator.
+        </p>
+        {providerReadinessFailed ? (
+          <p role="alert" className="text-sm text-negative">Provider readiness could not be checked. Try again.</p>
+        ) : (
+          <p className="max-w-prose text-sm text-secondary" role="status">
+            {providerReadiness === true
+              ? 'An answer engine is available for this project.'
+              : providerReadiness === false
+                ? 'Ask an administrator to connect an answer engine for this project. You can save queries now.'
+                : 'Checking provider readiness. You can save queries now.'}
+          </p>
+        )}
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="min-h-11"
+          disabled={projectProviderQuery.isFetching}
+          onClick={() => { void projectProviderQuery.refetch() }}
+        >
+          {providerReadinessFailed ? 'Retry provider check' : 'Check again'}
+        </Button>
+      </section>
+    ) : (
+    <section aria-labelledby="setup-provider-heading" className="space-y-3 border-b border-default pb-6 mb-6">
+      <div className="flex flex-wrap items-center gap-3">
+        <h2 id="setup-provider-heading" className="text-lg font-semibold text-heading">
+          {providerReadiness === false ? 'Connect a provider' : 'Answer engine provider'}
+        </h2>
+        <ToneBadge tone={providerReadiness === true ? 'positive' : 'neutral'}>
+          {providerReadiness === true ? 'Configured' : providerReadiness === false ? 'Not connected' : 'Checking'}
+        </ToneBadge>
+      </div>
+      <p className="max-w-prose text-sm text-secondary">
+        {providerReadiness === true
+          ? runnableApiProviders.length > 0
+            ? `${runnableApiProviders.map(provider => provider.displayName ?? provider.name).join(', ')} available for this project. Research and sweeps use your provider account.`
+            : 'ChatGPT in Chrome is configured for sweeps. Query Research needs an API provider.'
+          : providerReadiness === false
+            ? 'An answer engine is required for visibility sweeps. You can save queries now and connect later.'
+            : 'Checking available providers. You can choose queries while this finishes.'}
+      </p>
+      {providerReadiness === false || showProviderConfig ? (
+        providerToConfigure ? (
+          <div>
+            <ProviderConfigForm
+              key={providerToConfigure.name}
+              compact
+              leadingField={(
+                <div className="min-w-0 space-y-1.5">
+                  <label className="block text-sm font-medium text-secondary" htmlFor="setup-provider">Provider to connect</label>
+                  <select
+                    ref={providerSelectorRef}
+                    id="setup-provider"
+                    className="setup-input"
+                    value={providerToConfigure.name}
+                    onChange={event => {
+                      if (event.target.value === providerToConfigure.name) return
+                      restoreProviderFocus.current = document.activeElement === event.currentTarget
+                      setConfiguringProvider(event.target.value)
+                    }}
+                  >
+                    {configurableProviders.map(provider => (
+                      <option key={provider.name} value={provider.name}>{provider.displayName ?? provider.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              secondaryActions={providerRefreshAction}
+              providerName={providerToConfigure.name}
+              keyUrl={providerToConfigure.keyUrl}
+              modelHint={providerToConfigure.modelHint}
+              onSaved={() => {
+                setShowProviderConfig(false)
+                void refetch()
+              }}
+            />
+          </div>
+        ) : (
+          <p className="max-w-prose text-sm text-secondary">
+            {projectProviders.length > 0
+              ? `This project's provider selection is ${projectProviders.join(', ')}. Configure an allowed provider in Settings, or change the selection in project Settings.`
+              : 'Provider configuration is unavailable here. Open Settings to connect an answer engine, then check again.'}
+          </p>
+        )
+      ) : null}
+      <div className="flex flex-wrap items-center gap-2">
+        {providerReadiness === true && !showProviderConfig && providerToConfigure ? (
+          <Button type="button" variant="outline" size="sm" onClick={() => setShowProviderConfig(true)}>
+            Configure a provider
+          </Button>
+        ) : null}
+        {!providerToConfigure || cdpConfigured === true ? (
+          <Button type="button" variant="outline" size="sm" asChild>
+            <Link to="/settings" target="_blank" rel="noopener noreferrer">Open provider settings</Link>
+          </Button>
+        ) : null}
+        {!providerFormVisible ? providerRefreshAction : null}
+      </div>
+    </section>
+    )
+  ) : null
 
   const stepContent = (() => {
     switch (step) {
@@ -1005,13 +1294,15 @@ function ReadySetupPage({
 
       case 2:
         return (
-          <Card className="surface-card step-card">
+          <StepSurface className={isProjectScoped ? 'visibility-setup-section step-card' : 'surface-card step-card'} aria-labelledby="setup-queries-heading">
             <div className="section-head">
               <div>
-                <p className="eyebrow eyebrow-soft">Step 3 of 5</p>
-                <h2>Add queries</h2>
+                <p className="eyebrow eyebrow-soft">{isProjectScoped ? 'Step 1 of 2' : 'Step 3 of 5'}</p>
+                <h2 id="setup-queries-heading">Add queries</h2>
               </div>
-              {resumeQueriesQuery.isError ? (
+              {queriesHydrating ? (
+                <ToneBadge tone="neutral">Loading</ToneBadge>
+              ) : resumeQueriesQuery.isError ? (
                 <ToneBadge tone="negative">Load failed</ToneBadge>
               ) : queriesSaved ? (
                 <ToneBadge tone="positive">{parsedQueries.length} saved</ToneBadge>
@@ -1020,17 +1311,37 @@ function ReadySetupPage({
               )}
             </div>
             <p className="supporting-copy">
-              Enter the queries you want to track, one per line. A rough first list is
-              fine: you can edit them, research more, and add to them at any time from the
-              project.
+              Add the queries your customers use, one per line. You can refine your list later.
             </p>
-            {resumeQueriesQuery.isError ? (
+            <div className="space-y-2 border-b border-default pb-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0 space-y-1">
+                  <h3 className="text-sm font-semibold text-heading">Research queries with your agent</h3>
+                  <p className="max-w-prose text-sm text-secondary">
+                    Ask your agent to compare answers and available sources with Canonry Research, then recommend queries. Research does not change your tracked queries.
+                  </p>
+                </div>
+                <Button type="button" variant="outline" size="sm" className="min-h-11 shrink-0 self-start" onClick={asyncHandler(copyResearchPrompt)}>
+                  {researchPromptCopied ? 'Research prompt copied' : 'Copy research prompt'}
+                </Button>
+              </div>
+              <details open={researchCopyError || undefined} className="text-sm text-secondary">
+                <summary className="min-h-11 cursor-pointer py-3 text-link">View agent prompt</summary>
+                <textarea aria-label="Agent query research prompt" readOnly className="setup-textarea mt-2 w-full" rows={8} value={researchPrompt} />
+              </details>
+              {researchCopyError ? <p role="alert" className="text-sm text-negative">Could not copy. Select and copy the prompt above.</p> : null}
+            </div>
+            {queriesHydrating ? (
+              <div className="rounded-md border border-default bg-bg-elevated/40 p-4 text-sm text-secondary" role="status">
+                Loading saved queries…
+              </div>
+            ) : resumeQueriesQuery.isError ? (
               <div className="compact-stack">
                 <div role="alert" className="rounded-md border border-negative bg-negative-soft p-3 text-sm text-negative">
                   Saved queries could not be loaded. Retry before changing the query basket.
                 </div>
                 <div className="setup-nav">
-                  <Button type="button" variant="outline" onClick={goBack}>Back</Button>
+                  <Button type="button" variant="outline" onClick={isProjectScoped ? openProjectDashboard : goBack}>Back</Button>
                   <Button type="button" onClick={() => { void resumeQueriesQuery.refetch() }}>
                     Retry loading queries
                   </Button>
@@ -1042,13 +1353,14 @@ function ReadySetupPage({
                   {parsedQueries.map((q) => <li key={q}>{q}</li>)}
                 </ul>
                 <div className="setup-nav">
-                  <Button type="button" variant="outline" onClick={goBack}>Back</Button>
-                  <Button type="button" onClick={() => completeExistingStep('queries', 3, parsedQueries.length)}>Continue</Button>
+                  <Button type="button" variant="outline" onClick={isProjectScoped ? openProjectDashboard : goBack}>Back</Button>
+                  <Button type="button" variant="outline" onClick={() => setQueriesSaved(false)}>Edit queries</Button>
+                  <Button type="button" onClick={() => completeExistingStep('queries', isProjectScoped ? 4 : 3, parsedQueries.length)}>Continue</Button>
                 </div>
               </div>
             ) : (
               <div className="compact-stack">
-                {readyProviders.length > 0 ? (
+                {runnableApiProviders.length > 0 ? (
                   <div className="compact-stack">
                     <div className="flex items-center gap-2 text-muted text-xs uppercase tracking-wide">
                       <span className="flex-1 border-t border-base" />
@@ -1064,7 +1376,7 @@ function ReadySetupPage({
                           value={selectedProvider}
                           onChange={(e) => setSelectedProvider(e.target.value)}
                         >
-                          {readyProviders.map((p) => (
+                          {runnableApiProviders.map((p) => (
                             <option key={p.name} value={p.name}>{p.displayName ?? p.name}{p.model ? ` (${p.model})` : ''}</option>
                           ))}
                         </select>
@@ -1094,11 +1406,11 @@ function ReadySetupPage({
                     {generateError ? <p className="text-negative-400 text-sm">{generateError}</p> : null}
                   </div>
                 ) : null}
-                <div className="flex items-center gap-2 text-muted text-xs uppercase tracking-wide">
+                {!isProjectScoped ? <div className="flex items-center gap-2 text-muted text-xs uppercase tracking-wide">
                   <span className="flex-1 border-t border-base" />
                   or type manually
                   <span className="flex-1 border-t border-base" />
-                </div>
+                </div> : null}
                 <div className="setup-field">
                   <label className="setup-label" htmlFor="queries">Queries (one per line)</label>
                   <textarea
@@ -1112,15 +1424,17 @@ function ReadySetupPage({
                 </div>
                 {queriesError ? <p className="text-negative-400 text-sm">{queriesError}</p> : null}
                 <div className="setup-nav">
-                  <Button type="button" variant="outline" onClick={goBack}>Back</Button>
-                  <Button type="button" variant="ghost" onClick={skipQueries}>Skip for now</Button>
+                  <Button type="button" variant="outline" onClick={isProjectScoped ? openProjectDashboard : goBack}>Back</Button>
+                  <Button type="button" variant="ghost" onClick={skipQueries}>
+                    {isProjectScoped ? 'Finish without AI Visibility' : 'Skip for now'}
+                  </Button>
                   <Button type="button" disabled={parsedQueries.length === 0 || queriesSaving} onClick={asyncHandler(handleSaveQueries)}>
                     {queriesSaving ? 'Saving...' : `Save ${parsedQueries.length} quer${parsedQueries.length !== 1 ? 'ies' : 'y'}`}
                   </Button>
                 </div>
               </div>
             )}
-          </Card>
+          </StepSurface>
         )
 
       case 3:
@@ -1213,7 +1527,7 @@ function ReadySetupPage({
           <Card className="surface-card step-card">
             <div className="section-head">
               <div>
-                <p className="eyebrow eyebrow-soft">Step 5 of 5</p>
+                <p className="eyebrow eyebrow-soft">{isProjectScoped ? 'Step 2 of 2' : 'Step 5 of 5'}</p>
                 <h2>Launch first run</h2>
               </div>
               {stepBadge}
@@ -1233,7 +1547,7 @@ function ReadySetupPage({
             ) : !runTriggered ? (
               <div className="compact-stack">
                 <p className="supporting-copy">
-                  Setup is done. You can run a first sweep now to get a baseline for{' '}
+                  Your queries are saved. Run a first sweep to get a baseline for{' '}
                   <span className="text-heading font-medium">{createdProjectName}</span>, or
                   finish and run it later from the project. A sweep calls the answer
                   engines, so it costs provider usage.
@@ -1253,14 +1567,20 @@ function ReadySetupPage({
                   >
                     Finish without running
                   </Button>
-                  <Button
-                    type="button"
-                    disabled={runSaving || !!launchBlockedReason}
-                    title={launchBlockedReason}
-                    onClick={asyncHandler(handleLaunchRun)}
-                  >
-                    {runSaving ? 'Launching...' : runError ? 'Retry visibility sweep' : 'Launch visibility sweep'}
-                  </Button>
+                  {systemBlockReason === 'no_provider' && !isProjectScoped ? (
+                    <Button type="button" asChild>
+                      <Link to="/settings">Configure a provider</Link>
+                    </Button>
+                  ) : (
+                    <Button
+                      type="button"
+                      disabled={runSaving || !!launchBlockedReason}
+                      title={launchBlockedReason}
+                      onClick={asyncHandler(handleLaunchRun)}
+                    >
+                      {runSaving ? 'Launching...' : runError ? 'Retry visibility sweep' : 'Launch visibility sweep'}
+                    </Button>
+                  )}
                 </div>
               </div>
             ) : !terminal ? (
@@ -1347,7 +1667,7 @@ function ReadySetupPage({
   })()
 
   return (
-    <div className="page-container">
+    <div className={isProjectScoped ? 'page-container visibility-setup' : 'page-container'}>
       {siteHealthOnboarding ? <OnboardingProgress current="visibility" /> : null}
       <div className="page-header">
         <div className="page-header-left">
@@ -1360,22 +1680,26 @@ function ReadySetupPage({
           </h1>
           <p className="page-subtitle">
             {visibilityProjectName
-              ? 'Choose what to track, then run your first visibility sweep.'
+              ? 'Connect an answer engine, then choose queries for your first sweep.'
               : 'Create a project and run its first visibility check.'}
           </p>
         </div>
         {siteHealthOnboarding ? (
           <div className="page-header-right">
-            <Button type="button" variant="outline" onClick={openProjectDashboard}>
+            <Button type="button" variant="outline" className="min-h-11" onClick={openProjectDashboard}>
               Skip AI Visibility
             </Button>
           </div>
         ) : null}
       </div>
 
-      <SetupStepIndicator current={step} labels={SETUP_STEPS} />
+      {!siteHealthOnboarding ? <SetupStepIndicator
+        current={isProjectScoped ? (step === 4 ? 1 : 0) : step}
+        labels={isProjectScoped ? PROJECT_VISIBILITY_STEPS : SETUP_STEPS}
+      /> : null}
 
       <section className="setup-wizard">
+        {providerSetup}
         {stepContent}
       </section>
     </div>

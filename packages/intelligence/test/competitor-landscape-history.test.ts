@@ -19,6 +19,41 @@ function snapshot(
 }
 
 describe('buildCompetitorLandscapeHistory', () => {
+  it('keeps owned-host boundaries before grouping sibling sources by registrable domain', () => {
+    const result = buildCompetitorLandscapeHistory({
+      project: { domain: 'acme.example', label: 'Acme', domains: ['acme.example', 'owned.platform.example'] },
+      pinned: [{ domain: 'rival.platform.example', label: 'Rival' }],
+      classifications: new Map(),
+      snapshots: [snapshot({
+        answerText: 'Rival is another option.',
+        citedDomains: ['rival.platform.example'],
+        citedUrls: ['https://rival.platform.example/product'],
+      })],
+    })
+
+    expect(result.project).toMatchObject({ citationCount: 0, mentionCount: 0 })
+    expect(result.pinned).toEqual([expect.objectContaining({
+      domain: 'platform.example', citationCount: 1, mentionCount: 1, shareOfVoice: 100,
+    })])
+  })
+
+  it('counts exact owned hosts and their descendants without claiming the parent or sibling hosts', () => {
+    const result = buildCompetitorLandscapeHistory({
+      project: { domain: 'shop.platform.example', label: 'Shop', domains: ['shop.platform.example'] },
+      pinned: [],
+      classifications: new Map(),
+      snapshots: [
+        snapshot({ id: 'owned', citedUrls: ['https://shop.platform.example/product', 'https://blog.shop.platform.example/post'] }),
+        snapshot({ id: 'sibling', citedUrls: ['https://other.platform.example/review'] }),
+        snapshot({ id: 'parent', citedUrls: ['https://platform.example/'] }),
+      ],
+    })
+
+    expect(result.project).toMatchObject({ domain: 'shop.platform.example', citationCount: 1 })
+    expect(result.project.sampleUrls).toEqual(['https://shop.platform.example/product', 'https://blog.shop.platform.example/post'])
+    expect(result.otherSources).toEqual([expect.objectContaining({ domain: 'platform.example', citationCount: 2 })])
+  })
+
   it('keeps answer-text mention share separate from source citations, while retaining source-only evidence', () => {
     const result = buildCompetitorLandscapeHistory({
       project: {
@@ -155,15 +190,72 @@ describe('buildCompetitorLandscapeHistory', () => {
     expect(result.pinned[0]).toMatchObject({ mentionCount: 1, shareOfVoice: 100 })
   })
 
+  it('does not promote short generated labels into aliases when duplicate identities merge', () => {
+    const generated = { domain: 'car.com', label: 'car', labelSource: 'domain' as const }
+    const result = buildCompetitorLandscapeHistory({
+      project: { domain: 'acme.example', label: 'Acme', domains: ['acme.example'] },
+      pinned: [generated, { ...generated, domain: 'www.car.com' }],
+      classifications: new Map(),
+      snapshots: [
+        snapshot({
+          id: 'ordinary-word',
+          answerText: 'Acme helps you rent a car.',
+          projectMentioned: true,
+          frozenCompetitors: [generated],
+        }),
+        snapshot({ id: 'written-domain', answerText: 'Compare car.com.', citedDomains: ['car.com'] }),
+      ],
+    })
+
+    expect(result.pinned).toEqual([expect.objectContaining({
+      domain: 'car.com', mentionCount: 1, citationCount: 1, shareOfVoice: 50,
+    })])
+    expect(result.evidence.mentionCredits).toBe(2)
+  })
+
+  it('applies the safe domain label threshold to automatically observed competitors', () => {
+    const result = buildCompetitorLandscapeHistory({
+      project: { domain: 'acme.example', label: 'Acme', domains: ['acme.example'] },
+      pinned: [],
+      classifications: new Map([['car.com', 'direct-competitor']]),
+      snapshots: [snapshot({
+        answerText: 'Acme helps you rent a car.',
+        projectMentioned: true,
+        citedDomains: ['car.com'],
+      })],
+    })
+
+    expect(result.observed).toEqual([expect.objectContaining({
+      domain: 'car.com', mentionCount: 0, citationCount: 1, shareOfVoice: 0,
+    })])
+    expect(result.project.shareOfVoice).toBe(100)
+  })
+
+  it('preserves explicitly curated short labels and aliases across merged identities', () => {
+    const result = buildCompetitorLandscapeHistory({
+      project: { domain: 'acme.example', label: 'Acme', domains: ['acme.example'] },
+      pinned: [
+        { domain: 'ibm.com', label: 'ibm', labelSource: 'domain' },
+        { domain: 'www.ibm.com', label: 'IBM' },
+        { domain: 'car.com', label: 'car', labelSource: 'domain' },
+      ],
+      classifications: new Map(),
+      snapshots: [snapshot({
+        answerText: 'IBM and CAR are both options.',
+        frozenCompetitors: [{ domain: 'car.com', label: 'car', labelSource: 'domain', aliases: ['CAR'] }],
+      })],
+    })
+
+    expect(result.pinned).toEqual([
+      expect.objectContaining({ domain: 'ibm.com', mentionCount: 1, shareOfVoice: 50 }),
+      expect.objectContaining({ domain: 'car.com', mentionCount: 1, shareOfVoice: 50 }),
+    ])
+  })
+
   it('includes classified and frozen direct competitors mentioned without citations, but hides zero-activity observed rows', () => {
     const result = buildCompetitorLandscapeHistory({
       project: { domain: 'acme.example', label: 'Acme', domains: ['acme.example'] },
       pinned: [],
-      historicalDirect: [{
-        domain: 'legacy-rival.example',
-        label: 'Legacy Rival',
-        aliases: ['Legacy'],
-      }],
       classifications: new Map([
         ['classified-only.example', 'direct-competitor'],
         ['zero-activity.example', 'direct-competitor'],
@@ -172,6 +264,11 @@ describe('buildCompetitorLandscapeHistory', () => {
         answerText: 'Classified Only and Legacy Rival are alternatives.',
         citedDomains: [],
         citedUrls: [],
+        frozenCompetitors: [{
+          domain: 'legacy-rival.example',
+          label: 'Legacy Rival',
+          aliases: ['Legacy'],
+        }],
       })],
     })
 
