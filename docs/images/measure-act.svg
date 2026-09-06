@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1048" viewBox="0 0 1080 1048" role="img" aria-labelledby="title description">
   <title id="title">Canonry: evidence in, actions out</title>
-  <desc id="description">Supported external sources feed Canonry: ChatGPT, Claude, Gemini, Perplexity, Google Search Console, Google Business Profile, Bing Webmaster Tools, Google Analytics 4, read-only Google Ads and Google Tag Manager evidence, Cloudflare, Vercel, Cloud Run, WordPress, and your website. Operators choose connections and schedules or run checks on demand. Canonry combines citation and competitor evidence, portfolio measurement, traffic, and site health for agents, the dashboard, and client reports. Your agent commands Canonry tools for indexing and WordPress publishing, and uses its own execution tools for code and content changes. Solid webhook arrows deliver events to Discord and other systems.</desc>
+  <desc id="description">Supported external sources feed Canonry: ChatGPT, Claude, Gemini, Perplexity, Google Search Console, Google Business Profile, Bing Webmaster Tools, Google Analytics 4, read-only Google Ads and Google Tag Manager evidence, Cloudflare, Vercel, Cloud Run, WordPress, and your website. Operators choose connections and schedules or run checks on demand. Canonry stores project evidence in SQLite and combines citation and competitor evidence, portfolio measurement, traffic, and site health for agents, the dashboard, and client reports. Your agent commands Canonry tools for indexing and WordPress publishing, and uses its own execution tools for code and content changes. Solid webhook arrows deliver events to Discord and other systems.</desc>
   <!-- Palette and typography match the default dark dashboard in apps/web/src/styles.css. -->
   <metadata id="embedded-font-license">
 Embedded, unmodified Geist and Geist Mono fonts.
@@ -168,16 +168,23 @@ text { font-feature-settings: "cv11", "ss01", "ss03"; }
     <path d="M26 53.5v3.5m0 0-2 2m2-2 2 2m10-5.5v3.5m0 0-2 2m2-2 2 2" stroke="#DB8B2B" stroke-width="2.4" />
   </g>
     </g>
-    <text x="540" y="462" text-anchor="middle" font-size="20" fill="#a1a1aa">Open source · self-hosted</text>
     <path d="M364 476H716M364 646H716" stroke="#27272a" stroke-width="1.5" />
     <g font-size="22" fill="#e4e4e7">
       <text x="396" y="522">Citations + competitors</text>
       <text x="396" y="566">Portfolio measurement</text>
       <text x="396" y="610">Traffic + site health</text>
     </g>
-    <text x="396" y="704" font-size="25" font-weight="600">Action tools</text>
-    <g transform="translate(664 680)" fill="none" stroke="#a1a1aa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <text x="396" y="686" font-size="25" font-weight="600">Action tools</text>
+    <g transform="translate(664 662)" fill="none" stroke="#a1a1aa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="m0 5-6 7 6 7m18-14 6 7-6 7m-6-18-6 22" />
+    </g>
+    <!-- The persistent project store sits at the base of the platform. -->
+    <g id="project-store" transform="translate(495 714)" role="img" aria-label="SQLite project store">
+      <g transform="scale(0.8)" fill="none" stroke="#a1a1aa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <ellipse cx="11" cy="4" rx="10" ry="4" />
+        <path d="M1 4V19C1 24.3 21 24.3 21 19V4M1 11C1 16.3 21 16.3 21 11" />
+      </g>
+      <text x="28" y="18" font-size="20" fill="#a1a1aa">SQLite</text>
     </g>
 
     <!-- The user's agent can use Canonry workflows and its own execution tools. -->
@@ -187,8 +194,8 @@ text { font-feature-settings: "cv11", "ss01", "ss03"; }
     <text x="60" y="650" font-size="20" fill="#a1a1aa">MCP · CLI · API</text>
     <path d="M364 554H254" fill="none" stroke="#a1a1aa" stroke-width="2" marker-end="url(#arrow)" />
     <text x="308" y="536" text-anchor="middle" font-size="18" fill="#a1a1aa">Evidence</text>
-    <path d="M252 714H362" fill="none" stroke="#60a5fa" stroke-width="2" marker-end="url(#command-arrow)" />
-    <text x="308" y="696" text-anchor="middle" font-size="18" fill="#60a5fa">Commands</text>
+    <path d="M252 680H362" fill="none" stroke="#60a5fa" stroke-width="2" marker-end="url(#command-arrow)" />
+    <text x="308" y="662" text-anchor="middle" font-size="18" fill="#60a5fa">Commands</text>
 
     <!-- Client reporting reads project evidence; indexing calls an integration. -->
     <path d="M716 522H768V466H826" fill="none" stroke="#a1a1aa" stroke-width="2" marker-end="url(#arrow)" />

@@ -8,7 +8,7 @@ Canonry is an **agent-first, open-source AEO operating platform.**
 
 <p align="center">
   <a href="https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/measure-act.svg">
-    <img src="https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/measure-act.svg" alt="Supported external sources feed Canonry. Project evidence reaches your agent, dashboard, and client reports. Your agent combines its own execution tools with Canonry's WordPress and indexing workflows. Webhooks connect Discord and other systems." width="94%" />
+    <img src="https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/measure-act.svg" alt="Supported external sources feed Canonry. Canonry stores project evidence in SQLite for your agent, dashboard, and client reports. Your agent combines its own execution tools with Canonry's WordPress and indexing workflows. Webhooks connect Discord and other systems." width="94%" />
   </a>
 </p>
 
