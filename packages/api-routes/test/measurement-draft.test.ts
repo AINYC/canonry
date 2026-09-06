@@ -1334,10 +1334,48 @@ describe('measurement draft publish', () => {
 })
 
 describe('measurement setup state', () => {
+  it('never reports text-only routes as answer-visibility readiness', async () => {
+    db.update(projects).set({ providers: [] }).where(eq(projects.id, 'prj_northwind')).run()
+    runnableProviders = ['route:custom-gateway']
+    expect((await request('GET', '/measurement-setup')).json().answerVisibilityProviderReady).toBe(false)
+
+    runnableProviders = ['route:custom-gateway', 'openai']
+    expect((await request('GET', '/measurement-setup')).json().answerVisibilityProviderReady).toBe(true)
+
+    db.update(projects).set({ providers: ['route:custom-gateway'] }).where(eq(projects.id, 'prj_northwind')).run()
+    expect((await request('GET', '/measurement-setup')).json().answerVisibilityProviderReady).toBe(false)
+
+    db.update(projects).set({ providers: ['route:custom-gateway', 'openai'] }).where(eq(projects.id, 'prj_northwind')).run()
+    expect((await request('GET', '/measurement-setup')).json().answerVisibilityProviderReady).toBe(true)
+  })
+
+  it('reports provider readiness with the run preflight selection rules', async () => {
+    runnableProviders = ['perplexity']
+    expect((await request('GET', '/measurement-setup')).json()).toMatchObject({
+      answerVisibilityProviderReady: false,
+    })
+
+    db.update(projects).set({ providers: [] }).where(eq(projects.id, 'prj_northwind')).run()
+    expect((await request('GET', '/measurement-setup')).json()).toMatchObject({
+      answerVisibilityProviderReady: true,
+    })
+
+    runnableProviders = []
+    expect((await request('GET', '/measurement-setup')).json()).toMatchObject({
+      answerVisibilityProviderReady: false,
+    })
+  })
+
   it('returns exactly one state in the fixed precedence', async () => {
     const simple = await request('GET', '/measurement-setup')
     expect(measurementSetupResponseSchema.safeParse(simple.json()).success).toBe(true)
-    expect(simple.json()).toMatchObject({ state: 'simple', nextAction: 'start_setup', mode: 'simple', activeRevision: null })
+    expect(simple.json()).toMatchObject({
+      state: 'simple',
+      nextAction: 'start_setup',
+      mode: 'simple',
+      answerVisibilityProviderReady: true,
+      activeRevision: null,
+    })
 
     const session = await readyDraft()
     expect((await request('GET', '/measurement-setup')).json()).toMatchObject({

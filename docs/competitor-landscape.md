@@ -55,7 +55,10 @@ This means a newly pinned brand can acquire historical mentions and citations wh
 | Advanced market | Project pins plus that market's frozen competitors | Usage edges and query classes frozen into each contributing run revision | A pin updates a draft. A published draft becomes active measurement configuration. |
 | Advanced all markets | Union of project pins and every market's identities | Raw in-scope evidence across all markets | Read-only because there is no single target market. Percentages are recomputed from raw evidence, never averaged from market percentages. |
 
-Draft-only market pins are disclosed in `marketState.draft.pendingCompetitorDomains`. Project pins plus active and pending-draft market competitors are current operator intent, so they intentionally re-evaluate the selected stored history. A historical-only competitor identity remains frozen to its run revision: its label and aliases match only answers from runs that used that revision. In all-markets scope, labels and aliases from every market are unioned when multiple markets name the same registrable domain.
+Draft-only market pins appear in `marketState.draft.pendingCompetitorDomains`.
+Project pins and active or pending-draft market competitors express current operator intent. They reinterpret selected stored history.
+Historical-only identities and aliases match only answers from runs that used their frozen revision.
+All-markets scope combines aliases when multiple markets name the same registrable domain.
 
 ## API, CLI, and MCP
 

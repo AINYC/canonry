@@ -135,19 +135,51 @@ function storedProviderRoster(value: unknown): string[] {
  * Which native providers a run measures with: what was asked for, else the
  * project's own list, else the instance's native defaults. Configured gateway
  * routes are text-only and cannot enter measurement through any selection.
- * An empty project list does not mean zero providers, and reading it so here
- * would freeze an expectation nothing could ever satisfy.
  */
 export function resolveRunProviderSelection(input: {
   requestedProviders?: readonly string[] | null
   projectProviders?: readonly string[] | null
   runnableProviders?: readonly string[] | null
 }): string[] {
-  const requestedSelection = normalizeProviders(input.requestedProviders ?? [])
-  if (requestedSelection.length) return normalizeProviders(defaultSweepProviderNames(requestedSelection))
-  const projectSelection = normalizeProviders(input.projectProviders ?? [])
-  if (projectSelection.length) return normalizeProviders(defaultSweepProviderNames(projectSelection))
-  return normalizeProviders(defaultSweepProviderNames(input.runnableProviders ?? []))
+  return resolveRunnableProviderSelection(input).selectedProviders
+}
+
+/**
+ * Resolve both the requested roster and the subset this host can execute.
+ * Run preflight and project-readable readiness surfaces share this exact decision so
+ * the dashboard never claims a launch state the run route would reject.
+ */
+export function resolveRunnableProviderSelection(input: {
+  requestedProviders?: readonly string[] | null
+  projectProviders?: readonly string[] | null
+  runnableProviders?: readonly string[] | null
+}): {
+  availableProviders: string[]
+  selectedProviders: string[]
+  runnableProviders: string[]
+  selectionSource: 'request' | 'project' | 'instance'
+} {
+  const availableProviders = normalizeProviders(defaultSweepProviderNames(input.runnableProviders ?? []))
+  const requested = normalizeProviders(input.requestedProviders ?? [])
+  const project = normalizeProviders(input.projectProviders ?? [])
+  // Determine precedence before excluding text routes: a route-only explicit
+  // selection must not silently fall back to unrelated instance defaults.
+  const selectedProviders = requested.length > 0
+    ? defaultSweepProviderNames(requested)
+    : project.length > 0
+      ? defaultSweepProviderNames(project)
+      : availableProviders
+  const available = new Set(availableProviders)
+  return {
+    availableProviders,
+    selectedProviders,
+    runnableProviders: selectedProviders.filter(provider => available.has(provider)),
+    selectionSource: requested.length > 0
+      ? 'request'
+      : project.length > 0
+        ? 'project'
+        : 'instance',
+  }
 }
 
 function providerRoster(tx: DatabaseClient, params: QueueRunParams): string[] {

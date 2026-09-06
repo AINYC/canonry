@@ -2233,7 +2233,7 @@ describe('serverActivity (AI visibility — server-side)', () => {
     expect(sa.verifiedCrawlerHits.deltaPct).toBeNull()
   })
 
-  test('top crawled paths sorted descending by hits, verified only', async () => {
+  test('top crawled paths cover both verification tiers, split per row', async () => {
     const projectId = insertProject(ctx.db, 'top-paths')
     const sourceId = insertTrafficSource(projectId)
     insertCrawler(projectId, sourceId, { pathNormalized: '/a', hits: 5 })
@@ -2243,9 +2243,49 @@ describe('serverActivity (AI visibility — server-side)', () => {
     await ctx.app.ready()
     const res = await ctx.app.inject({ method: 'GET', url: '/api/v1/projects/top-paths/report' })
     const sa = (JSON.parse(res.body) as ProjectReportDto).serverActivity!
-    // Verified only — /d (unverified) excluded
-    expect(sa.topCrawledPaths.map(p => p.path)).toEqual(['/b', '/c', '/a'])
-    expect(sa.topCrawledPaths[0]!.verifiedHits).toBe(20)
+    // Both tiers. Verification needs a client IP to match against the
+    // operator's published ranges and some log sources never carry one, so a
+    // verified-only table rendered empty for those projects while the headline
+    // tile above it reported thousands of hits. The split is reported per row
+    // instead of filtering, so /d leads on 999 unverified hits.
+    expect(sa.topCrawledPaths.map(p => p.path)).toEqual(['/d', '/b', '/c', '/a'])
+    expect(sa.topCrawledPaths[0]!.unverifiedHits).toBe(999)
+    expect(sa.topCrawledPaths[0]!.verifiedHits).toBe(0)
+    const b = sa.topCrawledPaths.find(p => p.path === '/b')!
+    expect(b.verifiedHits).toBe(20)
+    expect(b.unverifiedHits).toBe(0)
+  })
+
+  test('daily crawler trend carries unverified hits, so a source that cannot verify is not a flat zero line', async () => {
+    const projectId = insertProject(ctx.db, 'trend-unverified')
+    const sourceId = insertTrafficSource(projectId)
+    // A Vercel-shaped project: every row claimed, none verified, because Vercel
+    // request logs carry no client IP to match against operator ranges.
+    insertCrawler(projectId, sourceId, { hits: 400, verificationStatus: 'claimed_unverified' })
+    await ctx.app.ready()
+    const res = await ctx.app.inject({ method: 'GET', url: '/api/v1/projects/trend-unverified/report' })
+    const sa = (JSON.parse(res.body) as ProjectReportDto).serverActivity!
+    const withHits = sa.dailyTrend.filter(d => d.verifiedCrawlerHits + (d.unverifiedCrawlerHits ?? 0) > 0)
+    expect(withHits.length).toBeGreaterThan(0)
+    expect(withHits.reduce((n, d) => n + (d.unverifiedCrawlerHits ?? 0), 0)).toBe(400)
+    // Verified-only, the previous behaviour, would make this 0 and draw a flat line.
+    expect(withHits.reduce((n, d) => n + d.verifiedCrawlerHits, 0)).toBe(0)
+  })
+
+  test('per-operator delta compares total hits against total hits, not verified against verified', async () => {
+    const projectId = insertProject(ctx.db, 'operator-delta')
+    const sourceId = insertTrafficSource(projectId)
+    // Prior window: 100 hits, all unverified. Current window: 200, all unverified.
+    // A verified-only prior would read 0 and render the delta as a new arrival
+    // rather than a doubling, on a row whose other cells count both tiers.
+    insertCrawler(projectId, sourceId, { tsHour: isoMinusDays(40), hits: 100, verificationStatus: 'claimed_unverified', operator: 'OpenAI' })
+    insertCrawler(projectId, sourceId, { tsHour: isoMinusDays(1), hits: 200, verificationStatus: 'claimed_unverified', operator: 'OpenAI' })
+    await ctx.app.ready()
+    const res = await ctx.app.inject({ method: 'GET', url: '/api/v1/projects/operator-delta/report' })
+    const sa = (JSON.parse(res.body) as ProjectReportDto).serverActivity!
+    const openai = sa.byOperator.find(o => o.operator === 'OpenAI')!
+    expect(openai.unverifiedHits).toBe(200)
+    expect(openai.deltaPct).toBe(100)
   })
 
   test('referral products aggregated and counted with distinct landing paths', async () => {

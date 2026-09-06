@@ -385,7 +385,13 @@ export const gaTrafficSectionSchema = z.object({
   topLandingPages: z.array(z.object({
     page: z.string(),
     sessions: z.number(),
-    users: z.number(),
+    /**
+     * @deprecated Never emitted. A per-landing-page user count cannot be
+     * summed: GA evaluates users as a COUNT DISTINCT at the requested grain,
+     * so a visitor is counted once per page and per day. Kept optional so
+     * existing consumers keep parsing.
+     */
+    users: z.number().optional(),
     organicSessions: z.number(),
   })),
   channelBreakdown: z.array(z.object({
@@ -558,6 +564,14 @@ export const serverActivitySectionSchema = z.object({
   topCrawledPaths: z.array(z.object({
     path: z.string(),
     verifiedHits: z.number(),
+    /**
+     * Hits from a crawler that identified itself but whose source IP could not
+     * be matched against the operator's published ranges. Additive, not an
+     * alternative: some log sources carry no client IP at all (Vercel request
+     * logs, for one), so for those projects every hit lands here and a
+     * verified-only view reports zero against real crawl activity.
+     */
+    unverifiedHits: z.number().default(0),
     /** How many distinct AI operators crawled this path in the window. */
     distinctOperators: z.number(),
   })),
@@ -573,6 +587,8 @@ export const serverActivitySectionSchema = z.object({
   dailyTrend: z.array(z.object({
     date: z.string(),
     verifiedCrawlerHits: z.number(),
+    /** See topCrawledPaths.unverifiedHits. Plotted alongside, never instead. */
+    unverifiedCrawlerHits: z.number().default(0),
     userFetchHits: z.number(),
     referralArrivals: z.number(),
   })),

@@ -30,6 +30,7 @@ import {
   buildPlanlessMeasurementExecutionIdentity,
   hasActiveMeasurementPlan,
   queueRunIfProjectIdle,
+  resolveRunnableProviderSelection,
 } from './run-queue.js'
 
 export interface RunRoutesOptions {
@@ -637,34 +638,19 @@ export function answerVisibilityPreflightError(input: {
     return noQueries(input.projectName)
   }
 
-  const availableProviders = normalizeProviderNames(defaultSweepProviderNames(input.runnableProviderNames))
-  const requestedSelection = normalizeProviderNames(input.requestedProviders ?? [])
-  const requestedProviders = normalizeProviderNames(defaultSweepProviderNames(requestedSelection))
-  const projectSelection = normalizeProviderNames(input.projectProviders)
-  const projectProviders = normalizeProviderNames(defaultSweepProviderNames(projectSelection))
-  const selectedProviders = requestedSelection.length > 0
-    ? requestedProviders
-    : projectSelection.length > 0
-      ? projectProviders
-      : defaultSweepProviderNames(availableProviders)
-  const available = new Set(availableProviders)
-  const runnableProviders = selectedProviders.filter(provider => available.has(provider))
+  const selection = resolveRunnableProviderSelection({
+    requestedProviders: input.requestedProviders,
+    projectProviders: input.projectProviders,
+    runnableProviders: input.runnableProviderNames,
+  })
 
-  if (runnableProviders.length > 0) return null
+  if (selection.runnableProviders.length > 0) return null
 
   return noProvider(input.projectName, {
-    availableProviders,
-    selectedProviders,
-    selectionSource: requestedSelection.length > 0
-      ? 'request'
-      : projectSelection.length > 0
-        ? 'project'
-        : 'instance',
+    availableProviders: selection.availableProviders,
+    selectedProviders: selection.selectedProviders,
+    selectionSource: selection.selectionSource,
   })
-}
-
-function normalizeProviderNames(providerNames: readonly string[]): string[] {
-  return [...new Set(providerNames.map(name => name.trim().toLowerCase()).filter(Boolean))]
 }
 
 function parseRunTriggerRequest(value: unknown) {

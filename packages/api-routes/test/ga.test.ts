@@ -710,7 +710,8 @@ describe('GA4 routes', () => {
     expect(body.organicAiSharePctBySession).toBe(5)
     expect(body.socialReferrals).toEqual([])
     expect(body.socialSessions).toBe(0)
-    expect(body.socialUsers).toBe(0)
+    // socialUsers is withdrawn: see the dedicated test below.
+    expect(body).not.toHaveProperty('socialUsers')
     expect(body.organicSharePct).toBe(50)
     expect(body.aiSharePct).toBe(5)
     expect(body.socialSharePct).toBe(0)
@@ -2083,6 +2084,20 @@ describe('GA4 routes', () => {
         totalUsers: 150,
         syncedAt: now,
       }).run()
+      // A social row, so the per-row assertion below is not vacuous. The
+      // stored users column is deliberately populated: the point is that the
+      // ROUTE must not publish it, not that the column is empty.
+      db.insert(gaSocialReferrals).values({
+        id: crypto.randomUUID(),
+        projectId: withdrawnProjectId,
+        date: '2026-05-01',
+        source: 'meta.ai',
+        medium: 'social',
+        channelGroup: 'Organic Social',
+        sessions: 15,
+        users: 12,
+        syncedAt: now,
+      }).run()
       db.insert(gaAiReferrals).values(seeded.map((row) => ({
         id: row.id,
         projectId: withdrawnProjectId,
@@ -2113,10 +2128,21 @@ describe('GA4 routes', () => {
       expect(body.aiReferralLandingPages.length).toBeGreaterThan(0)
       for (const row of body.aiReferrals) expect(row).not.toHaveProperty('users')
       for (const row of body.aiReferralLandingPages) expect(row).not.toHaveProperty('users')
-      // Property-level and social user counts are a different signal (GA
-      // deduplicates those itself) and must survive the withdrawal.
+      // The property-level user count is a different signal: GA deduplicates
+      // that one itself against an un-dimensioned aggregate, so it survives.
       expect(body.totalUsers).toBe(150)
-      expect(body).toHaveProperty('socialUsers')
+      // Social user counts do NOT survive. ga_social_referrals is keyed
+      // (date, source, medium, channel group) and its users column is GA's
+      // COUNT DISTINCT at that grain, so summing it over a window counts a
+      // returning visitor once per day they returned. Same reasoning that
+      // withdrew the AI-referral user counts in 4.135.0.
+      expect(body).not.toHaveProperty('socialUsers')
+      for (const row of body.socialReferrals) expect(row).not.toHaveProperty('users')
+      // The loop above is vacuous when socialReferrals is empty, which is how an
+      // incomplete withdrawal shipped once: the API stopped emitting the field
+      // while the dashboard still called .toLocaleString() on it and the CLI
+      // printed "undefined". Assert there is a row to check.
+      expect(body.socialReferrals.length).toBeGreaterThan(0)
 
       // ── The session numbers are unchanged by the withdrawal. ────────────
       // Deduped folds the winner set: (05-01, referral) session lens 6+4=10

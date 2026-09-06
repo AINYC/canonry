@@ -35,6 +35,8 @@ export interface ProjectRoutesOptions {
   onProjectDeleting?: (projectId: string) => void | (() => void)
   onProjectDeleted?: (projectId: string) => void
   onProjectUpserted?: (projectId: string, projectName: string) => void
+  /** Post-commit lifecycle hook; failures must not turn a committed create into an HTTP 500. */
+  onProjectCreated?: (projectId: string, projectName: string) => void
   /**
    * Fires when a project's normalized alias set changes (add, remove, or
    * reorder after canonicalization). Receivers should run a fire-and-forget
@@ -70,6 +72,14 @@ function validateResearchProvider(
 }
 
 export async function projectRoutes(app: FastifyInstance, opts: ProjectRoutesOptions) {
+  const notifyProjectCreated = (projectId: string, projectName: string): void => {
+    try {
+      opts.onProjectCreated?.(projectId, projectName)
+    } catch (error) {
+      app.log.error({ error, projectId, projectName }, 'Project-created callback failed after commit')
+    }
+  }
+
   // POST /projects — create only. The launchpad cannot race a CLI/API create
   // and overwrite the project the other caller already configured.
   app.post<{ Body: ProjectCreateRequest }>('/projects', async (request, reply) => {
@@ -181,6 +191,7 @@ export async function projectRoutes(app: FastifyInstance, opts: ProjectRoutesOpt
     })
     if (!inserted) throw alreadyExists('Project', name)
 
+    notifyProjectCreated(id, name)
     opts.onProjectUpserted?.(id, name)
     const created = app.db.select().from(projects).where(eq(projects.id, id)).get()!
     return reply.status(201).send(formatProject(created))
@@ -350,6 +361,7 @@ export async function projectRoutes(app: FastifyInstance, opts: ProjectRoutesOpt
       })
     })
 
+    notifyProjectCreated(id, name)
     opts.onProjectUpserted?.(id, name)
 
     const created = app.db.select().from(projects).where(eq(projects.id, id)).get()!

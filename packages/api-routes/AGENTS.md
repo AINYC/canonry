@@ -205,6 +205,8 @@ Routes fire lifecycle hooks via `opts` callbacks — `onRunCreated`, `onProvider
   scoped Target usage edges. Never union classes by query ID or text: the same
   question can be branded for one Target/context and non-brand for another.
   A deleted query retains its execution identity, so no text fallback is needed.
+- Generated domain labels use the shared minimum brand length. Do not convert
+  them into explicit aliases. Preserve curated names and existing identities.
 
 ### Derived row schemas (drizzle-zod)
 

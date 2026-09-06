@@ -49,7 +49,7 @@ test('renders a configured route in the Aero provider picker', async () => {
     </QueryClientProvider>,
   )
 
-  fireEvent.click(screen.getByRole('button', { name: /Ask Aero about demo/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /Ask Aero about demo/i }))
   const picker = await screen.findByRole('button', { name: 'Switch agent model' })
   fireEvent.click(picker)
 
